@@ -114,6 +114,30 @@ git push origin v0.1.0
 - Windows x64：NSIS 安装包
 - Linux x64：AppImage / deb
 
+## macOS 首次打开
+
+当前开源版本暂未接入 Apple Developer ID 签名与公证，macOS 可能会提示“Orcha Writer 已损坏，无法打开”。下载包本身不是损坏，通常是系统给从网络下载的应用加了隔离标记。
+
+处理方式：
+
+1. 下载对应架构的 `.dmg`：
+   - Apple Silicon（M1 / M2 / M3 / M4）：`aarch64.dmg`
+   - Intel：`x64.dmg`
+2. 打开 `.dmg`，把 `Orcha Writer.app` 拖到“应用程序”。
+3. 打开“终端”，执行：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Orcha Writer.app"
+```
+
+如果提示权限不足，再执行：
+
+```bash
+sudo xattr -dr com.apple.quarantine "/Applications/Orcha Writer.app"
+```
+
+然后从“应用程序”里重新打开 Orcha Writer。
+
 ## 仓库地址
 
 https://github.com/orcha-ai/orcha-writer
