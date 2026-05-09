@@ -1,0 +1,294 @@
+import { createContext, useContext, useReducer, useEffect, useState, useCallback } from 'react';
+import type {
+  AppState, TabFile, FileNode, ViewMode, ThemeMode,
+  RecentFile, EditorSettings
+} from './types';
+import { defaultEditorSettings } from './types';
+import { readConfig, writeConfig } from './config';
+import { writeTextFile } from './utils/fs';
+
+type AppAction =
+  | { type: 'SET_VIEW_MODE'; payload: ViewMode }
+  | { type: 'SET_THEME'; payload: ThemeMode }
+  | { type: 'TOGGLE_SIDEBAR' }
+  | { type: 'TOGGLE_OUTLINE' }
+  | { type: 'SET_SIDEBAR_TAB'; payload: 'workspace' | 'recent' }
+  | { type: 'OPEN_TAB'; payload: { id: string; name: string; path: string; content: string; isDraft?: boolean } }
+  | { type: 'CLOSE_TAB'; payload: string }
+  | { type: 'CLOSE_OTHER_TABS'; payload: string }
+  | { type: 'CLOSE_ALL_TABS' }
+  | { type: 'SET_ACTIVE_TAB'; payload: string | null }
+  | { type: 'UPDATE_TAB_CONTENT'; payload: { id: string; content: string } }
+  | { type: 'MARK_TAB_SAVED'; payload: string }
+  | { type: 'MARK_TAB_SAVED_IF_CONTENT'; payload: { id: string; content: string } }
+  | { type: 'MARK_TAB_UNSAVED'; payload: string }
+  | { type: 'SET_WORKSPACE'; payload: { path: string; tree: FileNode[] } }
+  | { type: 'SET_RECENT_FILES'; payload: RecentFile[] }
+  | { type: 'ADD_RECENT_FILE'; payload: RecentFile }
+  | { type: 'SET_CURSOR'; payload: { line: number; ch: number } }
+  | { type: 'SET_WORD_COUNT'; payload: number }
+  | { type: 'TOGGLE_SEARCH' }
+  | { type: 'SET_SEARCH_QUERY'; payload: string }
+  | { type: 'SET_SEARCH_MATCH_INDEX'; payload: number }
+  | { type: 'TOGGLE_SETTINGS' }
+  | { type: 'UPDATE_SETTINGS'; payload: Partial<EditorSettings> };
+
+const initialState: AppState = {
+  tabs: [],
+  activeTabId: null,
+  viewMode: 'split',
+  theme: 'system',
+  sidebarVisible: true,
+  outlineVisible: true,
+  sidebarActiveTab: 'workspace',
+  workspacePath: null,
+  workspaceTree: [],
+  recentFiles: [],
+  cursorPosition: { line: 1, ch: 1 },
+  wordCount: 0,
+  searchOpen: false,
+  searchQuery: '',
+  searchMatchIndex: 0,
+  settingsOpen: false,
+  editorSettings: defaultEditorSettings,
+};
+
+function appReducer(state: AppState, action: AppAction): AppState {
+  switch (action.type) {
+    case 'SET_VIEW_MODE':
+      return { ...state, viewMode: action.payload };
+    case 'SET_THEME':
+      return { ...state, theme: action.payload };
+    case 'TOGGLE_SIDEBAR':
+      return { ...state, sidebarVisible: !state.sidebarVisible };
+    case 'TOGGLE_OUTLINE':
+      return { ...state, outlineVisible: !state.outlineVisible };
+    case 'SET_SIDEBAR_TAB':
+      return { ...state, sidebarActiveTab: action.payload };
+    case 'OPEN_TAB': {
+      const existing = state.tabs.find(t => t.path === action.payload.path);
+      if (existing) {
+        return { ...state, activeTabId: existing.id };
+      }
+      const newTab: TabFile = {
+        ...action.payload,
+        saved: true,
+        isDraft: action.payload.isDraft || false,
+      };
+      return { ...state, tabs: [...state.tabs, newTab], activeTabId: newTab.id };
+    }
+    case 'CLOSE_TAB': {
+      const idx = state.tabs.findIndex(t => t.id === action.payload);
+      if (idx === -1) return state;
+      const newTabs = state.tabs.filter(t => t.id !== action.payload);
+      let newActive = state.activeTabId;
+      if (state.activeTabId === action.payload) {
+        newActive = newTabs.length > 0 ? newTabs[Math.min(idx, newTabs.length - 1)].id : null;
+      }
+      return { ...state, tabs: newTabs, activeTabId: newActive };
+    }
+    case 'CLOSE_OTHER_TABS':
+      return {
+        ...state,
+        tabs: state.tabs.filter(t => t.id === action.payload),
+        activeTabId: action.payload,
+      };
+    case 'CLOSE_ALL_TABS':
+      return { ...state, tabs: [], activeTabId: null };
+    case 'SET_ACTIVE_TAB':
+      return { ...state, activeTabId: action.payload };
+    case 'UPDATE_TAB_CONTENT':
+      return {
+        ...state,
+        tabs: state.tabs.map(t =>
+          t.id === action.payload.id ? { ...t, content: action.payload.content, saved: false } : t
+        ),
+      };
+    case 'MARK_TAB_SAVED':
+      return {
+        ...state,
+        tabs: state.tabs.map(t =>
+          t.id === action.payload ? { ...t, saved: true } : t
+        ),
+      };
+    case 'MARK_TAB_SAVED_IF_CONTENT':
+      return {
+        ...state,
+        tabs: state.tabs.map(t =>
+          t.id === action.payload.id && t.content === action.payload.content ? { ...t, saved: true } : t
+        ),
+      };
+    case 'MARK_TAB_UNSAVED':
+      return {
+        ...state,
+        tabs: state.tabs.map(t =>
+          t.id === action.payload ? { ...t, saved: false } : t
+        ),
+      };
+    case 'SET_WORKSPACE':
+      return { ...state, workspacePath: action.payload.path, workspaceTree: action.payload.tree };
+    case 'SET_RECENT_FILES':
+      return { ...state, recentFiles: action.payload };
+    case 'ADD_RECENT_FILE':
+      return {
+        ...state,
+        recentFiles: [
+          action.payload,
+          ...state.recentFiles.filter(f => f.path !== action.payload.path),
+        ].slice(0, 50),
+      };
+    case 'SET_CURSOR':
+      return { ...state, cursorPosition: action.payload };
+    case 'SET_WORD_COUNT':
+      return { ...state, wordCount: action.payload };
+    case 'TOGGLE_SEARCH':
+      return { ...state, searchOpen: !state.searchOpen };
+    case 'SET_SEARCH_QUERY':
+      return { ...state, searchQuery: action.payload };
+    case 'SET_SEARCH_MATCH_INDEX':
+      return { ...state, searchMatchIndex: action.payload };
+    case 'TOGGLE_SETTINGS':
+      return { ...state, settingsOpen: !state.settingsOpen };
+    case 'UPDATE_SETTINGS':
+      return { ...state, editorSettings: { ...state.editorSettings, ...action.payload } };
+    default:
+      return state;
+  }
+}
+
+const AppContext = createContext<{
+  state: AppState;
+  dispatch: React.Dispatch<AppAction>;
+} | null>(null);
+
+export function AppProvider({ children }: { children: React.ReactNode }) {
+  const [state, dispatch] = useReducer(appReducer, initialState);
+  const [initialized, setInitialized] = useState(false);
+
+  // Load persisted config on startup
+  useEffect(() => {
+    let mounted = true;
+    Promise.all([
+        readConfig<RecentFile[]>('recent-files', []),
+        readConfig<ViewMode>('view-mode', 'split' as ViewMode),
+        readConfig<ThemeMode>('theme', 'system' as ThemeMode),
+    ]).then(([recentFiles, viewMode, theme]) => {
+        if (!mounted) return;
+        dispatch({ type: 'SET_RECENT_FILES', payload: recentFiles });
+        dispatch({ type: 'SET_VIEW_MODE', payload: viewMode });
+        dispatch({ type: 'SET_THEME', payload: theme });
+      })
+      .catch((error) => {
+        console.warn('[AppContext] Failed to load persisted config:', error);
+      })
+      .finally(() => {
+        if (mounted) setInitialized(true);
+      });
+    return () => { mounted = false; };
+  }, []);
+
+  // Apply theme from AppContext state
+  const applyTheme = useCallback((theme: ThemeMode) => {
+    const root = document.documentElement;
+    if (theme === 'system') {
+      root.removeAttribute('data-theme');
+    } else {
+      root.setAttribute('data-theme', theme);
+    }
+  }, []);
+
+  useEffect(() => {
+    applyTheme(state.theme);
+  }, [state.theme, applyTheme]);
+
+  // Persist view mode
+  useEffect(() => {
+    if (!initialized) return;
+    writeConfig('view-mode', state.viewMode);
+  }, [state.viewMode, initialized]);
+
+  // Persist theme
+  useEffect(() => {
+    if (!initialized) return;
+    writeConfig('theme', state.theme);
+  }, [state.theme, initialized]);
+
+  // Persist recent files whenever they change
+  useEffect(() => {
+    if (!initialized) return;
+    writeConfig('recent-files', state.recentFiles);
+  }, [state.recentFiles, initialized]);
+
+  // Persist last opened workspace path.
+  useEffect(() => {
+    if (!initialized || !state.workspacePath) return;
+    writeConfig('workspace-path', state.workspacePath);
+  }, [state.workspacePath, initialized]);
+
+  // Auto-save changed files and keep unsaved drafts recoverable.
+  useEffect(() => {
+    const drafts: Record<string, { title: string; content: string; updated: number }> = {};
+    const saved = localStorage.getItem('orcha-drafts');
+    if (saved) {
+      try {
+        Object.assign(drafts, JSON.parse(saved));
+      } catch {
+        localStorage.removeItem('orcha-drafts');
+      }
+    }
+
+    let saving = false;
+    const interval = setInterval(() => {
+      if (!state.editorSettings.autoSave) return;
+      if (saving) return;
+      saving = true;
+
+      void (async () => {
+        let draftsChanged = false;
+
+        for (const tab of state.tabs) {
+          if (tab.isDraft) {
+            drafts[tab.id] = {
+              title: tab.name,
+              content: tab.content,
+              updated: Date.now(),
+            };
+            draftsChanged = true;
+            continue;
+          }
+
+          if (!tab.saved) {
+            try {
+              await writeTextFile(tab.path, tab.content);
+              dispatch({ type: 'MARK_TAB_SAVED_IF_CONTENT', payload: { id: tab.id, content: tab.content } });
+            } catch (error) {
+              console.warn('[AppContext] Auto-save failed:', error);
+            }
+          }
+        }
+
+        if (draftsChanged) {
+          localStorage.setItem('orcha-drafts', JSON.stringify(drafts));
+        }
+        saving = false;
+      })();
+    }, state.editorSettings.autoSaveDelay);
+
+    return () => {
+      clearInterval(interval);
+      saving = false;
+    };
+  }, [state.tabs, state.editorSettings]);
+
+  return (
+    <AppContext.Provider value={{ state, dispatch }}>
+      {children}
+    </AppContext.Provider>
+  );
+}
+
+export function useApp() {
+  const ctx = useContext(AppContext);
+  if (!ctx) throw new Error('useApp must be used within AppProvider');
+  return ctx;
+}
