@@ -30,7 +30,7 @@ jobs:
             rust_targets: aarch64-apple-darwin
             args: --target aarch64-apple-darwin --bundles app,dmg
           - name: Windows x64
-            runner: windows-latest
+            runner: windows-2022
             rust_targets: ''
             args: --bundles nsis
           - name: Linux x64
@@ -80,7 +80,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build and upload release assets
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
