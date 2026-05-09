@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1002" height="333" viewBox="0 0 1002 333" role="img" aria-labelledby="title desc">
+  <title id="title">Orcha Writer</title>
+  <desc id="desc">Orcha 写作，跨平台 Markdown 写作与文档管理工具</desc>
+  <defs>
+    <linearGradient id="docBlue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2D93FF"/>
+      <stop offset="100%" stop-color="#0A84FF"/>
+    </linearGradient>
+    <linearGradient id="curlBlue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#C8DEFF"/>
+      <stop offset="100%" stop-color="#8CB9FF"/>
+    </linearGradient>
+    <filter id="softShadow" x="-12%" y="-12%" width="124%" height="128%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#000000" flood-opacity="0.26"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#softShadow)">
+    <rect x="52" y="38" width="158" height="158" rx="40" fill="url(#docBlue)"/>
+    <path d="M160 38 C177 41 192 50 204 64 L210 72 L210 111 C203 103 194 98 184 96 C166 93 156 80 156 64 L156 38 Z" fill="url(#curlBlue)"/>
+    <rect x="84" y="96" width="94" height="20" rx="10" fill="#FFFFFF"/>
+    <rect x="84" y="146" width="94" height="20" rx="10" fill="#FFFFFF"/>
+  </g>
+
+  <text x="276" y="150"
+        fill="#F2F7FF"
+        font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans SC', sans-serif"
+        font-size="94"
+        font-weight="800"
+        letter-spacing="0">
+    Orcha 写作
+  </text>
+
+  <text x="52" y="286"
+        fill="#B8C7DA"
+        font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans SC', sans-serif"
+        font-size="38"
+        font-weight="500"
+        letter-spacing="9">
+    跨平台 Markdown 写作与文档管理工具
+  </text>
+</svg>

@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="src/assets/brand/orcha-writer-about-logo.png" alt="Orcha Writer" width="420" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="src/assets/brand/orcha-writer-readme-logo-dark.svg" />
+    <img src="src/assets/brand/orcha-writer-about-logo.png" alt="Orcha Writer" width="420" />
+  </picture>
 </p>
 
 # Orcha Writer
