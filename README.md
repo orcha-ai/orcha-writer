@@ -103,6 +103,9 @@ src-tauri/target/release/bundle/
 仓库已配置 GitHub Actions 自动发版。推送 `v*` tag 后会构建 Release 并上传安装包：
 
 ```bash
+# 1. 更新 CHANGELOG.md 中对应版本的条目
+# 2. 同步 package.json、src-tauri/tauri.conf.json、src-tauri/Cargo.toml 等版本号
+# 3. 提交后打 tag 并推送
 git tag v0.1.0
 git push origin v0.1.0
 ```
