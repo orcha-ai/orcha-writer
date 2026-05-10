@@ -11,8 +11,9 @@ import { redo, undo } from '@codemirror/commands';
 import { EditorSelection } from '@codemirror/state';
 import { pathExists, readTextFile, writeTextFile } from '../utils/fs';
 import { findFirstMdFile, readFirstLevel } from '../utils/workspace';
-import { getActiveEditorView } from './Editor';
-import MarkdownIt from 'markdown-it';
+import { getActiveEditorView, pasteClipboardImagesIntoActiveEditor } from './Editor';
+import { basename, formatMarkdownImageUrl, markdownImagePathForDocument, stripExtension } from '../utils/markdownImages';
+import { renderMarkdownForExport } from '../utils/exportMarkdown';
 import { useSettingsStore, useShortcutStore } from '../store';
 import type { ThemeMode } from '../types';
 import { checkForUpdates } from '../utils/update';
@@ -23,6 +24,11 @@ function decodePath(path: string): string {
     return decodeURIComponent(path.slice(7));
   }
   return path;
+}
+
+function normalizeThemeColor(color: string | undefined): string {
+  const value = color?.trim();
+  return value && /^#[0-9a-f]{6}$/i.test(value) ? value : '#0A84FF';
 }
 
 const shortcutModifiers = new Set(['Meta', 'Ctrl', 'Alt', 'Shift']);
@@ -140,6 +146,7 @@ export default function Toolbar() {
   const saveSettings = useSettingsStore(s => s.saveAll);
   const exportSettings = useSettingsStore(s => s.export);
   const fileSettings = useSettingsStore(s => s.files);
+  const themeColor = useSettingsStore(s => s.appearance.themeColor);
   const shortcuts = useShortcutStore(s => s.shortcuts);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -281,16 +288,15 @@ export default function Toolbar() {
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
     if (!activeTab) return;
     try {
-      const mdInst = new MarkdownIt({ html: true, linkify: true, typographer: true, breaks: true });
-      const htmlBody = mdInst.render(activeTab.content);
+      const htmlBody = await renderMarkdownForExport(activeTab.content, activeTab.path);
       const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
       const bgColor = isDark ? '#1a1a2e' : '#ffffff';
       const textColor = isDark ? '#cdd6f4' : '#1a1a1a';
       const borderColor = isDark ? '#313244' : '#e0e0e0';
       const codeBg = isDark ? '#181825' : '#f5f5f5';
       const preBg = isDark ? '#181825' : '#f8f8f8';
-      const quoteBorder = '#0A84FF';
-      const linkColor = '#0A84FF';
+      const quoteBorder = normalizeThemeColor(themeColor);
+      const linkColor = normalizeThemeColor(themeColor);
       const thBg = isDark ? '#181825' : '#f5f5f5';
       const defaultFileName = activeTab.name.replace(/\.md$/, '') + '.html';
       const defaultPath = exportSettings.defaultExportDir
@@ -338,15 +344,14 @@ ${htmlBody}
       }
       console.log('export_html written to:', path);
     } catch (e) { console.error('Failed to export HTML:', e); }
-  }, [state.tabs, state.activeTabId, exportSettings.defaultExportDir, exportSettings.openAfterExport, exportSettings.overwriteExisting]);
+  }, [state.tabs, state.activeTabId, exportSettings.defaultExportDir, exportSettings.openAfterExport, exportSettings.overwriteExisting, themeColor]);
 
   const handleExportPDF = useCallback(async () => {
     console.log('handleExportPDF called');
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
     if (!activeTab) return;
     try {
-      const mdInst = new MarkdownIt({ html: true, linkify: true, typographer: true, breaks: true });
-      const htmlBody = mdInst.render(activeTab.content);
+      const htmlBody = await renderMarkdownForExport(activeTab.content, activeTab.path);
       const defaultFileName = activeTab.name.replace(/\.md$/, '') + '_打印版.html';
       const defaultPath = exportSettings.defaultExportDir
         ? `${exportSettings.defaultExportDir}/${defaultFileName.replace(/\.html$/, '.pdf')}`
@@ -365,12 +370,12 @@ ${htmlBody}
         code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 0.88em; font-family: SFMono-Regular, Consolas, monospace; }
         pre { background: #f8f8f8; border: 1px solid #e0e0e0; border-radius: 6px; padding: 14px 16px; overflow-x: auto; margin: 1em 0; page-break-inside: avoid; }
         pre code { background: none; padding: 0; }
-        blockquote { border-left: 3px solid #0A84FF; padding-left: 16px; color: #666; margin: 1em 0; }
+        blockquote { border-left: 3px solid ${normalizeThemeColor(themeColor)}; padding-left: 16px; color: #666; margin: 1em 0; }
         img { max-width: 100%; border-radius: 6px; margin: 1em 0; }
         table { border-collapse: collapse; width: 100%; margin: 1em 0; }
         th, td { border: 1px solid #e0e0e0; padding: 8px 12px; }
         th { background: #f5f5f5; }
-        a { color: #0A84FF; }
+        a { color: ${normalizeThemeColor(themeColor)}; }
         hr { border: none; border-top: 1px solid #e0e0e0; margin: 1.5em 0; }
         ul, ol { padding-left: 24px; }
         .print-footer { display: none; }
@@ -420,7 +425,7 @@ ${htmlBody}
         await printHtmlDocument(fullHTML);
       }
     } catch (e) { console.error('Failed to export PDF:', e); }
-  }, [state.tabs, state.activeTabId, exportSettings]);
+  }, [state.tabs, state.activeTabId, exportSettings, themeColor]);
 
   const handleSaveAs = useCallback(async () => {
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
@@ -492,13 +497,14 @@ ${htmlBody}
   }, []);
 
   const handlePaste = useCallback(async () => {
+    if (await pasteClipboardImagesIntoActiveEditor()) return;
     try {
       const text = await navigator.clipboard.readText();
       if (text && insertTextInEditor(text)) return;
-      document.execCommand('paste');
     } catch {
-      document.execCommand('paste');
+      // Continue to browser paste fallback below.
     }
+    document.execCommand('paste');
   }, []);
 
   const runShortcutAction = useCallback((id: string) => {
@@ -534,7 +540,7 @@ ${htmlBody}
 
   // Listen for Tauri menu events
   useEffect(() => {
-    const unlisten = listen('menu-action', (event) => {
+    const unlisten = listen('menu-action', async (event) => {
       const action = event.payload as string;
       console.log('menu-action received:', action);
       switch (action) {
@@ -662,7 +668,23 @@ ${htmlBody}
         case 'insert_image': {
           const activeTab = state.tabs.find(t => t.id === state.activeTabId);
           if (activeTab) {
-            dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: activeTab.content + '\n![图片](url)\n' } });
+            const selected = await open({
+              multiple: false,
+              filters: [{
+                name: 'Images',
+                extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'],
+              }],
+            });
+            const selectedPath = Array.isArray(selected) ? selected[0] : selected;
+            if (typeof selectedPath === 'string' && selectedPath) {
+              const imagePath = decodePath(selectedPath);
+              const markdownPath = markdownImagePathForDocument(imagePath, activeTab.path);
+              const alt = stripExtension(basename(imagePath)) || '图片';
+              const markdown = `\n![${alt}](${formatMarkdownImageUrl(markdownPath)})\n`;
+              if (!insertTextInEditor(markdown)) {
+                dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: activeTab.content + markdown } });
+              }
+            }
           }
           break;
         }

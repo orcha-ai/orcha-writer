@@ -1,3 +1,5 @@
+import type { PreviewThemeId } from './previewThemes';
+
 // ===== Core Types =====
 
 export interface FileNode {
@@ -228,7 +230,7 @@ export interface MarkdownSettings {
 }
 
 export interface PreviewSettings {
-  previewTheme: string;
+  previewTheme: PreviewThemeId;
   codeTheme: string;
   syncScroll: boolean;
   imageMaxWidth: number;

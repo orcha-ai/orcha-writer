@@ -3,8 +3,10 @@
     windows_subsystem = "windows"
 )]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, WebviewEvent, DragDropEvent};
 use tauri::menu::{MenuBuilder, SubmenuBuilder, MenuItemBuilder};
 use tauri::command;
@@ -22,6 +24,14 @@ struct OpenedDocument {
     content: String,
     external: bool,
     readonly: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardImage {
+    file_name: String,
+    mime_type: String,
+    bytes: Vec<u8>,
 }
 
 // ── Utility: check if a path is a markdown file ──
@@ -185,11 +195,243 @@ fn write_binary_file(file_path: String, bytes: Vec<u8>) -> Result<(), String> {
         .map_err(|e| format!("写入文件失败: {}", e))
 }
 
+// ── Command: read binary file content ──
+#[command]
+fn read_binary_file(file_path: String) -> Result<Vec<u8>, String> {
+    let path_buf = PathBuf::from(&file_path);
+    if !path_buf.exists() {
+        return Err(format!("文件不存在: {}", file_path));
+    }
+    if !path_buf.is_file() {
+        return Err(format!("目标路径不是文件: {}", file_path));
+    }
+    std::fs::read(&path_buf)
+        .map_err(|e| format!("读取文件失败: {}", e))
+}
+
 // ── Command: create directory and missing parents ──
 #[command]
 fn create_dir_all(dir_path: String) -> Result<(), String> {
     std::fs::create_dir_all(&dir_path)
         .map_err(|e| format!("创建目录失败: {}", e))
+}
+
+// ── Command: copy file and create parent directory if needed ──
+#[command]
+fn copy_file_content(source_path: String, target_path: String) -> Result<(), String> {
+    let target = PathBuf::from(&target_path);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+    std::fs::copy(&source_path, &target_path)
+        .map(|_| ())
+        .map_err(|e| format!("复制文件失败: {}", e))
+}
+
+fn unique_clipboard_path(extension: &str) -> PathBuf {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!(
+        "orcha-writer-clipboard-{}-{}.{}",
+        std::process::id(),
+        millis,
+        extension
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn escape_applescript_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+}
+
+#[cfg(target_os = "macos")]
+fn write_pasteboard_class_to_file(class_code: &str, output_path: &Path) -> Result<bool, String> {
+    let path = escape_applescript_path(output_path);
+    let script = format!(
+        r#"set outFile to POSIX file "{}"
+try
+  set imageData to the clipboard as «class {}»
+on error
+  return "NO_IMAGE"
+end try
+set fileRef to open for access outFile with write permission
+try
+  set eof fileRef to 0
+  write imageData to fileRef
+  close access fileRef
+on error errMsg
+  try
+    close access fileRef
+  end try
+  error errMsg
+end try
+return "OK""#,
+        path, class_code
+    );
+
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .map_err(|e| format!("读取剪贴板失败: {}", e))?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Ok(stdout.contains("OK"));
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!("读取剪贴板失败: {}", stderr.trim()))
+}
+
+#[cfg(target_os = "macos")]
+fn read_macos_pasteboard_data(data_type: &'static objc2_app_kit::NSPasteboardType) -> Option<Vec<u8>> {
+    let pasteboard = objc2_app_kit::NSPasteboard::generalPasteboard();
+    pasteboard
+        .dataForType(data_type)
+        .map(|data| data.to_vec())
+        .filter(|bytes| !bytes.is_empty())
+}
+
+#[cfg(target_os = "macos")]
+fn clipboard_image_from_tiff_bytes(bytes: Vec<u8>) -> Result<Option<ClipboardImage>, String> {
+    let tiff_path = unique_clipboard_path("tiff");
+    let converted_path = unique_clipboard_path("png");
+    std::fs::write(&tiff_path, &bytes)
+        .map_err(|e| format!("读取剪贴板图片失败: {}", e))?;
+
+    let converted = convert_image_to_png(&tiff_path, &converted_path).is_ok() && converted_path.exists();
+    let result = if converted {
+        std::fs::read(&converted_path)
+            .map(|data| ("clipboard-image.png".to_string(), "image/png".to_string(), data))
+            .map_err(|e| format!("读取剪贴板图片失败: {}", e))
+    } else {
+        Ok(("clipboard-image.tiff".to_string(), "image/tiff".to_string(), bytes))
+    };
+
+    let _ = std::fs::remove_file(&tiff_path);
+    let _ = std::fs::remove_file(&converted_path);
+
+    let (file_name, mime_type, bytes) = result?;
+    if bytes.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(ClipboardImage {
+            file_name,
+            mime_type,
+            bytes,
+        }))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn read_macos_pasteboard_file_urls() -> Vec<String> {
+    let pasteboard = objc2_app_kit::NSPasteboard::generalPasteboard();
+    let Some(items) = pasteboard.pasteboardItems() else {
+        return Vec::new();
+    };
+    let file_url_type = unsafe { objc2_app_kit::NSPasteboardTypeFileURL };
+    let mut urls = Vec::new();
+
+    for item in items.iter() {
+        if let Some(value) = item.stringForType(file_url_type) {
+            let text = value.to_string();
+            if !text.is_empty() {
+                urls.push(text);
+            }
+        }
+    }
+
+    urls
+}
+
+#[cfg(target_os = "macos")]
+fn convert_image_to_png(source_path: &Path, target_path: &Path) -> Result<(), String> {
+    let output = Command::new("sips")
+        .arg("-s")
+        .arg("format")
+        .arg("png")
+        .arg(source_path)
+        .arg("--out")
+        .arg(target_path)
+        .output()
+        .map_err(|e| format!("转换剪贴板图片失败: {}", e))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "转换剪贴板图片失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+// ── Command: read image from macOS pasteboard ──
+#[command]
+fn read_clipboard_image() -> Result<Option<ClipboardImage>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(bytes) = read_macos_pasteboard_data(unsafe { objc2_app_kit::NSPasteboardTypePNG }) {
+            return Ok(Some(ClipboardImage {
+                file_name: "clipboard-image.png".to_string(),
+                mime_type: "image/png".to_string(),
+                bytes,
+            }));
+        }
+
+        if let Some(bytes) = read_macos_pasteboard_data(unsafe { objc2_app_kit::NSPasteboardTypeTIFF }) {
+            return clipboard_image_from_tiff_bytes(bytes);
+        }
+
+        let png_path = unique_clipboard_path("png");
+        if write_pasteboard_class_to_file("PNGf", &png_path)? && png_path.exists() {
+            let bytes = std::fs::read(&png_path)
+                .map_err(|e| format!("读取剪贴板图片失败: {}", e))?;
+            let _ = std::fs::remove_file(&png_path);
+            if !bytes.is_empty() {
+                return Ok(Some(ClipboardImage {
+                    file_name: "clipboard-image.png".to_string(),
+                    mime_type: "image/png".to_string(),
+                    bytes,
+                }));
+            }
+        }
+
+        let tiff_path = unique_clipboard_path("tiff");
+        if write_pasteboard_class_to_file("TIFF", &tiff_path)? && tiff_path.exists() {
+            let bytes = std::fs::read(&tiff_path)
+                .map_err(|e| format!("读取剪贴板图片失败: {}", e))?;
+            let _ = std::fs::remove_file(&tiff_path);
+            return clipboard_image_from_tiff_bytes(bytes);
+        }
+
+        Ok(None)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(None)
+    }
+}
+
+// ── Command: read file URLs from macOS pasteboard ──
+#[command]
+fn read_clipboard_file_urls() -> Result<Vec<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(read_macos_pasteboard_file_urls())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(Vec::new())
+    }
 }
 
 // ── Command: check whether a path exists ──
@@ -472,7 +714,11 @@ fn main() {
             read_file_content,
             write_file_content,
             write_binary_file,
+            read_binary_file,
             create_dir_all,
+            copy_file_content,
+            read_clipboard_image,
+            read_clipboard_file_urls,
             path_exists,
             delete_path,
             rename_path,
@@ -501,13 +747,13 @@ fn main() {
                 .build()?;
 
             let edit_menu = SubmenuBuilder::new(handle, "编辑")
-                .item(&MenuItemBuilder::new("撤销").id("undo").build(handle)?)
-                .item(&MenuItemBuilder::new("重做").id("redo").build(handle)?)
+                .item(&MenuItemBuilder::new("撤销").id("undo").accelerator("CmdOrCtrl+Z").build(handle)?)
+                .item(&MenuItemBuilder::new("重做").id("redo").accelerator("CmdOrCtrl+Shift+Z").build(handle)?)
                 .separator()
-                .item(&MenuItemBuilder::new("剪切").id("cut").build(handle)?)
-                .item(&MenuItemBuilder::new("复制").id("copy").build(handle)?)
-                .item(&MenuItemBuilder::new("粘贴").id("paste").build(handle)?)
-                .item(&MenuItemBuilder::new("全选").id("select_all").build(handle)?)
+                .item(&MenuItemBuilder::new("剪切").id("cut").accelerator("CmdOrCtrl+X").build(handle)?)
+                .item(&MenuItemBuilder::new("复制").id("copy").accelerator("CmdOrCtrl+C").build(handle)?)
+                .item(&MenuItemBuilder::new("粘贴").id("paste").accelerator("CmdOrCtrl+V").build(handle)?)
+                .item(&MenuItemBuilder::new("全选").id("select_all").accelerator("CmdOrCtrl+A").build(handle)?)
                 .separator()
                 .item(&MenuItemBuilder::new("查找").id("find").build(handle)?)
                 .build()?;

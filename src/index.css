@@ -532,24 +532,33 @@ a:hover {
   max-width: min(100%, var(--preview-image-max-width, 100%));
 }
 
-.preview-theme-github {
-  --md-code-bg: var(--bg-code-block);
-  --md-table-head-bg: var(--bg-tertiary);
+.md-image-load-error {
+  display: block;
+  max-width: min(100%, var(--preview-image-max-width, 100%));
+  margin: 1em 0;
+  padding: 10px 12px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-md);
+  background: var(--warning-bg);
+  color: var(--text-primary);
 }
 
-.preview-theme-vuepress {
-  --md-quote-border: var(--success);
-  --md-quote-bg: var(--success-bg);
+.md-image-load-error strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--warning);
+  font-size: 13px;
 }
 
-.preview-theme-mk-cute {
-  --md-quote-border: var(--danger);
-  --md-quote-bg: var(--danger-bg);
-}
-
-.preview-theme-smartblue {
-  --md-quote-border: var(--accent);
-  --md-quote-bg: var(--accent-bg-soft);
+.md-image-load-error code {
+  display: block;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 [data-transparency="true"] .toolbar,

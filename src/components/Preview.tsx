@@ -6,6 +6,9 @@ import hljs from 'highlight.js/lib/common';
 import { open as openPath } from '@tauri-apps/plugin-shell';
 import type Token from 'markdown-it/lib/token.mjs';
 import type { MarkdownSettings, PreviewSettings, SecuritySettings } from '../types';
+import { getPreviewThemeClassName } from '../previewThemes';
+import { pathExists } from '../utils/fs';
+import { normalizeMarkdownImageSyntax, resolveMarkdownImageSource } from '../utils/markdownImages';
 
 interface HeadingInfo {
   level: number;
@@ -165,7 +168,7 @@ function highlightSearch(html: string, query: string): string {
 }
 
 // Build markdown-it instance with heading IDs and safe HTML
-function createMd(markdown: MarkdownSettings, preview: PreviewSettings, security: SecuritySettings) {
+function createMd(markdown: MarkdownSettings, preview: PreviewSettings, security: SecuritySettings, documentPath?: string) {
   const md = new MarkdownIt(markdown.dialect === 'commonmark' ? 'commonmark' : 'default', {
     html: preview.htmlRender !== 'disable',
     linkify: true,
@@ -215,14 +218,31 @@ function createMd(markdown: MarkdownSettings, preview: PreviewSettings, security
   md.renderer.rules.html_block = (tokens: Token[], idx: number) => sanitizeHtml(tokens[idx].content, preview, security);
   md.renderer.rules.html_inline = (tokens: Token[], idx: number) => sanitizeHtml(tokens[idx].content, preview, security);
 
+  const renderImage = md.renderer.rules.image ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+  md.renderer.rules.image = (tokens, idx, options, env, self) => {
+    const token = tokens[idx];
+    const src = token.attrGet('src');
+    if (src) {
+      const imageSource = resolveMarkdownImageSource(src, documentPath);
+      token.attrSet('src', imageSource.src);
+      token.attrSet('data-orcha-image', 'true');
+      token.attrSet('data-orcha-original-src', imageSource.originalSrc);
+      token.attrSet('data-orcha-resolved-src', imageSource.src);
+      if (imageSource.filePath) token.attrSet('data-orcha-file-path', imageSource.filePath);
+      if (imageSource.note) token.attrSet('data-orcha-note', imageSource.note);
+    }
+    token.attrSet('loading', 'lazy');
+    return renderImage(tokens, idx, options, env, self);
+  };
+
   return md;
 }
 
-function renderMarkdown(content: string, markdown: MarkdownSettings, preview: PreviewSettings, security: SecuritySettings): string {
+function renderMarkdown(content: string, markdown: MarkdownSettings, preview: PreviewSettings, security: SecuritySettings, documentPath?: string): string {
   const frontMatter = extractFrontMatter(content, markdown.frontMatter);
   const env: MarkdownRenderEnv = { headings: [], slugCounts: {} };
-  const md = createMd(markdown, preview, security);
-  const raw = frontMatter.html + md.render(frontMatter.body, env);
+  const md = createMd(markdown, preview, security, documentPath);
+  const raw = frontMatter.html + md.render(normalizeMarkdownImageSyntax(frontMatter.body), env);
   return injectToc(raw, markdown, env.headings);
 }
 
@@ -236,7 +256,7 @@ export default function Preview() {
 
   const html = useMemo(() => {
     if (!activeTab) return '';
-    const raw = renderMarkdown(activeTab.content, markdown, preview, security);
+    const raw = renderMarkdown(activeTab.content, markdown, preview, security, activeTab.path);
     return highlightSearch(applySecurity(raw, security), state.searchQuery);
   }, [activeTab, markdown, preview, security, state.searchQuery]);
 
@@ -254,6 +274,51 @@ export default function Preview() {
   useEffect(() => {
     const root = previewRef.current;
     if (!root) return;
+
+    const buildImageLoadError = async (image: HTMLImageElement) => {
+      const filePath = image.dataset.orchaFilePath || '';
+      const exists = filePath
+        ? await pathExists(filePath).then(value => value ? '是' : '否').catch(error => `检查失败：${String(error)}`)
+        : '未解析到本地路径';
+      const details = [
+        `文件存在：${exists}`,
+        `Markdown 路径：${image.dataset.orchaOriginalSrc || image.getAttribute('src') || ''}`,
+        `本地路径：${filePath || '无'}`,
+        `资源地址：${image.dataset.orchaResolvedSrc || image.currentSrc || image.src || ''}`,
+        image.dataset.orchaNote ? `解析备注：${image.dataset.orchaNote}` : '',
+      ].filter(Boolean).join('\n');
+
+      const box = document.createElement('span');
+      box.className = 'md-image-load-error';
+      box.setAttribute('role', 'note');
+
+      const title = document.createElement('strong');
+      title.textContent = '图片加载失败';
+
+      const code = document.createElement('code');
+      code.textContent = details;
+
+      box.append(title, code);
+      image.replaceWith(box);
+    };
+
+    const handleImageFailure = (image: HTMLImageElement | null) => {
+      if (!image || image.dataset.orchaFailed === 'true') return;
+      image.dataset.orchaFailed = 'true';
+      void buildImageLoadError(image);
+    };
+
+    const handleImageError = (event: Event) => {
+      handleImageFailure(event.currentTarget as HTMLImageElement | null);
+    };
+
+    const images = Array.from(root.querySelectorAll<HTMLImageElement>('img[data-orcha-image="true"]'));
+    images.forEach(image => {
+      image.addEventListener('error', handleImageError, { once: true });
+      if (image.complete && image.naturalWidth === 0) {
+        handleImageFailure(image);
+      }
+    });
 
     const handleClick = (event: MouseEvent) => {
       const link = (event.target as HTMLElement | null)?.closest('a');
@@ -274,17 +339,21 @@ export default function Preview() {
     };
 
     root.addEventListener('click', handleClick);
-    return () => root.removeEventListener('click', handleClick);
+    return () => {
+      root.removeEventListener('click', handleClick);
+      images.forEach(image => image.removeEventListener('error', handleImageError));
+    };
   }, [preview.openExternalLink, security.confirmExternalLinks, html]);
 
   const isHidden = state.viewMode === 'edit';
+  const previewThemeClassName = getPreviewThemeClassName(preview.previewTheme);
 
   return (
     <div className={`preview-panel ${isHidden ? 'hidden' : ''}`}>
       {activeTab ? (
         <div
           ref={previewRef}
-          className={`md-preview preview-theme-${preview.previewTheme}`}
+          className={`md-preview ${previewThemeClassName}`}
           style={{ '--preview-image-max-width': `${preview.imageMaxWidth}px` } as React.CSSProperties}
           dangerouslySetInnerHTML={{ __html: html }}
         />

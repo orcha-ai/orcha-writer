@@ -11,6 +11,7 @@ import {
   defaultSecuritySettings, defaultAdvancedSettings,
 } from '../types';
 import { readConfig, writeConfig } from '../config';
+import { normalizePreviewThemeId } from '../previewThemes';
 
 const EXPORT_CONFIG_VERSION = '1.0.0';
 
@@ -92,6 +93,15 @@ function normalizeEditorSettings(value: unknown): EditorSettingsV2 {
   };
 }
 
+function normalizePreviewSettings(value: unknown): PreviewSettings {
+  const raw = value as Partial<PreviewSettings>;
+  return {
+    ...defaultPreviewSettings,
+    ...raw,
+    previewTheme: normalizePreviewThemeId(raw?.previewTheme),
+  };
+}
+
 interface SettingsState {
   general: GeneralSettings;
   appearance: AppearanceSettings;
@@ -169,7 +179,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       appearance: { ...defaultAppearanceSettings, ...appearance },
       editor: normalizeEditorSettings(editor),
       markdown: normalizeMarkdownSettings(markdown),
-      preview: { ...defaultPreviewSettings, ...preview },
+      preview: normalizePreviewSettings(preview),
       files: { ...defaultFileSettings, ...files },
       export: normalizeExportSettings(exportCfg),
       security: { ...defaultSecuritySettings, ...security },

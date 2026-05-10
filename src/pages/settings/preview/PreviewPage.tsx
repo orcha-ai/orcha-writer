@@ -2,6 +2,7 @@ import { Card, Form, Switch, InputNumber, Select, Button, message } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
 import { useSettingsStore } from '../../../store';
 import type { PreviewSettings } from '../../../types';
+import { PREVIEW_THEMES, normalizePreviewThemeId } from '../../../previewThemes';
 import { useEffect } from 'react';
 
 export default function PreviewPage() {
@@ -14,7 +15,7 @@ export default function PreviewPage() {
 
   const handleSave = async () => {
     const values = await form.validateFields() as Partial<PreviewSettings>;
-    updatePreview(values);
+    updatePreview({ ...values, previewTheme: normalizePreviewThemeId(values.previewTheme) });
     await saveAll();
     message.success('设置已保存');
   };
@@ -31,13 +32,10 @@ export default function PreviewPage() {
         {/* Theme */}
         <Card title="预览主题" style={{ marginBottom: 16 }}>
           <Form.Item label="预览主题" name="previewTheme">
-            <Select style={{ width: 200 }}>
-              <Select.Option value="default">默认</Select.Option>
-              <Select.Option value="github">GitHub</Select.Option>
-              <Select.Option value="vuepress">VuePress</Select.Option>
-              <Select.Option value="mk-cute">MK-Cute</Select.Option>
-              <Select.Option value="smartblue">Smart Blue</Select.Option>
-            </Select>
+            <Select
+              style={{ width: 200 }}
+              options={PREVIEW_THEMES.map(theme => ({ value: theme.id, label: theme.label }))}
+            />
           </Form.Item>
 
         </Card>

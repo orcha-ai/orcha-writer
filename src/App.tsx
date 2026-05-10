@@ -7,6 +7,7 @@ import Outline from './components/Outline';
 import StatusBar from './components/StatusBar';
 import SearchPanel from './components/SearchPanel';
 import './App.css';
+import './styles/preview-themes.css';
 
 export default function WorkspaceContent() {
   return (

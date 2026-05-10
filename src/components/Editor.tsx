@@ -11,7 +11,8 @@ import { search } from '@codemirror/search';
 import { autocompletion, closeBrackets } from '@codemirror/autocomplete';
 import { message } from 'antd';
 import type { TabFile } from '../types';
-import { ensureDir, writeBinaryFile } from '../utils/fs';
+import { copyFile, ensureDir, readClipboardFileUrls, readClipboardImage, writeBinaryFile } from '../utils/fs';
+import { basename, dirname, formatMarkdownImageUrl, markdownImagePathForDocument, stripExtension } from '../utils/markdownImages';
 
 export function ScrollSyncProvider({ children }: { children: React.ReactNode }) {
   return children;
@@ -24,28 +25,85 @@ export function useScrollSync() {
 let activeView: EditorView | null = null;
 export function getActiveEditorView(): EditorView | null { return activeView; }
 
-let pastedImageSerial = 0;
-
-function dirname(path: string): string {
-  const normalized = path.replace(/\\/g, '/');
-  const index = normalized.lastIndexOf('/');
-  return index > 0 ? normalized.slice(0, index) : '';
+let activePasteClipboardImages: (() => Promise<boolean>) | null = null;
+export async function pasteClipboardImagesIntoActiveEditor(): Promise<boolean> {
+  return activePasteClipboardImages ? activePasteClipboardImages() : false;
 }
 
-function stripExtension(name: string): string {
-  return name.replace(/\.[^.]+$/, '');
+let pastedImageSerial = 0;
+const ORCHA_RESOURCE_DIR = '.orcha-writer/resources';
+
+function isImageLikeType(type: string): boolean {
+  return type.startsWith('image/') || type === 'public.tiff';
+}
+
+function imageExtensionFromType(type: string): string {
+  if (type === 'public.tiff' || type === 'image/tiff') return 'tiff';
+  if (type === 'image/jpeg') return 'jpg';
+  if (type === 'image/svg+xml') return 'svg';
+  const subtype = type.match(/^image\/([a-z0-9.+-]+)$/i)?.[1]?.toLowerCase();
+  return subtype ? subtype.replace(/^x-/, '') : 'png';
+}
+
+function isImageFile(file: File): boolean {
+  return isImageLikeType(file.type) || /\.(png|jpe?g|gif|webp|svg|bmp|tiff?|avif|heic|heif)$/i.test(file.name);
+}
+
+function isImagePath(path: string): boolean {
+  return /\.(png|jpe?g|gif|webp|svg|bmp|tiff?|avif|heic|heif)$/i.test(path.split(/[?#]/)[0]);
+}
+
+function decodeClipboardPath(value: string): string {
+  const trimmed = value.trim();
+  if (/^file:\/\//i.test(trimmed)) {
+    try {
+      return decodeURIComponent(new URL(trimmed).pathname);
+    } catch {
+      return decodeURIComponent(trimmed.replace(/^file:\/\//i, ''));
+    }
+  }
+  return trimmed;
+}
+
+function extractImagePathsFromText(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(decodeClipboardPath)
+    .filter(path => /^(?:\/|[A-Za-z]:[\\/])/.test(path) && isImagePath(path));
+}
+
+async function readClipboardImagePaths(): Promise<string[]> {
+  const fileUrls = await readClipboardFileUrls().catch(() => []);
+  return extractImagePathsFromText(fileUrls.join('\n'));
+}
+
+function extractDataImageUrlsFromHtml(html: string): string[] {
+  const urls: string[] = [];
+  const pattern = /<img\b[^>]*\bsrc=["'](data:image\/[^"']+)["'][^>]*>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(html))) {
+    urls.push(match[1]);
+  }
+  return urls;
+}
+
+async function dataUrlToFile(dataUrl: string, index: number): Promise<File | null> {
+  const match = dataUrl.match(/^data:(image\/[a-z0-9.+-]+);base64,/i);
+  if (!match) return null;
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  const extension = imageExtensionFromType(match[1]);
+  return new File([blob], `clipboard-image-${index + 1}.${extension}`, { type: match[1] });
 }
 
 function imageExtension(file: File): string {
   const fromName = file.name.split('.').pop()?.toLowerCase();
-  if (fromName && ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].includes(fromName)) {
+  if (fromName && ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'tif', 'tiff', 'avif', 'heic', 'heif'].includes(fromName)) {
     return fromName === 'jpeg' ? 'jpg' : fromName;
   }
-  if (file.type === 'image/jpeg') return 'jpg';
-  if (file.type === 'image/gif') return 'gif';
-  if (file.type === 'image/webp') return 'webp';
-  if (file.type === 'image/svg+xml') return 'svg';
-  if (file.type === 'image/bmp') return 'bmp';
+  if (file.type) return imageExtensionFromType(file.type);
   return 'png';
 }
 
@@ -55,25 +113,6 @@ function makePastedImageFileName(file: File): string {
   return `pasted-${timestamp}-${pastedImageSerial}.${imageExtension(file)}`;
 }
 
-function relativePath(fromDir: string, toPath: string): string {
-  const from = fromDir.replace(/\\/g, '/').split('/').filter(Boolean);
-  const to = toPath.replace(/\\/g, '/').split('/').filter(Boolean);
-  let common = 0;
-  while (common < from.length && common < to.length && from[common] === to[common]) {
-    common += 1;
-  }
-  if (common === 0) return toPath.replace(/\\/g, '/');
-  return [
-    ...Array.from({ length: from.length - common }, () => '..'),
-    ...to.slice(common),
-  ].join('/') || './';
-}
-
-function formatMarkdownUrl(url: string): string {
-  const normalized = url.replace(/\\/g, '/');
-  return /[\s()<>]/.test(normalized) ? `<${normalized.replace(/>/g, '%3E')}>` : normalized;
-}
-
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -81,6 +120,40 @@ function fileToDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error ?? new Error('读取图片失败'));
     reader.readAsDataURL(file);
   });
+}
+
+async function readClipboardImageFiles(): Promise<File[]> {
+  const nativeImage = await readClipboardImage().catch(() => null);
+  if (nativeImage?.bytes?.length) {
+    return [
+      new File(
+        [new Uint8Array(nativeImage.bytes)],
+        nativeImage.fileName || 'clipboard-image.png',
+        { type: nativeImage.mimeType || 'image/png' },
+      ),
+    ];
+  }
+
+  if (!navigator.clipboard?.read) return [];
+
+  const items = await navigator.clipboard.read();
+  const files: File[] = [];
+
+  for (const item of items) {
+    const type = item.types.find(isImageLikeType);
+    if (!type) continue;
+
+    const blob = await item.getType(type);
+    const mimeType = blob.type && isImageLikeType(blob.type)
+      ? blob.type
+      : type === 'public.tiff'
+        ? 'image/tiff'
+        : blob.type;
+    const extension = imageExtensionFromType(mimeType || type);
+    files.push(new File([blob], `clipboard-image.${extension}`, { type: mimeType }));
+  }
+
+  return files;
 }
 
 function getPastedImageTarget(
@@ -100,9 +173,9 @@ function getPastedImageTarget(
   if (!assetRoot) return null;
 
   const fileName = makePastedImageFileName(file);
-  const dir = `${assetRoot}/.assets`;
+  const dir = `${assetRoot}/${ORCHA_RESOURCE_DIR}`;
   const filePath = `${dir}/${fileName}`;
-  const markdownPath = documentDir ? relativePath(documentDir, filePath) : filePath;
+  const markdownPath = activeTab ? markdownImagePathForDocument(filePath, activeTab.path) : filePath;
 
   return { dir, filePath, markdownPath, fileName };
 }
@@ -111,7 +184,7 @@ function insertMarkdownImage(view: EditorView, markdownPath: string, alt: string
   const selection = view.state.selection.main;
   const line = view.state.doc.lineAt(selection.from);
   const needsLeadingBreak = line.text.trim().length > 0 && selection.from > line.from;
-  const insert = `${needsLeadingBreak ? '\n' : ''}![${alt}](${formatMarkdownUrl(markdownPath)})\n`;
+  const insert = `${needsLeadingBreak ? '\n' : ''}![${alt}](${formatMarkdownImageUrl(markdownPath)})\n`;
   view.dispatch({
     changes: { from: selection.from, to: selection.to, insert },
     selection: { anchor: selection.from + insert.length },
@@ -320,6 +393,64 @@ export default function Editor() {
     }
   }, []);
 
+  const handlePasteImagePaths = useCallback(async (paths: string[], view: EditorView) => {
+    let inserted = false;
+
+    for (const sourcePath of paths) {
+      try {
+        const action = pasteImageActionRef.current;
+        const sourceName = basename(sourcePath);
+        const placeholder = new File([], sourceName || 'clipboard-image.png');
+        const target = getPastedImageTarget(placeholder, action, activeTabRef.current, workspacePathRef.current);
+
+        if (!target) {
+          const markdownPath = markdownImagePathForDocument(sourcePath, activeTabRef.current?.path);
+          insertMarkdownImage(view, markdownPath, stripExtension(sourceName) || '图片');
+          inserted = true;
+          continue;
+        }
+
+        await ensureDir(target.dir);
+        await copyFile(sourcePath, target.filePath);
+        insertMarkdownImage(view, target.markdownPath, stripExtension(sourceName) || stripExtension(target.fileName) || '图片');
+        inserted = true;
+      } catch (error) {
+        console.error('[Editor] Failed to paste image file:', error);
+        message.warning('粘贴图片文件失败');
+      }
+    }
+
+    return inserted;
+  }, []);
+
+  const pasteClipboardImages = useCallback(async () => {
+    const view = viewRef.current;
+    if (!view) return false;
+    try {
+      const files = await readClipboardImageFiles();
+      if (files.length > 0) {
+        await handlePasteImages(files, view);
+        return true;
+      }
+
+      const text = await navigator.clipboard?.readText?.().catch(() => '') || '';
+      const paths = extractImagePathsFromText(text);
+      if (paths.length > 0) {
+        return handlePasteImagePaths(paths, view);
+      }
+
+      const nativePaths = await readClipboardImagePaths();
+      if (nativePaths.length > 0) {
+        return handlePasteImagePaths(nativePaths, view);
+      }
+
+      return false;
+    } catch (error) {
+      console.warn('[Editor] Failed to read clipboard images:', error);
+      return false;
+    }
+  }, [handlePasteImagePaths, handlePasteImages]);
+
   // Apply settings to an existing view via compartments
   const applySettings = useCallback((view: EditorView, settings: typeof editor) => {
     const effects: any[] = [];
@@ -378,19 +509,67 @@ export default function Editor() {
             paste: (event, view) => {
               const clipboard = event.clipboardData;
               if (!clipboard) return false;
+              const clipboardTypes = Array.from(clipboard.types);
+              const plainText = clipboard.getData('text/plain');
+              const uriText = clipboard.getData('text/uri-list');
+              const htmlText = clipboard.getData('text/html');
 
               const itemFiles = Array.from(clipboard.items)
-                .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+                .filter(item => item.kind === 'file' && isImageLikeType(item.type))
                 .map(item => item.getAsFile())
-                .filter((file): file is File => Boolean(file));
+                .filter((file): file is File => file !== null && isImageFile(file));
               const files = itemFiles.length > 0
                 ? itemFiles
-                : Array.from(clipboard.files).filter(file => file.type.startsWith('image/'));
+                : Array.from(clipboard.files).filter(isImageFile);
 
-              if (files.length === 0) return false;
-              event.preventDefault();
-              void handlePasteImages(files, view);
-              return true;
+              if (files.length > 0) {
+                event.preventDefault();
+                void handlePasteImages(files, view);
+                return true;
+              }
+
+              const paths = extractImagePathsFromText(uriText || plainText);
+              if (paths.length > 0) {
+                event.preventDefault();
+                void handlePasteImagePaths(paths, view);
+                return true;
+              }
+
+              const hasFileUrlHint = clipboardTypes.some(type => type === 'Files' || /file-url/i.test(type));
+              if (hasFileUrlHint) {
+                event.preventDefault();
+                void readClipboardImagePaths().then(nativePaths => {
+                  if (nativePaths.length > 0) {
+                    void handlePasteImagePaths(nativePaths, view);
+                  }
+                });
+                return true;
+              }
+
+              const dataImageUrls = extractDataImageUrlsFromHtml(htmlText);
+              if (dataImageUrls.length > 0) {
+                event.preventDefault();
+                void Promise.all(dataImageUrls.map(dataUrlToFile))
+                  .then(imageFiles => handlePasteImages(imageFiles.filter((file): file is File => file !== null), view));
+                return true;
+              }
+
+              const hasNativeImageHint = clipboardTypes.some(type => (
+                type === 'Files' ||
+                isImageLikeType(type) ||
+                /(?:image|file|public\.tiff)/i.test(type)
+              ));
+              if (hasNativeImageHint || (!plainText && !uriText && !htmlText)) {
+                event.preventDefault();
+                void readClipboardImageFiles().then(nativeFiles => {
+                  if (nativeFiles.length > 0) {
+                    void handlePasteImages(nativeFiles, view);
+                  }
+                });
+                return true;
+              }
+
+              return false;
             },
             click: () => {
               if (mode.current !== 'edit' && viewRef.current) {
@@ -416,6 +595,7 @@ export default function Editor() {
 
     viewRef.current = view;
     activeView = view;
+    activePasteClipboardImages = pasteClipboardImages;
 
     const scroller = view.dom.querySelector('.cm-scroller');
     if (scroller) {
@@ -429,8 +609,9 @@ export default function Editor() {
       view.destroy();
       viewRef.current = null;
       if (activeView === view) activeView = null;
+      if (activePasteClipboardImages === pasteClipboardImages) activePasteClipboardImages = null;
     };
-  }, [activeTab?.id, handleUpdate]);
+  }, [activeTab?.id, handleUpdate, pasteClipboardImages]);
 
   // Reconfigure settings when they change
   useEffect(() => {

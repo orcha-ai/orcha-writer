@@ -67,8 +67,8 @@ export default function EditorPage() {
 
           <Form.Item label="粘贴图片" name="pasteImageAction">
             <Select style={{ width: 240 }}>
-              <Select.Option value="assets">保存到文档 .assets 目录</Select.Option>
-              <Select.Option value="workspace-assets">保存到工作区 .assets 目录</Select.Option>
+              <Select.Option value="assets">保存到文档 .orcha-writer/resources</Select.Option>
+              <Select.Option value="workspace-assets">保存到工作区 .orcha-writer/resources</Select.Option>
               <Select.Option value="original">插入为 Data URL</Select.Option>
             </Select>
           </Form.Item>

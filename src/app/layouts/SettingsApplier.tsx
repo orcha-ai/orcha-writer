@@ -10,6 +10,32 @@ import { checkForUpdates } from '../../utils/update';
 import { findFirstMdFile, readFirstLevel } from '../../utils/workspace';
 import type { FileSettings, GeneralSettings } from '../../types';
 
+function normalizeThemeColor(color: string | undefined): string {
+  const value = color?.trim();
+  return value && /^#[0-9a-f]{6}$/i.test(value) ? value : '#0A84FF';
+}
+
+function applyThemeColorVariables(root: HTMLElement, color: string): void {
+  root.style.setProperty('--theme-color', color);
+  root.style.setProperty('--brand', color);
+  root.style.setProperty('--accent', color);
+  root.style.setProperty('--border-accent', color);
+  root.style.setProperty('--text-link', color);
+  root.style.setProperty('--md-link', color);
+  root.style.setProperty('--md-quote-border', color);
+
+  root.style.setProperty('--accent-hover', `color-mix(in srgb, ${color} 84%, var(--text-primary))`);
+  root.style.setProperty('--accent-active', `color-mix(in srgb, ${color} 72%, var(--text-primary))`);
+  root.style.setProperty('--text-link-hover', `color-mix(in srgb, ${color} 84%, var(--text-primary))`);
+  root.style.setProperty('--md-link-hover', `color-mix(in srgb, ${color} 84%, var(--text-primary))`);
+
+  root.style.setProperty('--accent-bg', `color-mix(in srgb, ${color} 14%, var(--bg-primary))`);
+  root.style.setProperty('--accent-bg-soft', `color-mix(in srgb, ${color} 8%, var(--bg-primary))`);
+  root.style.setProperty('--accent-border', `color-mix(in srgb, ${color} 42%, var(--border-primary))`);
+  root.style.setProperty('--bg-active', `color-mix(in srgb, ${color} 14%, var(--bg-primary))`);
+  root.style.setProperty('--bg-tree-active', `color-mix(in srgb, ${color} 16%, var(--bg-primary))`);
+}
+
 export function SettingsApplier() {
   const { appearance, editor, files, general, preview, loadAll, updateGeneral } = useSettingsStore();
   const loadShortcuts = useShortcutStore(s => s.load);
@@ -154,12 +180,7 @@ export function SettingsApplier() {
     root.style.setProperty('--editor-line-height', String(editor.lineHeight || 1.6));
 
     // Theme color
-    const themeColor = appearance.themeColor || '#0A84FF';
-    root.style.setProperty('--theme-color', themeColor);
-    root.style.setProperty('--brand', themeColor);
-    root.style.setProperty('--accent', themeColor);
-    root.style.setProperty('--border-accent', themeColor);
-    root.style.setProperty('--text-link', themeColor);
+    applyThemeColorVariables(root, normalizeThemeColor(appearance.themeColor));
 
     // Density
     const density = appearance.density || 'standard';

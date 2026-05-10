@@ -4,6 +4,15 @@ import { useSettingsStore } from '../../../store';
 import type { AppearanceSettings } from '../../../types';
 import { useEffect } from 'react';
 
+function normalizeThemeColor(value: unknown): string | undefined {
+  if (!value) return undefined;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && 'toHexString' in value && typeof value.toHexString === 'function') {
+    return (value as { toHexString: () => string }).toHexString();
+  }
+  return undefined;
+}
+
 export default function AppearancePage() {
   const { appearance, updateAppearance, saveAll } = useSettingsStore();
   const [form] = Form.useForm();
@@ -14,9 +23,20 @@ export default function AppearancePage() {
 
   const handleSave = async () => {
     const values = await form.validateFields() as Partial<AppearanceSettings>;
-    updateAppearance(values);
+    updateAppearance({
+      ...values,
+      themeColor: normalizeThemeColor(values.themeColor) || appearance.themeColor,
+    });
     await saveAll();
     message.success('设置已保存');
+  };
+
+  const handleValuesChange = (changedValues: Partial<AppearanceSettings>) => {
+    const next = { ...changedValues };
+    if ('themeColor' in changedValues) {
+      next.themeColor = normalizeThemeColor(changedValues.themeColor) || appearance.themeColor;
+    }
+    updateAppearance(next);
   };
 
   return (
@@ -28,6 +48,7 @@ export default function AppearancePage() {
           labelCol={{ span: 4 }}
           wrapperCol={{ span: 12 }}
           initialValues={appearance}
+          onValuesChange={handleValuesChange}
         >
           <Form.Item label="主题模式" name="themeMode">
             <Radio.Group>

@@ -6,6 +6,11 @@ import { ConfigProvider, theme } from 'antd';
 import { useState, useMemo, useEffect } from 'react';
 import { useSettingsStore } from '../../store';
 
+function normalizeThemeColor(color: string | undefined): string {
+  const value = color?.trim();
+  return value && /^#[0-9a-f]{6}$/i.test(value) ? value : '#0A84FF';
+}
+
 function AntThemeProvider({ children }: { children: React.ReactNode }) {
   const { state } = useApp();
   const themeColor = useSettingsStore(s => s.appearance.themeColor);
@@ -30,7 +35,9 @@ function AntThemeProvider({ children }: { children: React.ReactNode }) {
       theme={{
         algorithm: isDark ? [theme.darkAlgorithm] : [theme.defaultAlgorithm],
         token: {
-          colorPrimary: themeColor || '#0A84FF',
+          colorPrimary: normalizeThemeColor(themeColor),
+          colorInfo: normalizeThemeColor(themeColor),
+          colorLink: normalizeThemeColor(themeColor),
           fontFamily: 'var(--font-sans)',
         },
       }}
