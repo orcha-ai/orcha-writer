@@ -2,19 +2,57 @@ import { useApp } from '../AppContext';
 import { useSettingsStore } from '../store';
 import { FolderOpen, Folder, File, ChevronRight, ChevronDown, FilePlus, Trash2, Pencil } from 'lucide-react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import type { CSSProperties, MouseEvent } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readTextFile, rename, remove } from '../utils/fs';
 import { buildHidePatterns, findFirstMdFile, readFirstLevel } from '../utils/workspace';
-import type { FileNode } from '../types';
+import type { FileNode, RecentFile } from '../types';
+
+const SIDEBAR_MIN_WIDTH = 180;
+const SIDEBAR_MAX_WIDTH = 420;
+const SIDEBAR_DEFAULT_WIDTH = 240;
+type DepthStyle = CSSProperties & { '--depth': number };
+
+interface TreeHandlers {
+  expandedFolders: Set<string>;
+  loadingFolders: Set<string>;
+  toggleFolder: (path: string) => void | Promise<void>;
+  openFile: (node: FileNode) => void | Promise<void>;
+  activeTabId: string | null;
+  onContextMenu: (event: MouseEvent, item: FileNode | null) => void;
+  renaming: string | null;
+  renameValue: string;
+  onRenameChange: (value: string) => void;
+  onRenameSubmit: () => void | Promise<void>;
+  onRename: (item: FileNode) => void | Promise<void>;
+  onDelete: (item: FileNode) => void | Promise<void>;
+}
+
+interface WorkspaceTreeProps extends TreeHandlers {
+  tree: FileNode[];
+  openFolder: () => void | Promise<void>;
+}
+
+interface TreeNodeProps extends TreeHandlers {
+  node: FileNode;
+  depth: number;
+}
+
+function clampSidebarWidth(width: unknown): number {
+  if (typeof width !== 'number' || !Number.isFinite(width)) return SIDEBAR_DEFAULT_WIDTH;
+  return Math.min(Math.max(Math.round(width), SIDEBAR_MIN_WIDTH), SIDEBAR_MAX_WIDTH);
+}
 
 export default function Sidebar() {
   const { state, dispatch } = useApp();
-  const files = useSettingsStore(s => s.files);
+  const { files, appearance, updateAppearance, saveAll } = useSettingsStore();
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: FileNode | null } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [loadingFolders, setLoadingFolders] = useState<Set<string>>(new Set());
+  const [sidebarWidth, setSidebarWidth] = useState(() => clampSidebarWidth(appearance.sidebarWidth));
+  const [isResizing, setIsResizing] = useState(false);
 
   // Combine default + user-configured hidden patterns
   const hidePatterns = useMemo(() => buildHidePatterns(files.hidePatterns || []), [files.hidePatterns]);
@@ -24,11 +62,59 @@ export default function Sidebar() {
   const treeRef = useRef(state.workspaceTree);
   const workspacePathRef = useRef(state.workspacePath);
   const hidePatternsRef = useRef(hidePatterns);
+  const widthRef = useRef(sidebarWidth);
+  const resizeStartRef = useRef({ x: 0, width: sidebarWidth });
 
   useEffect(() => { expandedRef.current = expandedFolders; }, [expandedFolders]);
   useEffect(() => { treeRef.current = state.workspaceTree; }, [state.workspaceTree]);
   useEffect(() => { workspacePathRef.current = state.workspacePath; }, [state.workspacePath]);
   useEffect(() => { hidePatternsRef.current = hidePatterns; }, [hidePatterns]);
+  useEffect(() => { widthRef.current = sidebarWidth; }, [sidebarWidth]);
+
+  useEffect(() => {
+    if (!isResizing) {
+      setSidebarWidth(clampSidebarWidth(appearance.sidebarWidth));
+    }
+  }, [appearance.sidebarWidth, isResizing]);
+
+  const saveSidebarWidth = useCallback(async (width: number) => {
+    const nextWidth = clampSidebarWidth(width);
+    updateAppearance({ sidebarWidth: nextWidth });
+    await saveAll();
+  }, [saveAll, updateAppearance]);
+
+  const handleResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!state.sidebarVisible) return;
+    event.preventDefault();
+    resizeStartRef.current = { x: event.clientX, width: widthRef.current };
+    setIsResizing(true);
+  }, [state.sidebarVisible]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const delta = event.clientX - resizeStartRef.current.x;
+      const nextWidth = clampSidebarWidth(resizeStartRef.current.width + delta);
+      widthRef.current = nextWidth;
+      setSidebarWidth(nextWidth);
+    };
+
+    const handlePointerUp = () => {
+      setIsResizing(false);
+      void saveSidebarWidth(widthRef.current);
+    };
+
+    document.body.classList.add('sidebar-resizing');
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp, { once: true });
+
+    return () => {
+      document.body.classList.remove('sidebar-resizing');
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [isResizing, saveSidebarWidth]);
 
   const loadFolderChildren = useCallback(async (folderPath: string) => {
     try {
@@ -184,7 +270,10 @@ export default function Sidebar() {
 
   return (
     <>
-      <div className={`sidebar ${!state.sidebarVisible ? 'collapsed' : ''}`}>
+      <div
+        className={`sidebar ${!state.sidebarVisible ? 'collapsed' : ''} ${isResizing ? 'resizing' : ''}`}
+        style={state.sidebarVisible ? { width: sidebarWidth } : undefined}
+      >
         <div className="sidebar-tabs">
           <button
             className={`sidebar-tab ${state.sidebarActiveTab === 'workspace' ? 'active' : ''}`}
@@ -235,6 +324,14 @@ export default function Sidebar() {
             }} />
           )}
         </div>
+
+        <div
+          className="sidebar-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整工作区宽度"
+          onPointerDown={handleResizeStart}
+        />
       </div>
 
       {contextMenu && (
@@ -268,7 +365,7 @@ export default function Sidebar() {
 function WorkspaceTree({
   tree, expandedFolders, loadingFolders, toggleFolder, openFile, openFolder, activeTabId,
   onContextMenu, renaming, renameValue, onRenameChange, onRenameSubmit, onRename, onDelete
-}: any) {
+}: WorkspaceTreeProps) {
   if (tree.length === 0) {
     return (
       <div style={{ padding: '20px 16px', textAlign: 'center' }}>
@@ -289,7 +386,7 @@ function WorkspaceTree({
 
   return (
     <div>
-      {tree.map((node: any) => (
+      {tree.map((node) => (
         <TreeNode
           key={node.path}
           node={node}
@@ -312,19 +409,20 @@ function WorkspaceTree({
   );
 }
 
-function TreeNode({ node, depth, expandedFolders, loadingFolders, toggleFolder, openFile, activeTabId, onContextMenu, renaming, renameValue, onRenameChange, onRenameSubmit, onRename, onDelete }: any) {
+function TreeNode({ node, depth, expandedFolders, loadingFolders, toggleFolder, openFile, activeTabId, onContextMenu, renaming, renameValue, onRenameChange, onRenameSubmit, onRename, onDelete }: TreeNodeProps) {
   const isExpanded = expandedFolders.has(node.path);
   const isLoading = loadingFolders?.has(node.path);
   const isActive = activeTabId === node.path;
   const isRenaming = renaming === node.path;
   const childCount = node.children?.length ?? 0;
+  const depthStyle: DepthStyle = { '--depth': depth };
 
   if (node.type === 'folder') {
     return (
       <div>
         <div
           className={`file-tree-item ${isActive ? 'active' : ''}`}
-          style={{ '--depth': depth } as any}
+          style={depthStyle}
           onClick={() => toggleFolder(node.path)}
           onContextMenu={(e) => onContextMenu(e, node)}
           title={`${node.path}`}
@@ -340,7 +438,7 @@ function TreeNode({ node, depth, expandedFolders, loadingFolders, toggleFolder, 
           <span className="name">{node.name}</span>
           <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 2 }}>{childCount}</span>
         </div>
-        {isExpanded && node.children?.map((child: any) => (
+        {isExpanded && node.children?.map((child) => (
           <TreeNode
             key={child.path}
             node={child}
@@ -366,7 +464,7 @@ function TreeNode({ node, depth, expandedFolders, loadingFolders, toggleFolder, 
   return (
     <div
       className={`file-tree-item ${isActive ? 'active' : ''}`}
-      style={{ '--depth': depth } as any}
+      style={depthStyle}
       onClick={() => openFile(node)}
       onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, node); }}
     >
@@ -389,7 +487,7 @@ function TreeNode({ node, depth, expandedFolders, loadingFolders, toggleFolder, 
   );
 }
 
-function RecentFiles({ recentFiles, openFile }: { recentFiles: any[], openFile: (rf: any) => void }) {
+function RecentFiles({ recentFiles, openFile }: { recentFiles: RecentFile[]; openFile: (rf: RecentFile) => void | Promise<void> }) {
   if (recentFiles.length === 0) {
     return (
       <div style={{ padding: '20px 16px', textAlign: 'center' }}>
@@ -426,7 +524,7 @@ function formatTime(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString('zh-CN');
 }
 
-function findNode(tree: any[], path: string): any | null {
+function findNode(tree: FileNode[], path: string): FileNode | null {
   for (const node of tree) {
     if (node.path === path) return node;
     if (node.children) {

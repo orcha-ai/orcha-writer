@@ -36,12 +36,20 @@ const defaultProviders: AiProviderConfig[] = [];
 const DEFAULT_PROVIDER_IDS = new Set(['openai', 'anthropic', 'qwen']);
 
 const DEFAULT_PROVIDER_URLS: Record<string, string[]> = {
-  openai: ['https://api.openai.com/v1'],
-  anthropic: ['https://api.anthropic.com'],
+  openai: ['https://api.openai.com/v1', 'https://api.openai.com/v1/chat/completions'],
+  anthropic: ['https://api.anthropic.com', 'https://api.anthropic.com/v1/messages'],
   qwen: [
     'https://coding.dashscope.aliyuncs.com/v1',
     'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
   ],
+};
+
+const REQUEST_URL_MIGRATIONS: Record<string, string> = {
+  'https://api.openai.com/v1': 'https://api.openai.com/v1/chat/completions',
+  'https://api.anthropic.com': 'https://api.anthropic.com/v1/messages',
+  'https://coding.dashscope.aliyuncs.com/v1': 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+  'https://dashscope.aliyuncs.com/compatible-mode/v1': 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
 };
 
 function normalizeThinkingBudget(value: unknown): number | undefined {
@@ -79,9 +87,10 @@ function normalizeProviders(
   let changed = false;
   const normalized = providers
     .map((provider) => {
-      if (provider.id === 'qwen' && provider.baseUrl === 'https://coding.dashscope.aliyuncs.com/v1') {
+      const migratedUrl = REQUEST_URL_MIGRATIONS[provider.baseUrl];
+      if (migratedUrl) {
         changed = true;
-        return { ...provider, baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1' };
+        return { ...provider, baseUrl: migratedUrl };
       }
       return provider;
     })

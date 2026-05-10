@@ -4,6 +4,30 @@ Orcha Writer 的版本变更记录。
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-05-10
+
+### 新增
+
+- 新增自动更新发布配置，生成并上传 `latest.json` 与 updater 签名产物。
+- 新增系统菜单「调试模式」，正式包中也可打开 WebView DevTools。
+- 新增工作区侧栏宽度拖拽，并记住上次调整后的宽度。
+
+### 改进
+
+- 模型供应商支持 OpenAI-compatible、Anthropic、Gemini、Ollama 和 Custom 类型。
+- 模型请求地址改为按用户输入原样请求，不再自动拼接路径。
+- 应用版本号改为以 `package.json` 为单一来源，同步到 Tauri 与 Cargo 配置。
+- 更新检查显示运行时真实版本，避免打包后仍显示旧版本。
+- 顶部标签栏会自动滚动到当前激活文件。
+- 设置页高级操作文案改为「清理草稿缓存」和「重置基础设置」。
+- 发布说明不再显示未配置 Apple Developer ID / Windows 代码签名提示。
+
+### 修复
+
+- 修复 OpenAI-compatible 请求地址重复拼接 `/chat/completions` 导致 404 的问题。
+- 修复 release workflow 中 updater JSON 与资源命名参数未生效的问题。
+- 修复工作区侧栏拖拽宽度没有实际生效的问题。
+
 ## [0.1.2] - 2026-05-10
 
 ### 新增

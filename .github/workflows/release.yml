@@ -102,14 +102,25 @@ jobs:
               printf '自动构建的 Orcha Writer 安装包。\n\n'
               printf '本版本暂无 CHANGELOG.md 条目。\n\n'
             fi
-            printf 'macOS 包当前未配置 Apple Developer ID 签名；Windows 包当前未配置代码签名。\n'
             echo "__ORCHA_RELEASE_BODY__"
           } >> "$GITHUB_ENV"
+
+      - name: Validate updater signing secrets
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]]; then
+            echo "::error::Missing TAURI_SIGNING_PRIVATE_KEY secret. Tauri updater artifacts must be signed for auto update."
+            exit 1
+          fi
 
       - name: Build and upload release assets
         uses: tauri-apps/tauri-action@action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tauriScript: pnpm tauri
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v__VERSION__' }}
@@ -118,7 +129,8 @@ jobs:
           releaseDraft: false
           prerelease: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-') }}
           generateReleaseNotes: false
-          uploadUpdaterJson: false
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
           retryAttempts: 2
-          releaseAssetNamePattern: '[name]_[version]_[platform]_[arch]_[bundle][ext]'
+          assetNamePattern: '[name]_[version]_[platform]_[arch]_[bundle][ext]'
           args: ${{ matrix.args }}

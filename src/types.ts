@@ -208,6 +208,7 @@ export interface AppearanceSettings {
   density: 'comfortable' | 'standard' | 'compact';
   font: string;
   showSidebar: boolean;
+  sidebarWidth: number;
   showOutline: boolean;
   showTabs: boolean;
   transparency: boolean;
@@ -353,6 +354,7 @@ export const defaultAppearanceSettings: AppearanceSettings = {
   density: 'standard',
   font: 'system-ui',
   showSidebar: true,
+  sidebarWidth: 240,
   showOutline: true,
   showTabs: true,
   transparency: false,

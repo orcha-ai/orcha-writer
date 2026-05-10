@@ -19,7 +19,7 @@ export interface SendAIChatOptions {
   provider?: AiProviderConfig;
 }
 
-interface NativeOpenAICompatibleResponse {
+interface NativeAIChatResponse {
   content: string;
   reasoningContent?: string;
   model?: string;
@@ -85,7 +85,7 @@ function localMarkdownDraft(options: SendAIChatOptions): string {
   const source = selected || documentContent || request.userInput;
   const modelLine = model && provider
     ? isTauriRuntime()
-      ? `> 已读取模型配置：${provider.name} / ${model.model}${request.deepThinkingEnabled ? '（深度思考）' : ''}。当前供应商类型 ${provider.type} 尚未接入真实请求，先生成本地草稿。`
+      ? `> 已读取模型配置：${provider.name} / ${model.model}${request.deepThinkingEnabled ? '（深度思考）' : ''}。当前模型或供应商未启用，先生成本地草稿。`
       : `> 已读取模型配置：${provider.name} / ${model.model}${request.deepThinkingEnabled ? '（深度思考）' : ''}。当前不是 Tauri 运行环境，无法调用本地请求通道，先生成本地草稿。`
     : '> 当前没有可用模型配置，先生成本地草稿，方便验证编辑器工作流。';
 
@@ -147,14 +147,21 @@ function makeResultCards(options: SendAIChatOptions, content: string): AIResultC
   ];
 }
 
-function canUseOpenAICompatible(model: AiModelConfig | undefined, provider: AiProviderConfig | undefined): model is AiModelConfig {
-  return Boolean(model && provider?.enabled && provider.type === 'openai-compatible');
+function requiresCredential(providerType: AiProviderConfig['type']): boolean {
+  return providerType === 'openai-compatible' || providerType === 'anthropic';
 }
 
-async function sendOpenAICompatible(options: SendAIChatOptions): Promise<AIChatResponse> {
+function canUseNativeProvider(model: AiModelConfig | undefined, provider: AiProviderConfig | undefined): model is AiModelConfig {
+  return Boolean(model && provider?.enabled);
+}
+
+async function sendNativeAIChat(options: SendAIChatOptions): Promise<AIChatResponse> {
   const { request, agent, command, model, provider } = options;
   if (!model || !provider) throw new Error('模型配置不可用');
-  if (!provider.credentialRef?.trim()) throw new Error('模型凭据未配置，请在 AI 模型设置里填写凭据引用或 API Key');
+  if (!provider.baseUrl?.trim()) throw new Error('模型供应商请求地址未配置，请在 AI 模型设置里填写完整请求地址');
+  if (requiresCredential(provider.type) && !provider.credentialRef?.trim()) {
+    throw new Error('模型凭据未配置，请在 AI 模型设置里填写凭据引用或 API Key');
+  }
   const thinkingSupported = Boolean(model.thinkingSupported);
 
   const prompt = buildPrompt({
@@ -163,10 +170,11 @@ async function sendOpenAICompatible(options: SendAIChatOptions): Promise<AIChatR
     context: request.context,
     userInput: request.userInput,
   });
-  const response = await invoke<NativeOpenAICompatibleResponse>('ai_send_openai_compatible', {
+  const response = await invoke<NativeAIChatResponse>('ai_send_chat', {
     request: {
-      baseUrl: provider.baseUrl,
-      credentialRef: provider.credentialRef,
+      providerType: provider.type,
+      apiUrl: provider.baseUrl,
+      credentialRef: provider.credentialRef?.trim() || undefined,
       model: model.model,
       messages: [
         { role: 'system', content: prompt.system },
@@ -193,8 +201,8 @@ async function sendOpenAICompatible(options: SendAIChatOptions): Promise<AIChatR
 
 export async function sendAIChatRequest(options: SendAIChatOptions): Promise<AIChatResponse> {
   const { request, agent, command, model, provider } = options;
-  if (canUseOpenAICompatible(model, provider) && isTauriRuntime()) {
-    return sendOpenAICompatible(options);
+  if (canUseNativeProvider(model, provider) && isTauriRuntime()) {
+    return sendNativeAIChat(options);
   }
 
   const prompt = buildPrompt({

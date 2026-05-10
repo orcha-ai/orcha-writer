@@ -140,11 +140,15 @@ src-tauri/target/release/bundle/
 
 ```bash
 # 1. 更新 CHANGELOG.md 中对应版本的条目
-# 2. 同步 package.json、src-tauri/tauri.conf.json、src-tauri/Cargo.toml 等版本号
+# 2. 只更新 package.json 的 version，然后运行 pnpm version:sync
 # 3. 提交后打 tag 并推送
 git tag v0.1.0
 git push origin v0.1.0
 ```
+
+版本号以 `package.json` 为唯一源头。`pnpm version:sync` 会同步
+`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 和 `src-tauri/Cargo.lock`；
+`pnpm tauri` / `pnpm tauri:build` 也会在打包前自动执行同步。
 
 当前 Release workflow 会构建：
 
@@ -152,6 +156,20 @@ git push origin v0.1.0
 - macOS Apple Silicon：`.app` / `.dmg`
 - Windows x64：NSIS 安装包
 - Linux x64：AppImage / deb
+
+## 自动更新
+
+应用使用 Tauri Updater 检查 GitHub Release 中的 `latest.json`，支持在应用内下载并安装更新。
+发布包会在 CI 中生成 updater artifacts、`.sig` 签名和 `latest.json`。
+
+自动更新依赖 Tauri updater 签名密钥：
+
+- 公钥写在 `src-tauri/tauri.conf.json`，可以提交到仓库。
+- 私钥必须放在 GitHub Secrets 的 `TAURI_SIGNING_PRIVATE_KEY` 中，不能提交到仓库。
+- 如果私钥设置了密码，还需要配置 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
+- 本地打包更新包时，可以把私钥路径导出为 `TAURI_SIGNING_PRIVATE_KEY_PATH`。
+
+私钥丢失后，已安装旧版本的用户将无法继续通过自动更新升级；如需轮换密钥，需要重新生成密钥并同步更新配置中的公钥。
 
 ## macOS 首次打开
 

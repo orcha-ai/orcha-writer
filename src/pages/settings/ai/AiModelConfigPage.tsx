@@ -9,6 +9,37 @@ const { Text } = Typography;
 type ProviderFormValues = Omit<AiProviderConfig, 'id'>;
 type ModelFormValues = Omit<AiModelConfig, 'id'>;
 
+const PROVIDER_TYPE_LABELS: Record<AiProviderConfig['type'], string> = {
+  'openai-compatible': 'OpenAI Compatible',
+  anthropic: 'Anthropic',
+  gemini: 'Gemini',
+  ollama: 'Ollama',
+  custom: 'Custom',
+};
+
+const PROVIDER_ENDPOINT_HINTS: Record<AiProviderConfig['type'], { placeholder: string; extra: string }> = {
+  'openai-compatible': {
+    placeholder: 'https://api.openai.com/v1/chat/completions',
+    extra: '填写完整 Chat Completions 请求地址，程序不会再自动拼接路径。',
+  },
+  anthropic: {
+    placeholder: 'https://api.anthropic.com/v1/messages',
+    extra: '填写完整 Messages 请求地址，请在凭据引用里配置 Anthropic API Key。',
+  },
+  gemini: {
+    placeholder: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent',
+    extra: '填写完整 generateContent 请求地址；API Key 可填凭据引用，也可自行放在 URL 查询参数里。',
+  },
+  ollama: {
+    placeholder: 'http://localhost:11434/api/chat',
+    extra: '填写完整 Ollama Chat 请求地址，本地 Ollama 通常不需要凭据。',
+  },
+  custom: {
+    placeholder: 'https://example.com/api/chat',
+    extra: '填写完整自定义请求地址；Custom 会按 OpenAI 风格发送，并尽量解析常见返回字段。',
+  },
+};
+
 export default function AiModelConfigPage() {
   const {
     providers,
@@ -29,6 +60,8 @@ export default function AiModelConfigPage() {
   const [editingProvider, setEditingProvider] = useState<AiProviderConfig | null>(null);
   const [editingModel, setEditingModel] = useState<AiModelConfig | null>(null);
   const thinkingSupported = Form.useWatch('thinkingSupported', modelForm);
+  const providerType = Form.useWatch('type', providerForm) || editingProvider?.type || 'openai-compatible';
+  const endpointHint = PROVIDER_ENDPOINT_HINTS[providerType];
 
   useEffect(() => {
     if (!providerModalOpen) return;
@@ -94,7 +127,7 @@ export default function AiModelConfigPage() {
 
   const handleTestProvider = (provider: AiProviderConfig) => {
     if (!provider.baseUrl.trim()) {
-      message.warning('请先配置 API 地址');
+      message.warning('请先配置请求地址');
       return;
     }
     message.success(`${provider.name} 参数完整，可用于后续连接测试`);
@@ -102,8 +135,8 @@ export default function AiModelConfigPage() {
 
   const providerColumns = [
     { title: '名称', dataIndex: 'name', key: 'name', width: 140 },
-    { title: '类型', dataIndex: 'type', key: 'type', width: 160, render: (type: string) => <Tag>{type}</Tag> },
-    { title: 'API 地址', dataIndex: 'baseUrl', key: 'baseUrl', ellipsis: true, width: 320 },
+    { title: '类型', dataIndex: 'type', key: 'type', width: 160, render: (type: AiProviderConfig['type']) => <Tag>{PROVIDER_TYPE_LABELS[type] || type}</Tag> },
+    { title: '请求地址', dataIndex: 'baseUrl', key: 'baseUrl', ellipsis: true, width: 320 },
     {
       title: '状态',
       dataIndex: 'enabled',
@@ -246,17 +279,24 @@ export default function AiModelConfigPage() {
           </Form.Item>
           <Form.Item label="类型" name="type" rules={[{ required: true }]}>
             <Select>
-              <Select.Option value="openai-compatible">OpenAI Compatible</Select.Option>
-              <Select.Option value="anthropic">Anthropic</Select.Option>
-              <Select.Option value="gemini">Gemini</Select.Option>
-              <Select.Option value="ollama">Ollama</Select.Option>
-              <Select.Option value="custom">Custom</Select.Option>
+              {Object.entries(PROVIDER_TYPE_LABELS).map(([value, label]) => (
+                <Select.Option key={value} value={value}>{label}</Select.Option>
+              ))}
             </Select>
           </Form.Item>
-          <Form.Item label="API 地址" name="baseUrl" rules={[{ required: true, message: '请输入 API 地址' }]}>
-            <Input placeholder="https://api.openai.com/v1" />
+          <Form.Item
+            label="请求地址"
+            name="baseUrl"
+            rules={[{ required: true, message: '请输入请求地址' }]}
+            extra={endpointHint.extra}
+          >
+            <Input placeholder={endpointHint.placeholder} />
           </Form.Item>
-          <Form.Item label="凭据引用" name="credentialRef">
+          <Form.Item
+            label="凭据引用"
+            name="credentialRef"
+            extra="支持 env:环境变量名 或临时填入 API Key；Ollama / Custom 可留空。"
+          >
             <Input placeholder="如 env:DASHSCOPE_API_KEY，或临时填入 API Key" />
           </Form.Item>
           <Form.Item label="启用" name="enabled" valuePropName="checked">

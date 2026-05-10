@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewEvent, DragDropEvent};
 use tauri::menu::{MenuBuilder, SubmenuBuilder, MenuItemBuilder};
 use tauri::command;
 use serde::{Serialize, Deserialize};
-use serde_json::json;
+use serde_json::{json, Value};
 
 // ── PendingOpenFiles: stores files to open from cold start or Opened events ──
 #[derive(Default)]
@@ -44,9 +44,10 @@ struct AiChatMessageInput {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AiOpenAiCompatibleRequest {
-    base_url: String,
-    credential_ref: String,
+struct AiChatRequest {
+    provider_type: String,
+    api_url: String,
+    credential_ref: Option<String>,
     model: String,
     messages: Vec<AiChatMessageInput>,
     temperature: Option<f64>,
@@ -66,7 +67,7 @@ struct AiTokenUsage {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AiOpenAiCompatibleResponse {
+struct AiChatResponse {
     content: String,
     reasoning_content: Option<String>,
     model: Option<String>,
@@ -96,6 +97,73 @@ struct OpenAiUsage {
     prompt_tokens: Option<u64>,
     completion_tokens: Option<u64>,
     total_tokens: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicResponse {
+    content: Vec<AnthropicContentBlock>,
+    model: Option<String>,
+    usage: Option<AnthropicUsage>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicContentBlock {
+    #[serde(rename = "type")]
+    block_type: Option<String>,
+    text: Option<String>,
+    thinking: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicUsage {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiResponse {
+    candidates: Option<Vec<GeminiCandidate>>,
+    usage_metadata: Option<GeminiUsage>,
+}
+
+#[derive(Deserialize)]
+struct GeminiCandidate {
+    content: Option<GeminiContent>,
+}
+
+#[derive(Deserialize)]
+struct GeminiContent {
+    parts: Option<Vec<GeminiPart>>,
+}
+
+#[derive(Deserialize)]
+struct GeminiPart {
+    text: Option<String>,
+    thought: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiUsage {
+    prompt_token_count: Option<u64>,
+    candidates_token_count: Option<u64>,
+    total_token_count: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct OllamaResponse {
+    model: Option<String>,
+    message: Option<OllamaMessage>,
+    response: Option<String>,
+    prompt_eval_count: Option<u64>,
+    eval_count: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct OllamaMessage {
+    content: Option<String>,
+    thinking: Option<String>,
 }
 
 // ── Utility: check if a path is a markdown file ──
@@ -532,10 +600,10 @@ fn rename_path(from: String, to: String) -> Result<(), String> {
         .map_err(|e| format!("重命名失败: {}", e))
 }
 
-fn resolve_ai_credential(credential_ref: &str) -> Result<String, String> {
-    let value = credential_ref.trim();
+fn resolve_ai_credential(credential_ref: Option<&str>) -> Result<Option<String>, String> {
+    let value = credential_ref.unwrap_or("").trim();
     if value.is_empty() {
-        return Err("模型凭据未配置".to_string());
+        return Ok(None);
     }
 
     if let Some(name) = value.strip_prefix("env:") {
@@ -544,6 +612,7 @@ fn resolve_ai_credential(credential_ref: &str) -> Result<String, String> {
             return Err("环境变量凭据名称为空".to_string());
         }
         return std::env::var(env_name)
+            .map(Some)
             .map_err(|_| format!("未读取到环境变量 {}", env_name));
     }
 
@@ -551,68 +620,34 @@ fn resolve_ai_credential(credential_ref: &str) -> Result<String, String> {
         return Err("secret 凭据读取尚未接入，请先使用 env:环境变量名 或临时填入 API Key".to_string());
     }
 
-    Ok(value.to_string())
+    Ok(Some(value.to_string()))
 }
 
-fn ai_chat_endpoint(base_url: &str) -> String {
-    format!("{}/chat/completions", base_url.trim_end_matches('/'))
+fn require_ai_credential(credential: Option<String>, provider_name: &str) -> Result<String, String> {
+    credential.ok_or_else(|| format!("{} 凭据未配置", provider_name))
 }
 
-// ── Command: send OpenAI-compatible chat request from the Rust side ──
-#[command]
-async fn ai_send_openai_compatible(request: AiOpenAiCompatibleRequest) -> Result<AiOpenAiCompatibleResponse, String> {
-    let api_key = resolve_ai_credential(&request.credential_ref)?;
-    let endpoint = ai_chat_endpoint(&request.base_url);
-    let messages: Vec<_> = request.messages
+fn ai_request_endpoint(api_url: &str) -> Result<String, String> {
+    let trimmed = api_url.trim();
+    if trimmed.is_empty() {
+        return Err("模型供应商请求地址未配置".to_string());
+    }
+
+    Ok(trimmed.to_string())
+}
+
+fn request_messages(messages: &[AiChatMessageInput]) -> Vec<Value> {
+    messages
         .iter()
         .map(|message| json!({
             "role": message.role,
             "content": message.content,
         }))
-        .collect();
+        .collect()
+}
 
-    let mut body = json!({
-        "model": request.model,
-        "messages": messages,
-        "stream": false,
-    });
-
-    if let Some(temperature) = request.temperature {
-        body["temperature"] = json!(temperature);
-    }
-    if let Some(top_p) = request.top_p {
-        body["top_p"] = json!(top_p);
-    }
-    if let Some(max_tokens) = request.max_tokens {
-        body["max_tokens"] = json!(max_tokens);
-    }
-    if let Some(enable_thinking) = request.enable_thinking {
-        body["enable_thinking"] = json!(enable_thinking);
-    }
-    if let Some(thinking_budget) = request.thinking_budget {
-        body["thinking_budget"] = json!(thinking_budget);
-    }
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post(endpoint)
-        .bearer_auth(api_key)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("AI 请求失败: {}", e))?;
-
-    let status = response.status();
-    let response_text = response
-        .text()
-        .await
-        .map_err(|e| format!("读取 AI 响应失败: {}", e))?;
-
-    if !status.is_success() {
-        return Err(format!("AI 服务返回错误 {}: {}", status.as_u16(), response_text));
-    }
-
-    let parsed: OpenAiChatResponse = serde_json::from_str(&response_text)
+fn parse_openai_response(response_text: &str) -> Result<AiChatResponse, String> {
+    let parsed: OpenAiChatResponse = serde_json::from_str(response_text)
         .map_err(|e| format!("解析 AI 响应失败: {}", e))?;
     let content = parsed
         .choices
@@ -634,7 +669,7 @@ async fn ai_send_openai_compatible(request: AiOpenAiCompatibleRequest) -> Result
         return Err("AI 返回了空结果".to_string());
     }
 
-    Ok(AiOpenAiCompatibleResponse {
+    Ok(AiChatResponse {
         content,
         reasoning_content,
         model: parsed.model,
@@ -644,6 +679,435 @@ async fn ai_send_openai_compatible(request: AiOpenAiCompatibleRequest) -> Result
             total_tokens: usage.total_tokens,
         }),
     })
+}
+
+fn parse_anthropic_response(response_text: &str) -> Result<AiChatResponse, String> {
+    let parsed: AnthropicResponse = serde_json::from_str(response_text)
+        .map_err(|e| format!("解析 Anthropic 响应失败: {}", e))?;
+    let mut content_parts = Vec::new();
+    let mut thinking_parts = Vec::new();
+
+    for block in parsed.content {
+        if block.block_type.as_deref() == Some("thinking") {
+            if let Some(thinking) = block.thinking.or(block.text) {
+                let trimmed = thinking.trim();
+                if !trimmed.is_empty() {
+                    thinking_parts.push(trimmed.to_string());
+                }
+            }
+        } else if let Some(text) = block.text {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                content_parts.push(trimmed.to_string());
+            }
+        }
+    }
+
+    let content = content_parts.join("\n\n");
+    let reasoning_content = if thinking_parts.is_empty() {
+        None
+    } else {
+        Some(thinking_parts.join("\n\n"))
+    };
+
+    if content.is_empty() && reasoning_content.is_none() {
+        return Err("AI 返回了空结果".to_string());
+    }
+
+    Ok(AiChatResponse {
+        content,
+        reasoning_content,
+        model: parsed.model,
+        usage: parsed.usage.map(|usage| AiTokenUsage {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            total_tokens: match (usage.input_tokens, usage.output_tokens) {
+                (Some(input), Some(output)) => Some(input + output),
+                _ => None,
+            },
+        }),
+    })
+}
+
+fn parse_gemini_response(response_text: &str, model: &str) -> Result<AiChatResponse, String> {
+    let parsed: GeminiResponse = serde_json::from_str(response_text)
+        .map_err(|e| format!("解析 Gemini 响应失败: {}", e))?;
+    let mut content_parts = Vec::new();
+    let mut thinking_parts = Vec::new();
+
+    for candidate in parsed.candidates.unwrap_or_default() {
+        if let Some(content) = candidate.content {
+            for part in content.parts.unwrap_or_default() {
+                if let Some(text) = part.text {
+                    let trimmed = text.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if part.thought.unwrap_or(false) {
+                        thinking_parts.push(trimmed.to_string());
+                    } else {
+                        content_parts.push(trimmed.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let content = content_parts.join("\n\n");
+    let reasoning_content = if thinking_parts.is_empty() {
+        None
+    } else {
+        Some(thinking_parts.join("\n\n"))
+    };
+
+    if content.is_empty() && reasoning_content.is_none() {
+        return Err("AI 返回了空结果".to_string());
+    }
+
+    Ok(AiChatResponse {
+        content,
+        reasoning_content,
+        model: Some(model.to_string()),
+        usage: parsed.usage_metadata.map(|usage| AiTokenUsage {
+            input_tokens: usage.prompt_token_count,
+            output_tokens: usage.candidates_token_count,
+            total_tokens: usage.total_token_count,
+        }),
+    })
+}
+
+fn parse_ollama_response(response_text: &str) -> Result<AiChatResponse, String> {
+    let parsed: OllamaResponse = serde_json::from_str(response_text)
+        .map_err(|e| format!("解析 Ollama 响应失败: {}", e))?;
+    let content = parsed
+        .message
+        .as_ref()
+        .and_then(|message| message.content.clone())
+        .or(parsed.response)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let reasoning_content = parsed
+        .message
+        .and_then(|message| message.thinking)
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty());
+
+    if content.is_empty() && reasoning_content.is_none() {
+        return Err("AI 返回了空结果".to_string());
+    }
+
+    Ok(AiChatResponse {
+        content,
+        reasoning_content,
+        model: parsed.model,
+        usage: Some(AiTokenUsage {
+            input_tokens: parsed.prompt_eval_count,
+            output_tokens: parsed.eval_count,
+            total_tokens: match (parsed.prompt_eval_count, parsed.eval_count) {
+                (Some(input), Some(output)) => Some(input + output),
+                _ => None,
+            },
+        }),
+    })
+}
+
+fn first_string_field(value: &Value, fields: &[&str]) -> Option<String> {
+    for field in fields {
+        if let Some(text) = value.get(field).and_then(|item| item.as_str()) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn parse_custom_response(response_text: &str, model: &str) -> Result<AiChatResponse, String> {
+    if let Ok(response) = parse_openai_response(response_text) {
+        return Ok(response);
+    }
+
+    let parsed: Value = serde_json::from_str(response_text)
+        .map_err(|e| format!("解析 Custom 响应失败: {}", e))?;
+    let content = first_string_field(&parsed, &["content", "text", "answer", "response", "output"])
+        .unwrap_or_default();
+
+    if content.is_empty() {
+        return Err("AI 返回了空结果".to_string());
+    }
+
+    Ok(AiChatResponse {
+        content,
+        reasoning_content: first_string_field(&parsed, &["reasoning_content", "reasoning", "thinking"]),
+        model: first_string_field(&parsed, &["model"]).or_else(|| Some(model.to_string())),
+        usage: None,
+    })
+}
+
+fn ensure_success(status: reqwest::StatusCode, response_text: String) -> Result<String, String> {
+    if status.is_success() {
+        return Ok(response_text);
+    }
+
+    Err(format!("AI 服务返回错误 {}: {}", status.as_u16(), response_text))
+}
+
+async fn send_openai_like_request(
+    client: &reqwest::Client,
+    request: &AiChatRequest,
+    endpoint: &str,
+    api_key: Option<String>,
+    require_key: bool,
+) -> Result<String, String> {
+    let api_key = if require_key {
+        Some(require_ai_credential(api_key, "OpenAI Compatible")?)
+    } else {
+        api_key
+    };
+    let mut body = json!({
+        "model": request.model,
+        "messages": request_messages(&request.messages),
+        "stream": false,
+    });
+
+    if let Some(temperature) = request.temperature {
+        body["temperature"] = json!(temperature);
+    }
+    if let Some(top_p) = request.top_p {
+        body["top_p"] = json!(top_p);
+    }
+    if let Some(max_tokens) = request.max_tokens {
+        body["max_tokens"] = json!(max_tokens);
+    }
+    if let Some(enable_thinking) = request.enable_thinking {
+        body["enable_thinking"] = json!(enable_thinking);
+    }
+    if let Some(thinking_budget) = request.thinking_budget {
+        body["thinking_budget"] = json!(thinking_budget);
+    }
+
+    let mut builder = client
+        .post(endpoint)
+        .json(&body);
+    if let Some(api_key) = api_key {
+        builder = builder.bearer_auth(api_key);
+    }
+
+    let response = builder
+        .send()
+        .await
+        .map_err(|e| format!("AI 请求失败: {}", e))?;
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("读取 AI 响应失败: {}", e))?;
+
+    ensure_success(status, response_text)
+}
+
+async fn send_anthropic_request(
+    client: &reqwest::Client,
+    request: &AiChatRequest,
+    endpoint: &str,
+    api_key: String,
+) -> Result<String, String> {
+    let system = request.messages
+        .iter()
+        .filter(|message| message.role == "system")
+        .map(|message| message.content.trim())
+        .filter(|content| !content.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let messages: Vec<_> = request.messages
+        .iter()
+        .filter(|message| message.role != "system")
+        .map(|message| json!({
+            "role": if message.role == "assistant" { "assistant" } else { "user" },
+            "content": message.content,
+        }))
+        .collect();
+
+    let mut body = json!({
+        "model": request.model,
+        "max_tokens": request.max_tokens.unwrap_or(4096),
+        "messages": messages,
+    });
+    if !system.is_empty() {
+        body["system"] = json!(system);
+    }
+    if let Some(temperature) = request.temperature {
+        body["temperature"] = json!(temperature);
+    }
+    if let Some(top_p) = request.top_p {
+        body["top_p"] = json!(top_p);
+    }
+    if request.enable_thinking.unwrap_or(false) {
+        body["thinking"] = json!({
+            "type": "enabled",
+            "budget_tokens": request.thinking_budget.unwrap_or(1024),
+        });
+    }
+
+    let response = client
+        .post(endpoint)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("AI 请求失败: {}", e))?;
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("读取 AI 响应失败: {}", e))?;
+
+    ensure_success(status, response_text)
+}
+
+async fn send_gemini_request(
+    client: &reqwest::Client,
+    request: &AiChatRequest,
+    endpoint: &str,
+    api_key: Option<String>,
+) -> Result<String, String> {
+    let mut system_parts = Vec::new();
+    let contents: Vec<_> = request.messages
+        .iter()
+        .filter_map(|message| {
+            if message.role == "system" {
+                system_parts.push(json!({ "text": message.content }));
+                return None;
+            }
+
+            Some(json!({
+                "role": if message.role == "assistant" { "model" } else { "user" },
+                "parts": [{ "text": message.content }],
+            }))
+        })
+        .collect();
+
+    let mut body = json!({
+        "contents": contents,
+    });
+    if !system_parts.is_empty() {
+        body["systemInstruction"] = json!({ "parts": system_parts });
+    }
+
+    let mut generation_config = json!({});
+    if let Some(temperature) = request.temperature {
+        generation_config["temperature"] = json!(temperature);
+    }
+    if let Some(top_p) = request.top_p {
+        generation_config["topP"] = json!(top_p);
+    }
+    if let Some(max_tokens) = request.max_tokens {
+        generation_config["maxOutputTokens"] = json!(max_tokens);
+    }
+    if request.enable_thinking.unwrap_or(false) {
+        if let Some(thinking_budget) = request.thinking_budget {
+            generation_config["thinkingConfig"] = json!({ "thinkingBudget": thinking_budget });
+        }
+    }
+    if generation_config.as_object().map(|object| !object.is_empty()).unwrap_or(false) {
+        body["generationConfig"] = generation_config;
+    }
+
+    let mut builder = client.post(endpoint).json(&body);
+    if let Some(api_key) = api_key {
+        builder = builder.header("x-goog-api-key", api_key);
+    }
+
+    let response = builder
+        .send()
+        .await
+        .map_err(|e| format!("AI 请求失败: {}", e))?;
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("读取 AI 响应失败: {}", e))?;
+
+    ensure_success(status, response_text)
+}
+
+async fn send_ollama_request(
+    client: &reqwest::Client,
+    request: &AiChatRequest,
+    endpoint: &str,
+) -> Result<String, String> {
+    let mut options = json!({});
+    if let Some(temperature) = request.temperature {
+        options["temperature"] = json!(temperature);
+    }
+    if let Some(top_p) = request.top_p {
+        options["top_p"] = json!(top_p);
+    }
+    if let Some(max_tokens) = request.max_tokens {
+        options["num_predict"] = json!(max_tokens);
+    }
+
+    let mut body = json!({
+        "model": request.model,
+        "messages": request_messages(&request.messages),
+        "stream": false,
+    });
+    if options.as_object().map(|object| !object.is_empty()).unwrap_or(false) {
+        body["options"] = options;
+    }
+    if let Some(enable_thinking) = request.enable_thinking {
+        body["think"] = json!(enable_thinking);
+    }
+
+    let response = client
+        .post(endpoint)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("AI 请求失败: {}", e))?;
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("读取 AI 响应失败: {}", e))?;
+
+    ensure_success(status, response_text)
+}
+
+// ── Command: send AI chat request from the Rust side ──
+#[command]
+async fn ai_send_chat(request: AiChatRequest) -> Result<AiChatResponse, String> {
+    let endpoint = ai_request_endpoint(&request.api_url)?;
+    let credential = resolve_ai_credential(request.credential_ref.as_deref())?;
+    let client = reqwest::Client::new();
+
+    match request.provider_type.as_str() {
+        "openai-compatible" => {
+            let response_text = send_openai_like_request(&client, &request, &endpoint, credential, true).await?;
+            parse_openai_response(&response_text)
+        }
+        "anthropic" => {
+            let api_key = require_ai_credential(credential, "Anthropic")?;
+            let response_text = send_anthropic_request(&client, &request, &endpoint, api_key).await?;
+            parse_anthropic_response(&response_text)
+        }
+        "gemini" => {
+            let response_text = send_gemini_request(&client, &request, &endpoint, credential).await?;
+            parse_gemini_response(&response_text, &request.model)
+        }
+        "ollama" => {
+            let response_text = send_ollama_request(&client, &request, &endpoint).await?;
+            parse_ollama_response(&response_text)
+        }
+        "custom" => {
+            let response_text = send_openai_like_request(&client, &request, &endpoint, credential, false).await?;
+            parse_custom_response(&response_text, &request.model)
+        }
+        other => Err(format!("暂不支持的模型供应商类型: {}", other)),
+    }
 }
 
 // ── Command: ensure config directory exists ──
@@ -902,7 +1366,7 @@ fn main() {
             path_exists,
             delete_path,
             rename_path,
-            ai_send_openai_compatible,
+            ai_send_chat,
             ensure_config_dir,
             detect_pdf_engines,
             export_pdf_chrome,
@@ -985,6 +1449,10 @@ fn main() {
                 .item(&MenuItemBuilder::new("切换下一个标签").id("next_tab").build(handle)?)
                 .build()?;
 
+            let system_menu = SubmenuBuilder::new(handle, "系统")
+                .item(&MenuItemBuilder::new("调试模式").id("toggle_debug_mode").accelerator("CmdOrCtrl+Alt+I").build(handle)?)
+                .build()?;
+
             let help_menu = SubmenuBuilder::new(handle, "帮助")
                 .item(&MenuItemBuilder::new("Markdown 语法帮助").id("markdown_help").build(handle)?)
                 .item(&MenuItemBuilder::new("快捷键说明").id("shortcut_help").build(handle)?)
@@ -1001,6 +1469,7 @@ fn main() {
                 .item(&insert_menu)
                 .item(&export_menu)
                 .item(&window_menu)
+                .item(&system_menu)
                 .item(&help_menu)
                 .build()?;
 
@@ -1072,6 +1541,13 @@ fn main() {
                 "zoom_in" => { window.emit("menu-action", "zoom_in").ok(); }
                 "zoom_out" => { window.emit("menu-action", "zoom_out").ok(); }
                 "reset_zoom" => { window.emit("menu-action", "reset_zoom").ok(); }
+                "toggle_debug_mode" => {
+                    if window.is_devtools_open() {
+                        window.close_devtools();
+                    } else {
+                        window.open_devtools();
+                    }
+                }
                 "markdown_help" => { window.emit("menu-action", "markdown_help").ok(); }
                 "shortcut_help" => { window.emit("menu-action", "shortcut_help").ok(); }
                 "check_update" => { window.emit("menu-action", "check_update").ok(); }

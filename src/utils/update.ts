@@ -1,4 +1,5 @@
 import { isTauri } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import { check as checkNativeUpdate, type DownloadEvent } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 
@@ -20,7 +21,7 @@ export interface UpdateInstallResult extends UpdateCheckResult {
   message?: string;
 }
 
-const CURRENT_VERSION = '0.1.1';
+const FALLBACK_CURRENT_VERSION = __APP_VERSION__;
 const LATEST_RELEASE_API = 'https://api.github.com/repos/orcha-ai/orcha-writer/releases/latest';
 const RELEASES_URL = 'https://github.com/orcha-ai/orcha-writer/releases';
 
@@ -40,7 +41,20 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+export async function getCurrentVersion(): Promise<string> {
+  if (isTauri()) {
+    try {
+      return await getVersion();
+    } catch (error) {
+      console.warn('[update] Failed to read app version from Tauri metadata:', error);
+    }
+  }
+
+  return FALLBACK_CURRENT_VERSION;
+}
+
 export async function checkForUpdates(): Promise<UpdateCheckResult> {
+  const currentVersion = await getCurrentVersion();
   const response = await fetch(LATEST_RELEASE_API, {
     headers: {
       Accept: 'application/vnd.github+json',
@@ -56,14 +70,14 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
     name?: string;
     html_url?: string;
   };
-  const latestVersion = release.tag_name || release.name || CURRENT_VERSION;
+  const latestVersion = release.tag_name || release.name || currentVersion;
   const releaseUrl = release.html_url || RELEASES_URL;
 
   return {
-    currentVersion: CURRENT_VERSION,
+    currentVersion,
     latestVersion,
     releaseUrl,
-    available: compareVersions(latestVersion, CURRENT_VERSION) > 0,
+    available: compareVersions(latestVersion, currentVersion) > 0,
   };
 }
 
@@ -76,7 +90,7 @@ export async function installAvailableUpdate(
   onProgress?: (progress: UpdateInstallProgress) => void,
 ): Promise<UpdateInstallResult> {
   let nativeError: string | undefined;
-  let githubResult: UpdateCheckResult | null = null;
+  let githubResult: UpdateCheckResult;
 
   if (isTauri()) {
     try {
@@ -117,7 +131,7 @@ export async function installAvailableUpdate(
     githubResult = await checkForUpdates();
   } catch (error) {
     if (nativeError) {
-      throw new Error(`${nativeError}；GitHub Releases 检查也失败：${errorMessage(error)}`);
+      throw new Error(`${nativeError}；GitHub Releases 检查也失败：${errorMessage(error)}`, { cause: error });
     }
     throw error;
   }

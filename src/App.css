@@ -227,13 +227,14 @@
 .sidebar {
   width: 240px;
   min-width: 180px;
-  max-width: 400px;
+  max-width: 420px;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border-primary);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
   overflow: hidden;
+  position: relative;
 }
 
 .sidebar.collapsed {
@@ -273,6 +274,43 @@
   overflow-y: auto;
   overflow-x: hidden;
   padding: 8px 0;
+}
+
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 1px;
+  background: transparent;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.sidebar:hover .sidebar-resizer::after,
+.sidebar.resizing .sidebar-resizer::after {
+  background: var(--accent);
+  opacity: 0.75;
+}
+
+.sidebar.collapsed .sidebar-resizer {
+  display: none;
+}
+
+body.sidebar-resizing,
+body.sidebar-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 /* File Tree */
