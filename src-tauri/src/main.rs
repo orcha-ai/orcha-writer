@@ -896,16 +896,19 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app_handle, event| {
-            // macOS: handle Opened event from Finder (dock drop, right-click open)
-            if let tauri::RunEvent::Opened { urls } = &event {
-                let paths: Vec<String> = urls
-                    .iter()
-                    .filter_map(|url| url.to_file_path().ok())
-                    .filter(|path| path.exists() && path.is_file() && is_markdown_file(path))
-                    .map(|path| path.to_string_lossy().to_string())
-                    .collect();
-                push_and_emit_open_files(app_handle, paths);
+        .run(|_app_handle, _event| {
+            #[cfg(target_os = "macos")]
+            {
+                // macOS: handle Opened event from Finder (dock drop, right-click open).
+                if let tauri::RunEvent::Opened { urls } = &_event {
+                    let paths: Vec<String> = urls
+                        .iter()
+                        .filter_map(|url| url.to_file_path().ok())
+                        .filter(|path| path.exists() && path.is_file() && is_markdown_file(path))
+                        .map(|path| path.to_string_lossy().to_string())
+                        .collect();
+                    push_and_emit_open_files(_app_handle, paths);
+                }
             }
         });
 }
