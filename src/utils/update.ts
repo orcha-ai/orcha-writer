@@ -1,3 +1,7 @@
+import { isTauri } from '@tauri-apps/api/core';
+import { check as checkNativeUpdate, type DownloadEvent } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
+
 export interface UpdateCheckResult {
   currentVersion: string;
   latestVersion: string;
@@ -5,8 +9,20 @@ export interface UpdateCheckResult {
   available: boolean;
 }
 
-const CURRENT_VERSION = '0.1.0';
+export interface UpdateInstallProgress {
+  downloadedBytes: number;
+  totalBytes?: number;
+  percent?: number;
+}
+
+export interface UpdateInstallResult extends UpdateCheckResult {
+  status: 'up-to-date' | 'installed' | 'manual';
+  message?: string;
+}
+
+const CURRENT_VERSION = '0.1.1';
 const LATEST_RELEASE_API = 'https://api.github.com/repos/orcha-ai/orcha-writer/releases/latest';
+const RELEASES_URL = 'https://github.com/orcha-ai/orcha-writer/releases';
 
 function normalizeVersion(version: string): string {
   return version.trim().replace(/^v/i, '');
@@ -41,7 +57,7 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
     html_url?: string;
   };
   const latestVersion = release.tag_name || release.name || CURRENT_VERSION;
-  const releaseUrl = release.html_url || 'https://github.com/orcha-ai/orcha-writer/releases';
+  const releaseUrl = release.html_url || RELEASES_URL;
 
   return {
     currentVersion: CURRENT_VERSION,
@@ -49,4 +65,80 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
     releaseUrl,
     available: compareVersions(latestVersion, CURRENT_VERSION) > 0,
   };
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return typeof error === 'string' ? error : '自动更新失败';
+}
+
+export async function installAvailableUpdate(
+  onProgress?: (progress: UpdateInstallProgress) => void,
+): Promise<UpdateInstallResult> {
+  let nativeError: string | undefined;
+  let githubResult: UpdateCheckResult | null = null;
+
+  if (isTauri()) {
+    try {
+      const nativeUpdate = await checkNativeUpdate();
+      if (nativeUpdate) {
+        let downloadedBytes = 0;
+        let totalBytes: number | undefined;
+        await nativeUpdate.downloadAndInstall((event: DownloadEvent) => {
+          if (event.event === 'Started') {
+            downloadedBytes = 0;
+            totalBytes = event.data.contentLength;
+          } else if (event.event === 'Progress') {
+            downloadedBytes += event.data.chunkLength;
+          } else if (event.event === 'Finished') {
+            downloadedBytes = totalBytes ?? downloadedBytes;
+          }
+          onProgress?.({
+            downloadedBytes,
+            totalBytes,
+            percent: totalBytes ? Math.round((downloadedBytes / totalBytes) * 100) : undefined,
+          });
+        });
+
+        return {
+          currentVersion: nativeUpdate.currentVersion,
+          latestVersion: nativeUpdate.version,
+          releaseUrl: RELEASES_URL,
+          available: true,
+          status: 'installed',
+        };
+      }
+    } catch (error) {
+      nativeError = errorMessage(error);
+    }
+  }
+
+  try {
+    githubResult = await checkForUpdates();
+  } catch (error) {
+    if (nativeError) {
+      throw new Error(`${nativeError}；GitHub Releases 检查也失败：${errorMessage(error)}`);
+    }
+    throw error;
+  }
+
+  if (!githubResult.available) {
+    return {
+      ...githubResult,
+      status: 'up-to-date',
+      message: nativeError,
+    };
+  }
+
+  return {
+    ...githubResult,
+    status: 'manual',
+    message: nativeError
+      ? `自动安装通道不可用：${nativeError}`
+      : '当前环境不支持自动安装，已回退到发布页。',
+  };
+}
+
+export async function relaunchApplication(): Promise<void> {
+  await relaunch();
 }

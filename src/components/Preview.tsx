@@ -7,6 +7,7 @@ import { open as openPath } from '@tauri-apps/plugin-shell';
 import type Token from 'markdown-it/lib/token.mjs';
 import type { MarkdownSettings, PreviewSettings, SecuritySettings } from '../types';
 import { getPreviewThemeClassName } from '../previewThemes';
+import { getPreviewCodeThemeClassName } from '../codeThemes';
 import { pathExists } from '../utils/fs';
 import { normalizeMarkdownImageSyntax, resolveMarkdownImageSource } from '../utils/markdownImages';
 
@@ -347,13 +348,14 @@ export default function Preview() {
 
   const isHidden = state.viewMode === 'edit';
   const previewThemeClassName = getPreviewThemeClassName(preview.previewTheme);
+  const codeThemeClassName = getPreviewCodeThemeClassName(preview.codeTheme);
 
   return (
     <div className={`preview-panel ${isHidden ? 'hidden' : ''}`}>
       {activeTab ? (
         <div
           ref={previewRef}
-          className={`md-preview ${previewThemeClassName}`}
+          className={`md-preview ${previewThemeClassName} ${codeThemeClassName}`}
           style={{ '--preview-image-max-width': `${preview.imageMaxWidth}px` } as React.CSSProperties}
           dangerouslySetInnerHTML={{ __html: html }}
         />

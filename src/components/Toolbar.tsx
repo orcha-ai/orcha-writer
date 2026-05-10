@@ -16,7 +16,7 @@ import { basename, formatMarkdownImageUrl, markdownImagePathForDocument, stripEx
 import { renderMarkdownForExport } from '../utils/exportMarkdown';
 import { useSettingsStore, useShortcutStore } from '../store';
 import type { ThemeMode } from '../types';
-import { checkForUpdates } from '../utils/update';
+import { checkForUpdates, installAvailableUpdate, relaunchApplication } from '../utils/update';
 
 // Tauri save dialog on macOS returns file:// URLs, convert to plain path
 function decodePath(path: string): string {
@@ -457,9 +457,34 @@ ${htmlBody}
       Modal.confirm({
         title: `发现新版本 ${result.latestVersion}`,
         content: `当前版本：${result.currentVersion}`,
-        okText: '打开发布页',
+        okText: '下载并安装',
         cancelText: '稍后',
-        onOk: () => openPath(result.releaseUrl),
+        onOk: async () => {
+          const hide = message.loading('正在下载并安装更新...', 0);
+          try {
+            const installResult = await installAvailableUpdate();
+            hide();
+            if (installResult.status === 'installed') {
+              Modal.confirm({
+                title: `新版本 ${installResult.latestVersion} 已安装`,
+                content: '重启应用后即可使用新版本。',
+                okText: '立即重启',
+                cancelText: '稍后',
+                onOk: () => relaunchApplication(),
+              });
+              return;
+            }
+            if (installResult.status === 'manual') {
+              message.warning(installResult.message || '自动安装暂不可用，已打开发布页');
+              await openPath(installResult.releaseUrl);
+              return;
+            }
+            message.success(`当前已是最新版本（${installResult.currentVersion}）`);
+          } catch (error) {
+            hide();
+            message.warning(error instanceof Error ? error.message : '下载安装更新失败');
+          }
+        },
       });
     } catch (error) {
       message.warning(error instanceof Error ? error.message : '检查更新失败');
@@ -507,10 +532,64 @@ ${htmlBody}
     document.execCommand('paste');
   }, []);
 
+  const appendMarkdownToActiveTab = useCallback((markdown: string) => {
+    const activeTab = state.tabs.find(t => t.id === state.activeTabId);
+    if (!activeTab) return;
+    if (!insertTextInEditor(markdown)) {
+      dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: activeTab.content + markdown } });
+    }
+  }, [dispatch, state.activeTabId, state.tabs]);
+
+  const handleInsertDate = useCallback(() => {
+    appendMarkdownToActiveTab(new Date().toISOString().split('T')[0]);
+  }, [appendMarkdownToActiveTab]);
+
+  const handleInsertImage = useCallback(async () => {
+    const activeTab = state.tabs.find(t => t.id === state.activeTabId);
+    if (!activeTab) return;
+    const selected = await open({
+      multiple: false,
+      filters: [{
+        name: 'Images',
+        extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'],
+      }],
+    });
+    const selectedPath = Array.isArray(selected) ? selected[0] : selected;
+    if (typeof selectedPath !== 'string' || !selectedPath) return;
+    const imagePath = decodePath(selectedPath);
+    const markdownPath = markdownImagePathForDocument(imagePath, activeTab.path);
+    const alt = stripExtension(basename(imagePath)) || '图片';
+    appendMarkdownToActiveTab(`\n![${alt}](${formatMarkdownImageUrl(markdownPath)})\n`);
+  }, [appendMarkdownToActiveTab, state.activeTabId, state.tabs]);
+
+  const handleInsertLink = useCallback(() => {
+    appendMarkdownToActiveTab('\n[链接](url)\n');
+  }, [appendMarkdownToActiveTab]);
+
+  const handleInsertTable = useCallback(() => {
+    appendMarkdownToActiveTab('\n| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n|  |  |  |\n');
+  }, [appendMarkdownToActiveTab]);
+
+  const handleInsertCode = useCallback(() => {
+    appendMarkdownToActiveTab('\n```\n代码\n```\n');
+  }, [appendMarkdownToActiveTab]);
+
+  const handleInsertHr = useCallback(() => {
+    appendMarkdownToActiveTab('\n---\n');
+  }, [appendMarkdownToActiveTab]);
+
+  const handleInsertTask = useCallback(() => {
+    appendMarkdownToActiveTab('\n- [ ] 任务\n- [ ] 任务\n');
+  }, [appendMarkdownToActiveTab]);
+
   const runShortcutAction = useCallback((id: string) => {
     switch (id) {
       case 'app.openSettings':
+      case 'settings.general':
         navigate('/settings/general');
+        break;
+      case 'app.commandPalette':
+        dispatch({ type: 'SET_COMMAND_PALETTE_OPEN', payload: true });
         break;
       case 'file.new':
         handleNewFile();
@@ -525,18 +604,93 @@ ${htmlBody}
         void handleSave();
         break;
       case 'edit.find':
-        dispatch({ type: 'TOGGLE_SEARCH' });
+        dispatch({ type: 'OPEN_SEARCH' });
+        break;
+      case 'edit.replace':
+        dispatch({ type: 'OPEN_SEARCH', payload: { replace: true } });
+        break;
+      case 'view.edit':
+        dispatch({ type: 'SET_VIEW_MODE', payload: 'edit' });
+        break;
+      case 'view.preview':
+        dispatch({ type: 'SET_VIEW_MODE', payload: 'preview' });
+        break;
+      case 'view.split':
+        dispatch({ type: 'SET_VIEW_MODE', payload: 'split' });
+        break;
+      case 'view.toggleSidebar':
+        dispatch({ type: 'TOGGLE_SIDEBAR' });
+        break;
+      case 'view.toggleOutline':
+        dispatch({ type: 'TOGGLE_OUTLINE' });
         break;
       case 'view.togglePreview':
         dispatch({ type: 'SET_VIEW_MODE', payload: state.viewMode === 'preview' ? 'edit' : 'preview' });
         break;
+      case 'insert.image':
+        void handleInsertImage();
+        break;
+      case 'insert.link':
+        handleInsertLink();
+        break;
+      case 'insert.table':
+        handleInsertTable();
+        break;
+      case 'insert.code':
+        handleInsertCode();
+        break;
+      case 'insert.hr':
+        handleInsertHr();
+        break;
+      case 'insert.task':
+        handleInsertTask();
+        break;
+      case 'insert.date':
+        handleInsertDate();
+        break;
       case 'export.pdf':
         void handleExportPDF();
+        break;
+      case 'export.html':
+        void handleExportHTML();
+        break;
+      case 'settings.preview':
+        navigate('/settings/preview');
+        break;
+      case 'settings.shortcuts':
+        navigate('/settings/shortcuts');
+        break;
+      case 'settings.export':
+        navigate('/settings/export');
+        break;
+      case 'app.checkUpdate':
+        void handleCheckUpdate();
+        break;
+      case 'app.about':
+        navigate('/settings/about');
         break;
       default:
         break;
     }
-  }, [dispatch, handleExportPDF, handleNewFile, handleOpenFile, handleOpenFolder, handleSave, navigate, state.viewMode]);
+  }, [
+    dispatch,
+    handleCheckUpdate,
+    handleExportHTML,
+    handleExportPDF,
+    handleInsertCode,
+    handleInsertDate,
+    handleInsertHr,
+    handleInsertImage,
+    handleInsertLink,
+    handleInsertTable,
+    handleInsertTask,
+    handleNewFile,
+    handleOpenFile,
+    handleOpenFolder,
+    handleSave,
+    navigate,
+    state.viewMode,
+  ]);
 
   // Listen for Tauri menu events
   useEffect(() => {
@@ -566,7 +720,13 @@ ${htmlBody}
           handleRecentFilesMenu();
           break;
         case 'find':
-          dispatch({ type: 'TOGGLE_SEARCH' });
+          dispatch({ type: 'OPEN_SEARCH' });
+          break;
+        case 'replace':
+          dispatch({ type: 'OPEN_SEARCH', payload: { replace: true } });
+          break;
+        case 'command_palette':
+          dispatch({ type: 'SET_COMMAND_PALETTE_OPEN', payload: true });
           break;
         case 'undo': {
           const view = getActiveEditorView();
@@ -658,70 +818,31 @@ ${htmlBody}
           break;
         }
         case 'insert_date': {
-          const activeTab = state.tabs.find(t => t.id === state.activeTabId);
-          if (activeTab) {
-            const date = new Date().toISOString().split('T')[0];
-            dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: activeTab.content + date } });
-          }
+          handleInsertDate();
           break;
         }
         case 'insert_image': {
-          const activeTab = state.tabs.find(t => t.id === state.activeTabId);
-          if (activeTab) {
-            const selected = await open({
-              multiple: false,
-              filters: [{
-                name: 'Images',
-                extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'],
-              }],
-            });
-            const selectedPath = Array.isArray(selected) ? selected[0] : selected;
-            if (typeof selectedPath === 'string' && selectedPath) {
-              const imagePath = decodePath(selectedPath);
-              const markdownPath = markdownImagePathForDocument(imagePath, activeTab.path);
-              const alt = stripExtension(basename(imagePath)) || '图片';
-              const markdown = `\n![${alt}](${formatMarkdownImageUrl(markdownPath)})\n`;
-              if (!insertTextInEditor(markdown)) {
-                dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: activeTab.content + markdown } });
-              }
-            }
-          }
+          await handleInsertImage();
           break;
         }
         case 'insert_link': {
-          const activeTab = state.tabs.find(t => t.id === state.activeTabId);
-          if (activeTab) {
-            dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: activeTab.content + '\n[链接](url)\n' } });
-          }
+          handleInsertLink();
           break;
         }
         case 'insert_table': {
-          const activeTab = state.tabs.find(t => t.id === state.activeTabId);
-          if (activeTab) {
-            const table = '\n| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n|  |  |  |\n';
-            dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: activeTab.content + table } });
-          }
+          handleInsertTable();
           break;
         }
         case 'insert_code': {
-          const activeTab = state.tabs.find(t => t.id === state.activeTabId);
-          if (activeTab) {
-            dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: activeTab.content + '\n```\n代码\n```\n' } });
-          }
+          handleInsertCode();
           break;
         }
         case 'insert_hr': {
-          const activeTab = state.tabs.find(t => t.id === state.activeTabId);
-          if (activeTab) {
-            dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: activeTab.content + '\n---\n' } });
-          }
+          handleInsertHr();
           break;
         }
         case 'insert_task': {
-          const activeTab = state.tabs.find(t => t.id === state.activeTabId);
-          if (activeTab) {
-            dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: activeTab.content + '\n- [ ] 任务\n- [ ] 任务\n' } });
-          }
+          handleInsertTask();
           break;
         }
         case 'markdown_help':
@@ -754,6 +875,13 @@ ${htmlBody}
     handleCopy,
     handleCut,
     handlePaste,
+    handleInsertCode,
+    handleInsertDate,
+    handleInsertHr,
+    handleInsertImage,
+    handleInsertLink,
+    handleInsertTable,
+    handleInsertTask,
     handleCheckUpdate,
     setThemeMode,
     toggleSyncScroll,
@@ -836,6 +964,18 @@ ${htmlBody}
     }).catch(e => console.error('take_pending_open_files failed:', e));
   }, [dispatch]);
 
+  // Commands dispatched by the command palette.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      if (typeof id === 'string') {
+        runShortcutAction(id);
+      }
+    };
+    window.addEventListener('orcha-command', handler);
+    return () => window.removeEventListener('orcha-command', handler);
+  }, [runShortcutAction]);
+
   // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -894,7 +1034,7 @@ ${htmlBody}
           </button>
           <button
             className={`toolbar-btn ${state.searchOpen ? 'active' : ''}`}
-            onClick={() => dispatch({ type: 'TOGGLE_SEARCH' })}
+            onClick={() => dispatch({ type: 'OPEN_SEARCH' })}
             title="搜索"
           >
             <Search size={16} />

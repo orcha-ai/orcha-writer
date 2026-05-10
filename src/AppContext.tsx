@@ -28,8 +28,14 @@ type AppAction =
   | { type: 'SET_CURSOR'; payload: { line: number; ch: number } }
   | { type: 'SET_WORD_COUNT'; payload: number }
   | { type: 'TOGGLE_SEARCH' }
+  | { type: 'OPEN_SEARCH'; payload?: { replace?: boolean } }
+  | { type: 'CLOSE_SEARCH' }
+  | { type: 'TOGGLE_REPLACE' }
+  | { type: 'SET_REPLACE_OPEN'; payload: boolean }
   | { type: 'SET_SEARCH_QUERY'; payload: string }
   | { type: 'SET_SEARCH_MATCH_INDEX'; payload: number }
+  | { type: 'TOGGLE_COMMAND_PALETTE' }
+  | { type: 'SET_COMMAND_PALETTE_OPEN'; payload: boolean }
   | { type: 'TOGGLE_SETTINGS' }
   | { type: 'UPDATE_SETTINGS'; payload: Partial<EditorSettings> };
 
@@ -49,6 +55,8 @@ const initialState: AppState = {
   searchOpen: false,
   searchQuery: '',
   searchMatchIndex: 0,
+  replaceOpen: false,
+  commandPaletteOpen: false,
   settingsOpen: false,
   editorSettings: defaultEditorSettings,
 };
@@ -142,11 +150,27 @@ function appReducer(state: AppState, action: AppAction): AppState {
     case 'SET_WORD_COUNT':
       return { ...state, wordCount: action.payload };
     case 'TOGGLE_SEARCH':
-      return { ...state, searchOpen: !state.searchOpen };
+      return {
+        ...state,
+        searchOpen: !state.searchOpen,
+        replaceOpen: state.searchOpen ? false : state.replaceOpen,
+      };
+    case 'OPEN_SEARCH':
+      return { ...state, searchOpen: true, replaceOpen: Boolean(action.payload?.replace) };
+    case 'CLOSE_SEARCH':
+      return { ...state, searchOpen: false, replaceOpen: false, searchQuery: '', searchMatchIndex: 0 };
+    case 'TOGGLE_REPLACE':
+      return { ...state, searchOpen: true, replaceOpen: !state.replaceOpen };
+    case 'SET_REPLACE_OPEN':
+      return { ...state, searchOpen: action.payload ? true : state.searchOpen, replaceOpen: action.payload };
     case 'SET_SEARCH_QUERY':
       return { ...state, searchQuery: action.payload };
     case 'SET_SEARCH_MATCH_INDEX':
       return { ...state, searchMatchIndex: action.payload };
+    case 'TOGGLE_COMMAND_PALETTE':
+      return { ...state, commandPaletteOpen: !state.commandPaletteOpen };
+    case 'SET_COMMAND_PALETTE_OPEN':
+      return { ...state, commandPaletteOpen: action.payload };
     case 'TOGGLE_SETTINGS':
       return { ...state, settingsOpen: !state.settingsOpen };
     case 'UPDATE_SETTINGS':

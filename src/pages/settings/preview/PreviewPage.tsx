@@ -3,6 +3,7 @@ import { SaveOutlined } from '@ant-design/icons';
 import { useSettingsStore } from '../../../store';
 import type { PreviewSettings } from '../../../types';
 import { PREVIEW_THEMES, normalizePreviewThemeId } from '../../../previewThemes';
+import { PREVIEW_CODE_THEMES, normalizePreviewCodeThemeId } from '../../../codeThemes';
 import { useEffect } from 'react';
 
 export default function PreviewPage() {
@@ -15,7 +16,11 @@ export default function PreviewPage() {
 
   const handleSave = async () => {
     const values = await form.validateFields() as Partial<PreviewSettings>;
-    updatePreview({ ...values, previewTheme: normalizePreviewThemeId(values.previewTheme) });
+    updatePreview({
+      ...values,
+      previewTheme: normalizePreviewThemeId(values.previewTheme),
+      codeTheme: normalizePreviewCodeThemeId(values.codeTheme),
+    });
     await saveAll();
     message.success('设置已保存');
   };
@@ -35,6 +40,13 @@ export default function PreviewPage() {
             <Select
               style={{ width: 200 }}
               options={PREVIEW_THEMES.map(theme => ({ value: theme.id, label: theme.label }))}
+            />
+          </Form.Item>
+
+          <Form.Item label="代码主题" name="codeTheme">
+            <Select
+              style={{ width: 220 }}
+              options={PREVIEW_CODE_THEMES.map(theme => ({ value: theme.id, label: theme.label }))}
             />
           </Form.Item>
 

@@ -50,7 +50,7 @@ export default function GeneralPage() {
             label="自动检查更新"
             name="autoUpdate"
             valuePropName="checked"
-            tooltip="启动时检查 GitHub Releases；发现新版本后提醒，不会自动下载安装"
+            tooltip="启动时自动检查并尝试下载安装；更新安装后提示重启，自动通道不可用时回退到发布页"
           >
             <Switch />
           </Form.Item>

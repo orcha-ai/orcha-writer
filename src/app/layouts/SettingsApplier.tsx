@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
-import { message } from 'antd';
+import { message, Modal } from 'antd';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 import { useAiStore, usePluginStore, useSettingsStore, useShortcutStore } from '../../store';
 import { useApp } from '../../AppContext';
 import { readConfig } from '../../config';
 import { readTextFile } from '../../utils/fs';
-import { checkForUpdates } from '../../utils/update';
+import { installAvailableUpdate, relaunchApplication } from '../../utils/update';
 import { findFirstMdFile, readFirstLevel } from '../../utils/workspace';
 import type { FileSettings, GeneralSettings } from '../../types';
 
@@ -89,13 +89,22 @@ export function SettingsApplier() {
       void loadAi();
       const settings = useSettingsStore.getState();
       if (settings.general.autoUpdate) {
-        void checkForUpdates()
+        void installAvailableUpdate()
           .then(result => {
-            if (!cancelled && result.available) {
-              message.info(`发现新版本 ${result.latestVersion}，可在关于页面查看发布页`);
+            if (cancelled) return;
+            if (result.status === 'installed') {
+              Modal.confirm({
+                title: `新版本 ${result.latestVersion} 已安装`,
+                content: '重启应用后即可使用新版本。',
+                okText: '立即重启',
+                cancelText: '稍后',
+                onOk: () => relaunchApplication(),
+              });
+            } else if (result.status === 'manual') {
+              message.info(`发现新版本 ${result.latestVersion}，自动安装暂不可用，可在关于页面打开发布页`);
             }
           })
-          .catch(error => console.warn('[SettingsApplier] Update check failed:', error));
+          .catch(error => console.warn('[SettingsApplier] Auto update failed:', error));
       }
       await restoreStartupWorkspace(settings.general, settings.files);
     })();

@@ -1,0 +1,143 @@
+/* Syntax theme variables for highlight.js output in Markdown preview. */
+.md-preview.code-theme-github {
+  --code-theme-bg: #f6f8fa;
+  --code-theme-border: #d0d7de;
+  --code-theme-text: #24292f;
+  --code-theme-inline-bg: rgba(175, 184, 193, 0.2);
+  --code-theme-keyword: #cf222e;
+  --code-theme-string: #0a3069;
+  --code-theme-number: #0550ae;
+  --code-theme-title: #8250df;
+  --code-theme-comment: #6e7781;
+  --code-theme-tag: #116329;
+  --code-theme-attr: #953800;
+  --code-theme-built-in: #0550ae;
+}
+
+.md-preview.code-theme-github-dark {
+  --code-theme-bg: #161b22;
+  --code-theme-border: #30363d;
+  --code-theme-text: #c9d1d9;
+  --code-theme-inline-bg: rgba(110, 118, 129, 0.4);
+  --code-theme-keyword: #ff7b72;
+  --code-theme-string: #a5d6ff;
+  --code-theme-number: #79c0ff;
+  --code-theme-title: #d2a8ff;
+  --code-theme-comment: #8b949e;
+  --code-theme-tag: #7ee787;
+  --code-theme-attr: #ffa657;
+  --code-theme-built-in: #79c0ff;
+}
+
+.md-preview.code-theme-atom-one-light {
+  --code-theme-bg: #fafafa;
+  --code-theme-border: #e5e5e6;
+  --code-theme-text: #383a42;
+  --code-theme-inline-bg: #f0f0f1;
+  --code-theme-keyword: #a626a4;
+  --code-theme-string: #50a14f;
+  --code-theme-number: #986801;
+  --code-theme-title: #4078f2;
+  --code-theme-comment: #a0a1a7;
+  --code-theme-tag: #e45649;
+  --code-theme-attr: #986801;
+  --code-theme-built-in: #0184bc;
+}
+
+.md-preview.code-theme-atom-one-dark {
+  --code-theme-bg: #282c34;
+  --code-theme-border: #3b4048;
+  --code-theme-text: #abb2bf;
+  --code-theme-inline-bg: #343a45;
+  --code-theme-keyword: #c678dd;
+  --code-theme-string: #98c379;
+  --code-theme-number: #d19a66;
+  --code-theme-title: #61afef;
+  --code-theme-comment: #7f848e;
+  --code-theme-tag: #e06c75;
+  --code-theme-attr: #d19a66;
+  --code-theme-built-in: #56b6c2;
+}
+
+.md-preview.code-theme-monokai {
+  --code-theme-bg: #272822;
+  --code-theme-border: #3e3d32;
+  --code-theme-text: #f8f8f2;
+  --code-theme-inline-bg: #3e3d32;
+  --code-theme-keyword: #f92672;
+  --code-theme-string: #e6db74;
+  --code-theme-number: #ae81ff;
+  --code-theme-title: #a6e22e;
+  --code-theme-comment: #88846f;
+  --code-theme-tag: #f92672;
+  --code-theme-attr: #a6e22e;
+  --code-theme-built-in: #66d9ef;
+}
+
+.md-preview.code-theme-solarized-light {
+  --code-theme-bg: #fdf6e3;
+  --code-theme-border: #eee8d5;
+  --code-theme-text: #586e75;
+  --code-theme-inline-bg: #eee8d5;
+  --code-theme-keyword: #859900;
+  --code-theme-string: #2aa198;
+  --code-theme-number: #d33682;
+  --code-theme-title: #268bd2;
+  --code-theme-comment: #93a1a1;
+  --code-theme-tag: #268bd2;
+  --code-theme-attr: #b58900;
+  --code-theme-built-in: #cb4b16;
+}
+
+.md-preview[class*="code-theme-"] code {
+  background: var(--code-theme-inline-bg);
+}
+
+.md-preview[class*="code-theme-"] pre {
+  background: var(--code-theme-bg);
+  border-color: var(--code-theme-border);
+}
+
+.md-preview[class*="code-theme-"] pre code {
+  color: var(--code-theme-text);
+  background: transparent;
+}
+
+.md-preview[class*="code-theme-"] .hljs-keyword,
+.md-preview[class*="code-theme-"] .hljs-selector-tag {
+  color: var(--code-theme-keyword);
+}
+
+.md-preview[class*="code-theme-"] .hljs-string,
+.md-preview[class*="code-theme-"] .hljs-attr {
+  color: var(--code-theme-string);
+}
+
+.md-preview[class*="code-theme-"] .hljs-number,
+.md-preview[class*="code-theme-"] .hljs-literal {
+  color: var(--code-theme-number);
+}
+
+.md-preview[class*="code-theme-"] .hljs-title,
+.md-preview[class*="code-theme-"] .hljs-function {
+  color: var(--code-theme-title);
+}
+
+.md-preview[class*="code-theme-"] .hljs-comment {
+  color: var(--code-theme-comment);
+  font-style: italic;
+}
+
+.md-preview[class*="code-theme-"] .hljs-tag,
+.md-preview[class*="code-theme-"] .hljs-name {
+  color: var(--code-theme-tag);
+}
+
+.md-preview[class*="code-theme-"] .hljs-attribute {
+  color: var(--code-theme-attr);
+}
+
+.md-preview[class*="code-theme-"] .hljs-built_in,
+.md-preview[class*="code-theme-"] .hljs-meta {
+  color: var(--code-theme-built-in);
+}

@@ -310,6 +310,10 @@ function scrollPreviewToCursor(view: EditorView) {
   syncPreviewScroll(view);
 }
 
+function countDocumentCharacters(content: string): number {
+  return Array.from(content.replace(/\s/g, '')).length;
+}
+
 export default function Editor() {
   const { state, dispatch } = useApp();
   const editor = useSettingsStore(s => s.editor);
@@ -323,6 +327,8 @@ export default function Editor() {
   const activeTabRef = useRef(activeTab);
   const workspacePathRef = useRef(state.workspacePath);
   const pasteImageActionRef = useRef(editor.pasteImageAction);
+  const lastCursorRef = useRef({ line: state.cursorPosition.line, ch: state.cursorPosition.ch });
+  const lastWordCountRef = useRef(state.wordCount);
   useEffect(() => { tabIdRef.current = activeTab?.id ?? ''; }, [activeTab?.id]);
   useEffect(() => { activeTabRef.current = activeTab; }, [activeTab]);
   useEffect(() => { workspacePathRef.current = state.workspacePath; }, [state.workspacePath]);
@@ -353,6 +359,31 @@ export default function Editor() {
     }
     pendingRef.current = null;
     timerRef.current = null;
+  }, [dispatch]);
+
+  const updateEditorStatus = useCallback((view: EditorView, includeWordCount: boolean) => {
+    const selectionHead = view.state.selection.main.head;
+    const line = view.state.doc.lineAt(selectionHead);
+    const cursorPosition = {
+      line: line.number,
+      ch: selectionHead - line.from + 1,
+    };
+
+    if (
+      cursorPosition.line !== lastCursorRef.current.line ||
+      cursorPosition.ch !== lastCursorRef.current.ch
+    ) {
+      lastCursorRef.current = cursorPosition;
+      dispatch({ type: 'SET_CURSOR', payload: cursorPosition });
+    }
+
+    if (includeWordCount) {
+      const wordCount = countDocumentCharacters(view.state.doc.toString());
+      if (wordCount !== lastWordCountRef.current) {
+        lastWordCountRef.current = wordCount;
+        dispatch({ type: 'SET_WORD_COUNT', payload: wordCount });
+      }
+    }
   }, [dispatch]);
 
   const handleUpdate = useCallback((updateView: EditorView) => {
@@ -504,6 +535,7 @@ export default function Editor() {
           autoCompleteCompartment.of(editor.autoComplete ? [autocompletion(), closeBrackets()] : []),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) handleUpdate(update.view);
+            if (update.docChanged || update.selectionSet) updateEditorStatus(update.view, update.docChanged);
           }),
           EditorView.domEventHandlers({
             paste: (event, view) => {
@@ -596,6 +628,7 @@ export default function Editor() {
     viewRef.current = view;
     activeView = view;
     activePasteClipboardImages = pasteClipboardImages;
+    updateEditorStatus(view, true);
 
     const scroller = view.dom.querySelector('.cm-scroller');
     if (scroller) {
@@ -611,7 +644,7 @@ export default function Editor() {
       if (activeView === view) activeView = null;
       if (activePasteClipboardImages === pasteClipboardImages) activePasteClipboardImages = null;
     };
-  }, [activeTab?.id, handleUpdate, pasteClipboardImages]);
+  }, [activeTab?.id, handleUpdate, pasteClipboardImages, updateEditorStatus]);
 
   // Reconfigure settings when they change
   useEffect(() => {

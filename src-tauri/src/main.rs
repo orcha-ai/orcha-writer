@@ -700,6 +700,8 @@ fn main() {
     tauri::Builder::default()
         .manage(PendingOpenFiles(Mutex::new(initial_paths)))
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
@@ -755,7 +757,9 @@ fn main() {
                 .item(&MenuItemBuilder::new("粘贴").id("paste").accelerator("CmdOrCtrl+V").build(handle)?)
                 .item(&MenuItemBuilder::new("全选").id("select_all").accelerator("CmdOrCtrl+A").build(handle)?)
                 .separator()
-                .item(&MenuItemBuilder::new("查找").id("find").build(handle)?)
+                .item(&MenuItemBuilder::new("查找").id("find").accelerator("CmdOrCtrl+F").build(handle)?)
+                .item(&MenuItemBuilder::new("替换").id("replace").accelerator("CmdOrCtrl+H").build(handle)?)
+                .item(&MenuItemBuilder::new("命令面板").id("command_palette").accelerator("CmdOrCtrl+Shift+P").build(handle)?)
                 .build()?;
 
             let view_menu = SubmenuBuilder::new(handle, "视图")
@@ -855,6 +859,8 @@ fn main() {
                 "recent_files" => { window.emit("menu-action", "recent_files").ok(); }
                 "quit" => { app.exit(0); }
                 "find" => { window.emit("menu-action", "find").ok(); }
+                "replace" => { window.emit("menu-action", "replace").ok(); }
+                "command_palette" => { window.emit("menu-action", "command_palette").ok(); }
                 "view_edit" => { window.emit("menu-action", "view_edit").ok(); }
                 "view_preview" => { window.emit("menu-action", "view_preview").ok(); }
                 "view_split" => { window.emit("menu-action", "view_split").ok(); }

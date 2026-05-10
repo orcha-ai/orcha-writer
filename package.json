@@ -1,7 +1,7 @@
 {
   "name": "orcha-writer",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "packageManager": "pnpm@10.12.1",
   "license": "MIT",
   "repository": {
@@ -38,7 +38,9 @@
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-fs": "^2.5.1",
+    "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-shell": "^2.3.5",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "@vitejs/plugin-react": "^4.7.0",
     "antd": "^6.3.7",
     "dayjs": "^1.11.20",

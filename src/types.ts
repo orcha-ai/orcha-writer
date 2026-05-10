@@ -1,4 +1,5 @@
 import type { PreviewThemeId } from './previewThemes';
+import type { PreviewCodeThemeId } from './codeThemes';
 
 // ===== Core Types =====
 
@@ -37,6 +38,8 @@ export interface AppState {
   searchOpen: boolean;
   searchQuery: string;
   searchMatchIndex: number;
+  replaceOpen: boolean;
+  commandPaletteOpen: boolean;
   settingsOpen: boolean;
   editorSettings: EditorSettings;
 }
@@ -231,7 +234,7 @@ export interface MarkdownSettings {
 
 export interface PreviewSettings {
   previewTheme: PreviewThemeId;
-  codeTheme: string;
+  codeTheme: PreviewCodeThemeId;
   syncScroll: boolean;
   imageMaxWidth: number;
   openExternalLink: boolean;
@@ -441,6 +444,8 @@ export const defaultShortcuts: ShortcutConfig[] = [
   { id: 'file.open', name: '打开文件', category: 'file', keys: 'Meta+O', defaultKeys: 'Meta+O', enabled: true, source: 'core' },
   { id: 'file.openFolder', name: '打开文件夹', category: 'file', keys: 'Meta+Shift+O', defaultKeys: 'Meta+Shift+O', enabled: true, source: 'core' },
   { id: 'edit.find', name: '查找', category: 'edit', keys: 'Meta+F', defaultKeys: 'Meta+F', enabled: true, source: 'core' },
+  { id: 'edit.replace', name: '替换', category: 'edit', keys: 'Meta+H', defaultKeys: 'Meta+H', enabled: true, source: 'core' },
   { id: 'view.togglePreview', name: '切换预览', category: 'view', keys: 'Meta+Shift+V', defaultKeys: 'Meta+Shift+V', enabled: true, source: 'core' },
   { id: 'export.pdf', name: '导出 PDF', category: 'export', keys: 'Meta+Shift+E', defaultKeys: 'Meta+Shift+E', enabled: true, source: 'core' },
+  { id: 'app.commandPalette', name: '命令面板', category: 'system', keys: 'Meta+Shift+P', defaultKeys: 'Meta+Shift+P', enabled: true, source: 'core' },
 ];

@@ -12,6 +12,7 @@ import {
 } from '../types';
 import { readConfig, writeConfig } from '../config';
 import { normalizePreviewThemeId } from '../previewThemes';
+import { normalizePreviewCodeThemeId } from '../codeThemes';
 
 const EXPORT_CONFIG_VERSION = '1.0.0';
 
@@ -99,6 +100,7 @@ function normalizePreviewSettings(value: unknown): PreviewSettings {
     ...defaultPreviewSettings,
     ...raw,
     previewTheme: normalizePreviewThemeId(raw?.previewTheme),
+    codeTheme: normalizePreviewCodeThemeId(raw?.codeTheme),
   };
 }
 

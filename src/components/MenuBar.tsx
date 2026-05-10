@@ -187,8 +187,9 @@ ${htmlBody}
         { label: '粘贴', shortcut: '⌘V' },
         { label: '全选', shortcut: '⌘A' },
         { divider: true },
-        { label: '查找', shortcut: '⌘F', action: () => dispatch({ type: 'TOGGLE_SEARCH' }) },
-        { label: '替换', shortcut: '⌘H' },
+        { label: '查找', shortcut: '⌘F', action: () => dispatch({ type: 'OPEN_SEARCH' }) },
+        { label: '替换', shortcut: '⌘H', action: () => dispatch({ type: 'OPEN_SEARCH', payload: { replace: true } }) },
+        { label: '命令面板', shortcut: '⌘⇧P', action: () => dispatch({ type: 'SET_COMMAND_PALETTE_OPEN', payload: true }) },
       ],
     },
     {

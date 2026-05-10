@@ -6,8 +6,10 @@ import Preview from './components/Preview';
 import Outline from './components/Outline';
 import StatusBar from './components/StatusBar';
 import SearchPanel from './components/SearchPanel';
+import CommandPalette from './components/CommandPalette';
 import './App.css';
 import './styles/preview-themes.css';
+import './styles/code-themes.css';
 
 export default function WorkspaceContent() {
   return (
@@ -29,6 +31,7 @@ export default function WorkspaceContent() {
         <Outline />
       </div>
       <StatusBar />
+      <CommandPalette />
     </>
   );
 }

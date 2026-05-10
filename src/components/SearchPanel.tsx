@@ -4,9 +4,33 @@ import { Search, X, ChevronUp, ChevronDown } from 'lucide-react';
 import { setSearchQuery, SearchQuery, getSearchQuery } from '@codemirror/search';
 import { getActiveEditorView } from './Editor';
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function countMatches(text: string, query: string): number {
+  if (!query) return 0;
+  const regex = new RegExp(escapeRegExp(query), 'gi');
+  let count = 0;
+  while (regex.exec(text)) count += 1;
+  return count;
+}
+
+function findMatches(text: string, query: string): Array<{ from: number; to: number }> {
+  if (!query) return [];
+  const regex = new RegExp(escapeRegExp(query), 'gi');
+  const matches: Array<{ from: number; to: number }> = [];
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    matches.push({ from: match.index, to: match.index + match[0].length });
+  }
+  return matches;
+}
+
 export default function SearchPanel() {
   const { state, dispatch } = useApp();
   const [query, setQuery] = useState('');
+  const [replaceText, setReplaceText] = useState('');
   const [matchCount, setMatchCount] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -27,7 +51,11 @@ export default function SearchPanel() {
       const view = getActiveEditorView();
       if (!view) {
         retries++;
-        if (retries > 10) clearInterval(timer);
+        if (retries > 10) {
+          const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
+          setMatchCount(activeTab ? countMatches(activeTab.content, query) : 0);
+          clearInterval(timer);
+        }
         return;
       }
       clearInterval(timer);
@@ -42,26 +70,22 @@ export default function SearchPanel() {
         return;
       }
 
-      const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       view.dispatch({
         effects: setSearchQuery.of(
-          new (SearchQuery as any)({ search: escaped, caseSensitive: false, regexp: false, valid: true }),
+          new (SearchQuery as any)({ search: query, caseSensitive: false, regexp: false, valid: true }),
         ),
       });
 
       try {
-        const regex = new RegExp(escaped, 'gi');
         const text = view.state.doc.toString();
-        let count = 0;
-        while (regex.exec(text)) count++;
-        setMatchCount(count);
+        setMatchCount(countMatches(text, query));
       } catch {
         setMatchCount(0);
       }
     }, 50);
 
     return () => clearInterval(timer);
-  }, [query, state.activeTabId]);
+  }, [dispatch, query, state.activeTabId, state.tabs]);
 
   const scrollToMark = useCallback((index: number) => {
     const marks = document.querySelectorAll('mark.search-highlight');
@@ -73,8 +97,9 @@ export default function SearchPanel() {
   const handleNext = useCallback(() => {
     if (state.viewMode === 'preview') {
       // Preview mode: use DOM marks
-      dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: state.searchMatchIndex + 1 });
-      setTimeout(() => scrollToMark(state.searchMatchIndex + 1), 50);
+      const nextIndex = matchCount > 0 ? (state.searchMatchIndex + 1) % matchCount : state.searchMatchIndex + 1;
+      dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: nextIndex });
+      setTimeout(() => scrollToMark(nextIndex), 50);
       return;
     }
 
@@ -84,7 +109,7 @@ export default function SearchPanel() {
       if (q.valid && q.search) {
         const to = view.state.selection.main.to;
         const text = view.state.doc.toString();
-        const escaped = q.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escaped = escapeRegExp(q.search);
         const regex = new RegExp(escaped, 'gi');
         regex.lastIndex = to;
         const match = regex.exec(text);
@@ -103,15 +128,19 @@ export default function SearchPanel() {
             });
           }
         }
+        if (matchCount > 0) {
+          dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: (state.searchMatchIndex + 1) % matchCount });
+        }
       }
     }
-  }, [state.viewMode, state.searchMatchIndex, scrollToMark]);
+  }, [dispatch, matchCount, state.viewMode, state.searchMatchIndex, scrollToMark]);
 
   const handlePrev = useCallback(() => {
     if (state.viewMode === 'preview') {
       // Preview mode: use DOM marks
-      dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: Math.max(0, state.searchMatchIndex - 1) });
-      setTimeout(() => scrollToMark(state.searchMatchIndex - 1), 50);
+      const nextIndex = matchCount > 0 ? (state.searchMatchIndex - 1 + matchCount) % matchCount : Math.max(0, state.searchMatchIndex - 1);
+      dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: nextIndex });
+      setTimeout(() => scrollToMark(nextIndex), 50);
       return;
     }
 
@@ -121,7 +150,7 @@ export default function SearchPanel() {
       if (q.valid && q.search) {
         const from = view.state.selection.main.from;
         const text = view.state.doc.toString();
-        const escaped = q.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escaped = escapeRegExp(q.search);
         const regex = new RegExp(escaped, 'gi');
         const matches: { index: number; length: number }[] = [];
         let m;
@@ -142,18 +171,88 @@ export default function SearchPanel() {
           selection: { anchor: match.index, head: match.index + match.length },
           scrollIntoView: true,
         });
+        if (matchCount > 0) {
+          dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: (state.searchMatchIndex - 1 + matchCount) % matchCount });
+        }
       }
     }
-  }, [state.viewMode, state.searchMatchIndex, scrollToMark]);
+  }, [dispatch, matchCount, state.viewMode, state.searchMatchIndex, scrollToMark]);
+
+  const handleReplaceCurrent = useCallback(() => {
+    if (!query) return;
+    const view = getActiveEditorView();
+    const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
+
+    if (view) {
+      const text = view.state.doc.toString();
+      const matches = findMatches(text, query);
+      if (matches.length === 0) return;
+
+      const selection = view.state.selection.main;
+      const selectedText = view.state.sliceDoc(selection.from, selection.to);
+      const current = !selection.empty && selectedText.toLowerCase() === query.toLowerCase()
+        ? { from: selection.from, to: selection.to }
+        : matches.find(match => match.from >= selection.to) ?? matches[0];
+
+      view.focus();
+      const nextText = text.slice(0, current.from) + replaceText + text.slice(current.to);
+      view.dispatch({
+        changes: { from: current.from, to: current.to, insert: replaceText },
+        selection: { anchor: current.from, head: current.from + replaceText.length },
+        scrollIntoView: true,
+      });
+      setMatchCount(countMatches(nextText, query));
+      return;
+    }
+
+    if (!activeTab) return;
+    const regex = new RegExp(escapeRegExp(query), 'i');
+    const nextContent = activeTab.content.replace(regex, () => replaceText);
+    if (nextContent !== activeTab.content) {
+      dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: nextContent } });
+      setMatchCount(countMatches(nextContent, query));
+    }
+  }, [dispatch, query, replaceText, state.activeTabId, state.tabs]);
+
+  const handleReplaceAll = useCallback(() => {
+    if (!query) return;
+    const view = getActiveEditorView();
+    const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
+
+    if (view) {
+      const text = view.state.doc.toString();
+      const replacedCount = countMatches(text, query);
+      if (replacedCount === 0) return;
+      const nextText = text.replace(new RegExp(escapeRegExp(query), 'gi'), () => replaceText);
+      view.focus();
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: nextText },
+        scrollIntoView: true,
+      });
+      setMatchCount(0);
+      dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: 0 });
+      return;
+    }
+
+    if (!activeTab) return;
+    const replacedCount = countMatches(activeTab.content, query);
+    if (replacedCount === 0) return;
+    const nextContent = activeTab.content.replace(new RegExp(escapeRegExp(query), 'gi'), () => replaceText);
+    dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: nextContent } });
+    setMatchCount(0);
+    dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: 0 });
+  }, [dispatch, query, replaceText, state.activeTabId, state.tabs]);
 
   // Keyboard shortcuts
   useEffect(() => {
     if (!state.searchOpen) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        dispatch({ type: 'TOGGLE_SEARCH' });
+        dispatch({ type: 'CLOSE_SEARCH' });
       }
-      if (e.key === 'Enter' && e.shiftKey) {
+      if (e.key === 'Enter' && state.replaceOpen && e.altKey) {
+        handleReplaceCurrent();
+      } else if (e.key === 'Enter' && e.shiftKey) {
         handlePrev();
       } else if (e.key === 'Enter') {
         handleNext();
@@ -161,36 +260,66 @@ export default function SearchPanel() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [state.searchOpen, dispatch, handleNext, handlePrev]);
+  }, [state.searchOpen, state.replaceOpen, dispatch, handleNext, handlePrev, handleReplaceCurrent]);
 
   if (!state.searchOpen) return null;
 
   return (
-    <div className="search-panel">
-      <Search size={14} style={{ opacity: 0.5 }} />
-      <input
-        ref={inputRef}
-        className="search-input"
-        placeholder="搜索..."
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
-      {matchCount > 0 && (
-        <>
-          <span className="search-count">
-            {state.searchMatchIndex + 1} / {matchCount}
-          </span>
-          <button className="toolbar-btn" onClick={handlePrev} title="上一个">
-            <ChevronUp size={14} />
+    <div className={`search-panel ${state.replaceOpen ? 'replace-open' : ''}`}>
+      <div className="search-row">
+        <Search size={14} style={{ opacity: 0.5 }} />
+        <input
+          ref={inputRef}
+          className="search-input"
+          placeholder="搜索..."
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <span className="search-count">
+          {matchCount > 0 ? `${state.searchMatchIndex + 1} / ${matchCount}` : '0 / 0'}
+        </span>
+        <button className="toolbar-btn" onClick={handlePrev} title="上一个" disabled={matchCount === 0}>
+          <ChevronUp size={14} />
+        </button>
+        <button className="toolbar-btn" onClick={handleNext} title="下一个" disabled={matchCount === 0}>
+          <ChevronDown size={14} />
+        </button>
+        <button
+          className={`search-mode-btn ${state.replaceOpen ? 'active' : ''}`}
+          onClick={() => dispatch({ type: 'TOGGLE_REPLACE' })}
+          title="切换替换"
+        >
+          替换
+        </button>
+        <button
+          className="search-close"
+          onClick={() => {
+            dispatch({ type: 'CLOSE_SEARCH' });
+            setQuery('');
+            dispatch({ type: 'SET_SEARCH_QUERY', payload: '' });
+          }}
+          title="关闭"
+        >
+          <X size={14} />
+        </button>
+      </div>
+      {state.replaceOpen && (
+        <div className="search-row replace-row">
+          <span className="search-row-spacer" />
+          <input
+            className="search-input"
+            placeholder="替换为..."
+            value={replaceText}
+            onChange={(e) => setReplaceText(e.target.value)}
+          />
+          <button className="search-action-btn" onClick={handleReplaceCurrent} disabled={!query || matchCount === 0}>
+            替换
           </button>
-          <button className="toolbar-btn" onClick={handleNext} title="下一个">
-            <ChevronDown size={14} />
+          <button className="search-action-btn" onClick={handleReplaceAll} disabled={!query || matchCount === 0}>
+            全部
           </button>
-        </>
+        </div>
       )}
-      <button className="search-close" onClick={() => { dispatch({ type: 'TOGGLE_SEARCH' }); setQuery(''); dispatch({ type: 'SET_SEARCH_QUERY', payload: '' }); }}>
-        <X size={14} />
-      </button>
     </div>
   );
 }
