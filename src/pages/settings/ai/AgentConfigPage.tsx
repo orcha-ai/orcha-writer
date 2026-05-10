@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, List, Button, Space, Switch, Popconfirm, Tag, Typography, Modal, Form, Input, Select, Checkbox, message, Empty } from 'antd';
+import { Card, List, Button, Space, Switch, Popconfirm, Tag, Typography, Modal, Form, Input, Select, Checkbox, message } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useAiStore } from '../../../store';
 import type { AgentCapability, AgentConfig } from '../../../types';
@@ -11,9 +11,11 @@ const CAPABILITIES: AgentCapability[] = [
   { code: 'summarize', name: '摘要提炼', enabled: true },
   { code: 'translate', name: '翻译', enabled: true },
   { code: 'outline', name: '大纲生成', enabled: true },
+  { code: 'markdown_format', name: 'Markdown 格式', enabled: true },
 ];
 
-type AgentFormValues = Omit<AgentConfig, 'id' | 'capabilities'> & {
+type AgentFormValues = Omit<AgentConfig, 'id' | 'capabilities' | 'modelConfigId'> & {
+  modelConfigId?: string;
   capabilityCodes: string[];
 };
 
@@ -22,7 +24,7 @@ function toFormValues(agent: AgentConfig | null, fallbackModelId: string): Agent
     name: agent?.name || '',
     icon: agent?.icon || '',
     description: agent?.description || '',
-    modelConfigId: agent?.modelConfigId || fallbackModelId,
+      modelConfigId: agent?.modelConfigId || fallbackModelId || undefined,
     systemPrompt: agent?.systemPrompt || '',
     enabled: agent?.enabled ?? true,
     accessScope: agent?.accessScope || 'current-document',
@@ -51,7 +53,7 @@ export default function AgentConfigPage() {
       name: values.name,
       icon: values.icon,
       description: values.description,
-      modelConfigId: values.modelConfigId,
+      modelConfigId: values.modelConfigId || '',
       systemPrompt: values.systemPrompt,
       enabled: values.enabled,
       accessScope: values.accessScope,
@@ -76,7 +78,6 @@ export default function AgentConfigPage() {
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            disabled={models.length === 0}
             onClick={() => {
               setEditing(null);
               setOpen(true);
@@ -86,9 +87,7 @@ export default function AgentConfigPage() {
           </Button>
         }
       >
-        {models.length === 0 ? (
-          <Empty description="请先在 AI 模型配置中添加模型" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-        ) : agents.length === 0 ? (
+        {agents.length === 0 ? (
           <Text type="secondary">暂无智能体配置</Text>
         ) : (
           <List
@@ -119,6 +118,7 @@ export default function AgentConfigPage() {
                       {agent.icon}
                       {agent.name}
                       <Tag>{agent.accessScope}</Tag>
+                      {agent.modelConfigId && <Tag>{models.find((model) => model.id === agent.modelConfigId)?.name || '模型已删除'}</Tag>}
                       {!agent.enabled && <Tag color="default">已禁用</Tag>}
                     </Space>
                   }
@@ -149,8 +149,8 @@ export default function AgentConfigPage() {
           <Form.Item label="描述" name="description">
             <Input placeholder="用于说明该智能体的主要用途" />
           </Form.Item>
-          <Form.Item label="模型配置" name="modelConfigId" rules={[{ required: true, message: '请选择模型配置' }]}>
-            <Select>
+          <Form.Item label="模型配置" name="modelConfigId">
+            <Select allowClear disabled={models.length === 0} placeholder={models.length === 0 ? '暂无模型配置' : '不指定则使用第一个可用模型'}>
               {models.map((model) => (
                 <Select.Option key={model.id} value={model.id}>
                   {model.name} ({model.model})

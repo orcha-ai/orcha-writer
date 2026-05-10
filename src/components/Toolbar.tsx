@@ -1,6 +1,24 @@
 import { useApp } from '../AppContext';
 import { useNavigate } from 'react-router-dom';
-import { FilePlus, FolderOpen, FileText, Save, Search, Eye, Edit3, Columns, Sun, Moon, Monitor, Settings, X, ScrollText } from 'lucide-react';
+import {
+  FilePlus,
+  FolderOpen,
+  FileText,
+  Save,
+  Search,
+  Eye,
+  Edit3,
+  Columns,
+  Sun,
+  Moon,
+  Monitor,
+  Settings,
+  ScrollText,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+} from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -14,17 +32,10 @@ import { findFirstMdFile, readFirstLevel } from '../utils/workspace';
 import { getActiveEditorView, pasteClipboardImagesIntoActiveEditor } from './Editor';
 import { basename, formatMarkdownImageUrl, markdownImagePathForDocument, stripExtension } from '../utils/markdownImages';
 import { renderMarkdownForExport } from '../utils/exportMarkdown';
+import { availableMarkdownPath, decodeDialogPath, fileNameFromPath, normalizeMarkdownFileName } from '../utils/savePaths';
 import { useSettingsStore, useShortcutStore } from '../store';
 import type { ThemeMode } from '../types';
 import { checkForUpdates, installAvailableUpdate, relaunchApplication } from '../utils/update';
-
-// Tauri save dialog on macOS returns file:// URLs, convert to plain path
-function decodePath(path: string): string {
-  if (path.startsWith('file://')) {
-    return decodeURIComponent(path.slice(7));
-  }
-  return path;
-}
 
 function normalizeThemeColor(color: string | undefined): string {
   const value = color?.trim();
@@ -163,6 +174,26 @@ export default function Toolbar() {
     void saveSettings();
   }, [dispatch, saveSettings, state.editorSettings.syncScroll, updatePreview]);
 
+  const setSidebarVisible = useCallback((visible: boolean) => {
+    dispatch({ type: 'SET_SIDEBAR_VISIBLE', payload: visible });
+    updateAppearance({ showSidebar: visible });
+    void saveSettings();
+  }, [dispatch, saveSettings, updateAppearance]);
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarVisible(!state.sidebarVisible);
+  }, [setSidebarVisible, state.sidebarVisible]);
+
+  const setOutlineVisible = useCallback((visible: boolean) => {
+    dispatch({ type: 'SET_OUTLINE_VISIBLE', payload: visible });
+    updateAppearance({ showOutline: visible });
+    void saveSettings();
+  }, [dispatch, saveSettings, updateAppearance]);
+
+  const toggleOutline = useCallback(() => {
+    setOutlineVisible(!state.outlineVisible);
+  }, [setOutlineVisible, state.outlineVisible]);
+
   const handleNewFile = useCallback(() => {
     const id = `draft-${Date.now()}`;
     dispatch({
@@ -255,33 +286,46 @@ export default function Toolbar() {
 
     try {
       if (activeTab.isDraft) {
-        // Save as new file
-        const selected = await open({
-          multiple: false,
-          title: '保存文件',
-          filters: [{ name: 'Markdown', extensions: ['md'] }],
-        });
-        if (!selected) return;
-        const path = Array.isArray(selected) ? selected[0] : selected;
+        const path = state.workspacePath
+          ? await availableMarkdownPath(state.workspacePath, activeTab.name)
+          : await (async () => {
+              const selected = await save({
+                title: '保存文件',
+                defaultPath: normalizeMarkdownFileName(activeTab.name),
+                filters: [{ name: 'Markdown', extensions: ['md'] }],
+              });
+              if (!selected) return '';
+              const decoded = decodeDialogPath(selected);
+              return /\.md$/i.test(decoded) ? decoded : `${decoded}.md`;
+            })();
+
+        if (!path) return;
         await writeTextFile(path, activeTab.content);
 
-        // Replace draft tab with saved file
-        const id = path;
-        const name = path.split('/').pop() || 'untitled.md';
+        const name = fileNameFromPath(path);
         dispatch({
-          type: 'OPEN_TAB',
-          payload: { id, name, path, content: activeTab.content },
+          type: 'SAVE_TAB_AS',
+          payload: { oldId: activeTab.id, id: path, name, path, content: activeTab.content },
         });
-        dispatch({ type: 'MARK_TAB_SAVED', payload: id });
+        dispatch({ type: 'ADD_RECENT_FILE', payload: { path, name, lastOpened: Date.now() } });
+
+        if (state.workspacePath) {
+          const tree = await readFirstLevel(state.workspacePath, fileSettings.hidePatterns);
+          dispatch({ type: 'SET_WORKSPACE', payload: { path: state.workspacePath, tree } });
+        }
+
+        message.success(`已保存到 ${name}`);
       } else {
         // Save existing file
         await writeTextFile(activeTab.path, activeTab.content);
         dispatch({ type: 'MARK_TAB_SAVED', payload: activeTab.id });
+        message.success('已保存');
       }
     } catch (e) {
       console.error('Failed to save file:', e);
+      message.error('保存失败');
     }
-  }, [state.tabs, state.activeTabId, dispatch]);
+  }, [dispatch, fileSettings.hidePatterns, state.activeTabId, state.tabs, state.workspacePath]);
 
   const handleExportHTML = useCallback(async () => {
     console.log('handleExportHTML called');
@@ -336,7 +380,7 @@ ${htmlBody}
       const selected = await save({ title: '导出为 HTML', defaultPath, filters: [{ name: 'HTML', extensions: ['html'] }] });
       console.log('export_html save returned:', selected, 'type:', typeof selected);
       if (!selected) return;
-      const path = decodePath(selected);
+      const path = decodeDialogPath(selected);
       if (!(await canWriteExportPath(path, exportSettings.overwriteExisting))) return;
       await writeTextFile(path, fullHTML);
       if (exportSettings.openAfterExport) {
@@ -398,7 +442,7 @@ ${htmlBody}
       if (useChrome) {
         const selected = await save({ title: '导出为 PDF', defaultPath, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
         if (!selected) return;
-        const path = decodePath(selected);
+        const path = decodeDialogPath(selected);
         if (!(await canWriteExportPath(path, exportSettings.overwriteExisting))) return;
 
         // Use Chrome headless export
@@ -431,20 +475,37 @@ ${htmlBody}
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
     if (!activeTab) return;
     try {
+      const defaultPath = activeTab.isDraft && state.workspacePath
+        ? `${state.workspacePath}/${normalizeMarkdownFileName(activeTab.name)}`
+        : activeTab.isDraft
+          ? normalizeMarkdownFileName(activeTab.name)
+          : activeTab.path;
       const selected = await save({
         title: '另存为',
-        defaultPath: activeTab.name,
+        defaultPath,
         filters: [{ name: 'Markdown', extensions: ['md'] }],
       });
       if (!selected) return;
-      const decodedPath = decodePath(selected);
+      const decoded = decodeDialogPath(selected);
+      const decodedPath = /\.md$/i.test(decoded) ? decoded : `${decoded}.md`;
       await writeTextFile(decodedPath, activeTab.content);
       const id = decodedPath;
-      const name = decodedPath.split('/').pop() || 'untitled.md';
-      dispatch({ type: 'OPEN_TAB', payload: { id, name, path: decodedPath, content: activeTab.content } });
-      dispatch({ type: 'MARK_TAB_SAVED', payload: id });
-    } catch (e) { console.error('Failed to save as:', e); }
-  }, [state.tabs, state.activeTabId, dispatch]);
+      const name = fileNameFromPath(decodedPath);
+      dispatch({
+        type: 'SAVE_TAB_AS',
+        payload: { oldId: activeTab.id, id, name, path: decodedPath, content: activeTab.content },
+      });
+      dispatch({ type: 'ADD_RECENT_FILE', payload: { path: decodedPath, name, lastOpened: Date.now() } });
+      if (state.workspacePath && decodedPath.startsWith(`${state.workspacePath}/`)) {
+        const tree = await readFirstLevel(state.workspacePath, fileSettings.hidePatterns);
+        dispatch({ type: 'SET_WORKSPACE', payload: { path: state.workspacePath, tree } });
+      }
+      message.success(`已保存到 ${name}`);
+    } catch (e) {
+      console.error('Failed to save as:', e);
+      message.error('另存为失败');
+    }
+  }, [dispatch, fileSettings.hidePatterns, state.activeTabId, state.tabs, state.workspacePath]);
 
   const handleCheckUpdate = useCallback(async () => {
     try {
@@ -493,10 +554,10 @@ ${htmlBody}
 
   const handleRecentFilesMenu = useCallback(() => {
     if (!state.sidebarVisible) {
-      dispatch({ type: 'TOGGLE_SIDEBAR' });
+      setSidebarVisible(true);
     }
     dispatch({ type: 'SET_SIDEBAR_TAB', payload: 'recent' });
-  }, [dispatch, state.sidebarVisible]);
+  }, [dispatch, setSidebarVisible, state.sidebarVisible]);
 
   const handleCopy = useCallback(async () => {
     const text = selectedEditorText();
@@ -556,7 +617,7 @@ ${htmlBody}
     });
     const selectedPath = Array.isArray(selected) ? selected[0] : selected;
     if (typeof selectedPath !== 'string' || !selectedPath) return;
-    const imagePath = decodePath(selectedPath);
+    const imagePath = decodeDialogPath(selectedPath);
     const markdownPath = markdownImagePathForDocument(imagePath, activeTab.path);
     const alt = stripExtension(basename(imagePath)) || '图片';
     appendMarkdownToActiveTab(`\n![${alt}](${formatMarkdownImageUrl(markdownPath)})\n`);
@@ -619,10 +680,10 @@ ${htmlBody}
         dispatch({ type: 'SET_VIEW_MODE', payload: 'split' });
         break;
       case 'view.toggleSidebar':
-        dispatch({ type: 'TOGGLE_SIDEBAR' });
+        toggleSidebar();
         break;
       case 'view.toggleOutline':
-        dispatch({ type: 'TOGGLE_OUTLINE' });
+        toggleOutline();
         break;
       case 'view.togglePreview':
         dispatch({ type: 'SET_VIEW_MODE', payload: state.viewMode === 'preview' ? 'edit' : 'preview' });
@@ -690,6 +751,8 @@ ${htmlBody}
     handleSave,
     navigate,
     state.viewMode,
+    toggleOutline,
+    toggleSidebar,
   ]);
 
   // Listen for Tauri menu events
@@ -760,10 +823,10 @@ ${htmlBody}
           dispatch({ type: 'SET_VIEW_MODE', payload: 'split' });
           break;
         case 'toggle_sidebar':
-          dispatch({ type: 'TOGGLE_SIDEBAR' });
+          toggleSidebar();
           break;
         case 'toggle_outline':
-          dispatch({ type: 'TOGGLE_OUTLINE' });
+          toggleOutline();
           break;
         case 'theme_light':
           setThemeMode('light');
@@ -884,6 +947,8 @@ ${htmlBody}
     handleInsertTask,
     handleCheckUpdate,
     setThemeMode,
+    toggleOutline,
+    toggleSidebar,
     toggleSyncScroll,
     dispatch,
     navigate,
@@ -1121,10 +1186,18 @@ ${htmlBody}
 
           <button
             className="toolbar-btn"
-            onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
-            title="侧边栏"
+            onClick={toggleSidebar}
+            title={state.sidebarVisible ? '隐藏工作区' : '显示工作区'}
           >
-            {state.sidebarVisible ? <Eye size={16} /> : <X size={16} />}
+            {state.sidebarVisible ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+          </button>
+
+          <button
+            className="toolbar-btn"
+            onClick={toggleOutline}
+            title={state.outlineVisible ? '隐藏大纲' : '显示大纲'}
+          >
+            {state.outlineVisible ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
           </button>
         </div>
       </div>

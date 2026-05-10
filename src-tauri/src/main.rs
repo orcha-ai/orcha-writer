@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewEvent, DragDropEvent};
 use tauri::menu::{MenuBuilder, SubmenuBuilder, MenuItemBuilder};
 use tauri::command;
 use serde::{Serialize, Deserialize};
+use serde_json::json;
 
 // ── PendingOpenFiles: stores files to open from cold start or Opened events ──
 #[derive(Default)]
@@ -32,6 +33,69 @@ struct ClipboardImage {
     file_name: String,
     mime_type: String,
     bytes: Vec<u8>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiChatMessageInput {
+    role: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiOpenAiCompatibleRequest {
+    base_url: String,
+    credential_ref: String,
+    model: String,
+    messages: Vec<AiChatMessageInput>,
+    temperature: Option<f64>,
+    top_p: Option<f64>,
+    max_tokens: Option<u32>,
+    enable_thinking: Option<bool>,
+    thinking_budget: Option<u32>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiTokenUsage {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    total_tokens: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiOpenAiCompatibleResponse {
+    content: String,
+    reasoning_content: Option<String>,
+    model: Option<String>,
+    usage: Option<AiTokenUsage>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiChatResponse {
+    choices: Vec<OpenAiChoice>,
+    model: Option<String>,
+    usage: Option<OpenAiUsage>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiChoice {
+    message: Option<OpenAiChoiceMessage>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiChoiceMessage {
+    content: Option<String>,
+    reasoning_content: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiUsage {
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    total_tokens: Option<u64>,
 }
 
 // ── Utility: check if a path is a markdown file ──
@@ -468,6 +532,120 @@ fn rename_path(from: String, to: String) -> Result<(), String> {
         .map_err(|e| format!("重命名失败: {}", e))
 }
 
+fn resolve_ai_credential(credential_ref: &str) -> Result<String, String> {
+    let value = credential_ref.trim();
+    if value.is_empty() {
+        return Err("模型凭据未配置".to_string());
+    }
+
+    if let Some(name) = value.strip_prefix("env:") {
+        let env_name = name.trim();
+        if env_name.is_empty() {
+            return Err("环境变量凭据名称为空".to_string());
+        }
+        return std::env::var(env_name)
+            .map_err(|_| format!("未读取到环境变量 {}", env_name));
+    }
+
+    if value.starts_with("secret:") {
+        return Err("secret 凭据读取尚未接入，请先使用 env:环境变量名 或临时填入 API Key".to_string());
+    }
+
+    Ok(value.to_string())
+}
+
+fn ai_chat_endpoint(base_url: &str) -> String {
+    format!("{}/chat/completions", base_url.trim_end_matches('/'))
+}
+
+// ── Command: send OpenAI-compatible chat request from the Rust side ──
+#[command]
+async fn ai_send_openai_compatible(request: AiOpenAiCompatibleRequest) -> Result<AiOpenAiCompatibleResponse, String> {
+    let api_key = resolve_ai_credential(&request.credential_ref)?;
+    let endpoint = ai_chat_endpoint(&request.base_url);
+    let messages: Vec<_> = request.messages
+        .iter()
+        .map(|message| json!({
+            "role": message.role,
+            "content": message.content,
+        }))
+        .collect();
+
+    let mut body = json!({
+        "model": request.model,
+        "messages": messages,
+        "stream": false,
+    });
+
+    if let Some(temperature) = request.temperature {
+        body["temperature"] = json!(temperature);
+    }
+    if let Some(top_p) = request.top_p {
+        body["top_p"] = json!(top_p);
+    }
+    if let Some(max_tokens) = request.max_tokens {
+        body["max_tokens"] = json!(max_tokens);
+    }
+    if let Some(enable_thinking) = request.enable_thinking {
+        body["enable_thinking"] = json!(enable_thinking);
+    }
+    if let Some(thinking_budget) = request.thinking_budget {
+        body["thinking_budget"] = json!(thinking_budget);
+    }
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(endpoint)
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("AI 请求失败: {}", e))?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("读取 AI 响应失败: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!("AI 服务返回错误 {}: {}", status.as_u16(), response_text));
+    }
+
+    let parsed: OpenAiChatResponse = serde_json::from_str(&response_text)
+        .map_err(|e| format!("解析 AI 响应失败: {}", e))?;
+    let content = parsed
+        .choices
+        .first()
+        .and_then(|choice| choice.message.as_ref())
+        .and_then(|message| message.content.clone())
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let reasoning_content = parsed
+        .choices
+        .first()
+        .and_then(|choice| choice.message.as_ref())
+        .and_then(|message| message.reasoning_content.clone())
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty());
+
+    if content.is_empty() && reasoning_content.is_none() {
+        return Err("AI 返回了空结果".to_string());
+    }
+
+    Ok(AiOpenAiCompatibleResponse {
+        content,
+        reasoning_content,
+        model: parsed.model,
+        usage: parsed.usage.map(|usage| AiTokenUsage {
+            input_tokens: usage.prompt_tokens,
+            output_tokens: usage.completion_tokens,
+            total_tokens: usage.total_tokens,
+        }),
+    })
+}
+
 // ── Command: ensure config directory exists ──
 #[command]
 fn ensure_config_dir() -> Result<String, String> {
@@ -724,6 +902,7 @@ fn main() {
             path_exists,
             delete_path,
             rename_path,
+            ai_send_openai_compatible,
             ensure_config_dir,
             detect_pdf_engines,
             export_pdf_chrome,
@@ -749,13 +928,13 @@ fn main() {
                 .build()?;
 
             let edit_menu = SubmenuBuilder::new(handle, "编辑")
-                .item(&MenuItemBuilder::new("撤销").id("undo").accelerator("CmdOrCtrl+Z").build(handle)?)
-                .item(&MenuItemBuilder::new("重做").id("redo").accelerator("CmdOrCtrl+Shift+Z").build(handle)?)
+                .undo_with_text("撤销")
+                .redo_with_text("重做")
                 .separator()
-                .item(&MenuItemBuilder::new("剪切").id("cut").accelerator("CmdOrCtrl+X").build(handle)?)
-                .item(&MenuItemBuilder::new("复制").id("copy").accelerator("CmdOrCtrl+C").build(handle)?)
-                .item(&MenuItemBuilder::new("粘贴").id("paste").accelerator("CmdOrCtrl+V").build(handle)?)
-                .item(&MenuItemBuilder::new("全选").id("select_all").accelerator("CmdOrCtrl+A").build(handle)?)
+                .cut_with_text("剪切")
+                .copy_with_text("复制")
+                .paste_with_text("粘贴")
+                .select_all_with_text("全选")
                 .separator()
                 .item(&MenuItemBuilder::new("查找").id("find").accelerator("CmdOrCtrl+F").build(handle)?)
                 .item(&MenuItemBuilder::new("替换").id("replace").accelerator("CmdOrCtrl+H").build(handle)?)

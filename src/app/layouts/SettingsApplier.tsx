@@ -4,7 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 import { useAiStore, usePluginStore, useSettingsStore, useShortcutStore } from '../../store';
 import { useApp } from '../../AppContext';
-import { readConfig } from '../../config';
+import { readConfig, writeConfig } from '../../config';
 import { readTextFile } from '../../utils/fs';
 import { installAvailableUpdate, relaunchApplication } from '../../utils/update';
 import { findFirstMdFile, readFirstLevel } from '../../utils/workspace';
@@ -49,11 +49,26 @@ export function SettingsApplier() {
     let cancelled = false;
 
     const restoreStartupWorkspace = async (generalSettings: GeneralSettings, fileSettings: FileSettings) => {
-      if (generalSettings.startupOpen === 'blank') return;
-
       const lastWorkspace = await readConfig<string>('workspace-path', '');
+      let startupOpen = generalSettings.startupOpen;
+      const migrationMarked = await readConfig<boolean>('startup-open-migrated', false);
+
+      if (startupOpen === 'blank' && lastWorkspace) {
+        if (!migrationMarked) {
+          startupOpen = 'last-workspace';
+          const nextGeneral = { ...generalSettings, startupOpen };
+          updateGeneral({ startupOpen });
+          await writeConfig('app', nextGeneral);
+          await writeConfig('startup-open-migrated', true);
+        }
+      } else if (startupOpen !== 'blank' && !migrationMarked) {
+        await writeConfig('startup-open-migrated', true);
+      }
+
+      if (startupOpen === 'blank') return;
+
       const configuredWorkspace = fileSettings.defaultWorkspace.trim();
-      const workspacePath = generalSettings.startupOpen === 'specific-workspace'
+      const workspacePath = startupOpen === 'specific-workspace'
         ? configuredWorkspace || lastWorkspace
         : lastWorkspace;
 
@@ -110,18 +125,16 @@ export function SettingsApplier() {
     })();
 
     return () => { cancelled = true; };
-  }, [dispatch, loadAll, loadShortcuts, loadPlugins, loadAi]);
+  }, [dispatch, loadAll, loadShortcuts, loadPlugins, loadAi, updateGeneral]);
 
   // Apply loaded settings to AppContext
   useEffect(() => {
     // Sync theme
     const theme = appearance.themeMode === 'light' ? 'light' : appearance.themeMode === 'dark' ? 'dark' : 'system' as const;
     dispatch({ type: 'SET_THEME', payload: theme });
-    // Sync sidebar
-    if (appearance.showSidebar !== state.sidebarVisible) {
-      dispatch({ type: 'TOGGLE_SIDEBAR' });
-    }
-  }, [appearance.themeMode, appearance.showSidebar, dispatch, state.sidebarVisible]);
+    dispatch({ type: 'SET_SIDEBAR_VISIBLE', payload: appearance.showSidebar });
+    dispatch({ type: 'SET_OUTLINE_VISIBLE', payload: appearance.showOutline });
+  }, [appearance.showOutline, appearance.showSidebar, appearance.themeMode, dispatch]);
 
   // Sync general settings to AppContext
   useEffect(() => {

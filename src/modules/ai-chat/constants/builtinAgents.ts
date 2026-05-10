@@ -1,0 +1,64 @@
+import type { AIAgentConfig } from '../types';
+
+const BUILTIN_CREATED_AT = '2026-05-10T00:00:00.000Z';
+
+export const BUILTIN_AI_AGENTS: AIAgentConfig[] = [
+  {
+    id: 'writing_assistant',
+    code: 'writing_assistant',
+    name: '写作助手',
+    description: '适合润色、扩写、摘要和续写',
+    iconText: '写',
+    enabled: true,
+    builtin: true,
+    sortOrder: 10,
+    systemPrompt: '你是 Orcha Writer 的写作助手，帮助用户处理 Markdown 文档写作。输出应简洁、准确、可直接应用到文档。',
+    commandIds: ['polish_selection', 'expand_selection', 'summarize_document', 'extract_todos'],
+    createdAt: BUILTIN_CREATED_AT,
+    updatedAt: BUILTIN_CREATED_AT,
+  },
+  {
+    id: 'tech_doc_assistant',
+    code: 'tech_doc_assistant',
+    name: '技术文档助手',
+    description: '适合 README、接口文档和需求说明',
+    iconText: '技',
+    enabled: true,
+    builtin: true,
+    sortOrder: 20,
+    systemPrompt: '你是 Orcha Writer 的技术文档助手，帮助用户生成结构清晰、术语准确、可维护的 Markdown 技术文档。',
+    commandIds: ['summarize_document', 'generate_readme', 'extract_todos'],
+    createdAt: BUILTIN_CREATED_AT,
+    updatedAt: BUILTIN_CREATED_AT,
+  },
+  {
+    id: 'translator_assistant',
+    code: 'translator_assistant',
+    name: '翻译助手',
+    description: '适合中英互译和双语润色',
+    iconText: '译',
+    enabled: true,
+    builtin: true,
+    sortOrder: 30,
+    systemPrompt: '你是 Orcha Writer 的翻译助手。保持原文含义、语气和 Markdown 结构，输出可直接替换到文档中的译文。',
+    commandIds: ['translate_to_zh', 'translate_to_en'],
+    createdAt: BUILTIN_CREATED_AT,
+    updatedAt: BUILTIN_CREATED_AT,
+  },
+  {
+    id: 'markdown_format_assistant',
+    code: 'markdown_format_assistant',
+    name: 'Markdown 格式助手',
+    description: '适合目录、表格、标题层级和格式修复',
+    iconText: 'MD',
+    enabled: true,
+    builtin: true,
+    sortOrder: 40,
+    systemPrompt: '你是 Orcha Writer 的 Markdown 格式助手。严格保留内容语义，优先修复 Markdown 结构、标题层级、表格和列表格式。',
+    commandIds: ['fix_heading_level', 'convert_to_md_table'],
+    createdAt: BUILTIN_CREATED_AT,
+    updatedAt: BUILTIN_CREATED_AT,
+  },
+];
+
+export const DEFAULT_AGENT_ID = 'writing_assistant';

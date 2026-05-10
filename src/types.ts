@@ -153,7 +153,9 @@ export interface AiModelConfig {
   temperature?: number;
   topP?: number;
   maxTokens?: number;
+  thinkingSupported?: boolean;
   thinkingEnabled?: boolean;
+  thinkingBudget?: number;
   enabled: boolean;
 }
 
@@ -206,6 +208,7 @@ export interface AppearanceSettings {
   density: 'comfortable' | 'standard' | 'compact';
   font: string;
   showSidebar: boolean;
+  showOutline: boolean;
   showTabs: boolean;
   transparency: boolean;
 }
@@ -336,7 +339,7 @@ export interface ExportSettings {
 
 export const defaultGeneralSettings: GeneralSettings = {
   language: 'zh-CN',
-  startupOpen: 'blank',
+  startupOpen: 'last-workspace',
   autoSave: true,
   autoUpdate: true,
   recentFileCount: 10,
@@ -350,6 +353,7 @@ export const defaultAppearanceSettings: AppearanceSettings = {
   density: 'standard',
   font: 'system-ui',
   showSidebar: true,
+  showOutline: true,
   showTabs: true,
   transparency: false,
 };

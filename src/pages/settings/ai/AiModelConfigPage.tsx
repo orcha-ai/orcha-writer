@@ -28,6 +28,7 @@ export default function AiModelConfigPage() {
   const [modelModalOpen, setModelModalOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<AiProviderConfig | null>(null);
   const [editingModel, setEditingModel] = useState<AiModelConfig | null>(null);
+  const thinkingSupported = Form.useWatch('thinkingSupported', modelForm);
 
   useEffect(() => {
     if (!providerModalOpen) return;
@@ -42,16 +43,24 @@ export default function AiModelConfigPage() {
 
   useEffect(() => {
     if (!modelModalOpen) return;
-    modelForm.setFieldsValue(editingModel || {
-      name: '',
-      providerId: providers[0]?.id || '',
-      model: '',
-      temperature: 0.7,
-      topP: 1,
-      maxTokens: 4096,
-      thinkingEnabled: false,
-      enabled: true,
-    });
+    const modelValues = editingModel
+      ? {
+          ...editingModel,
+          thinkingSupported: editingModel.thinkingSupported ?? Boolean(editingModel.thinkingEnabled),
+        }
+      : {
+          name: '',
+          providerId: providers[0]?.id || '',
+          model: '',
+          temperature: 0.7,
+          topP: 1,
+          maxTokens: 4096,
+          thinkingSupported: false,
+          thinkingEnabled: false,
+          thinkingBudget: undefined,
+          enabled: true,
+        };
+    modelForm.setFieldsValue(modelValues);
   }, [editingModel, modelForm, modelModalOpen, providers]);
 
   const handleProviderSubmit = async () => {
@@ -68,11 +77,16 @@ export default function AiModelConfigPage() {
 
   const handleModelSubmit = async () => {
     const values = await modelForm.validateFields();
+    const modelValues = {
+      ...values,
+      thinkingEnabled: values.thinkingSupported ? Boolean(values.thinkingEnabled) : false,
+      thinkingBudget: values.thinkingSupported ? values.thinkingBudget : undefined,
+    };
     if (editingModel) {
-      updateModel(editingModel.id, values);
+      updateModel(editingModel.id, modelValues);
       message.success('模型配置已更新');
     } else {
-      addModel(values);
+      addModel(modelValues);
       message.success('模型配置已添加');
     }
     setModelModalOpen(false);
@@ -202,6 +216,11 @@ export default function AiModelConfigPage() {
                     <Space>
                       {model.name}
                       <Tag>{model.model}</Tag>
+                      {model.thinkingSupported && (
+                        <Tag color={model.thinkingEnabled ? 'blue' : 'default'}>
+                          {model.thinkingEnabled ? '默认深度思考' : '支持深度思考'}
+                        </Tag>
+                      )}
                       {!model.enabled && <Tag color="default">已禁用</Tag>}
                     </Space>
                   }
@@ -238,7 +257,7 @@ export default function AiModelConfigPage() {
             <Input placeholder="https://api.openai.com/v1" />
           </Form.Item>
           <Form.Item label="凭据引用" name="credentialRef">
-            <Input placeholder="如 secret:openai-api-key" />
+            <Input placeholder="如 env:DASHSCOPE_API_KEY，或临时填入 API Key" />
           </Form.Item>
           <Form.Item label="启用" name="enabled" valuePropName="checked">
             <Switch />
@@ -279,8 +298,30 @@ export default function AiModelConfigPage() {
           <Form.Item label="最大 Tokens" name="maxTokens">
             <InputNumber min={256} max={200000} step={256} style={{ width: 160 }} />
           </Form.Item>
-          <Form.Item label="思考模式" name="thinkingEnabled" valuePropName="checked">
+          <Form.Item label="支持深度思考" name="thinkingSupported" valuePropName="checked">
             <Switch />
+          </Form.Item>
+          <Form.Item
+            label="默认开启深度思考"
+            name="thinkingEnabled"
+            valuePropName="checked"
+            tooltip="打开后，输入框里的深度思考开关会随该模型默认开启。"
+          >
+            <Switch disabled={!thinkingSupported} />
+          </Form.Item>
+          <Form.Item
+            label="思考预算 Tokens"
+            name="thinkingBudget"
+            tooltip="可选。留空表示使用模型默认思考预算。DashScope 兼容接口会发送 thinking_budget。"
+          >
+            <InputNumber
+              min={256}
+              max={200000}
+              step={256}
+              style={{ width: 160 }}
+              disabled={!thinkingSupported}
+              placeholder="模型默认"
+            />
           </Form.Item>
           <Form.Item label="启用" name="enabled" valuePropName="checked">
             <Switch />

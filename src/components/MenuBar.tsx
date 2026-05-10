@@ -4,6 +4,10 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { readTextFile, writeTextFile } from '../utils/fs';
 import { invoke } from '@tauri-apps/api/core';
 import MarkdownIt from 'markdown-it';
+import { useSettingsStore } from '../store';
+import { message } from 'antd';
+import { readFirstLevel } from '../utils/workspace';
+import { availableMarkdownPath, decodeDialogPath, fileNameFromPath, normalizeMarkdownFileName } from '../utils/savePaths';
 
 interface MenuItem {
   label?: string;
@@ -20,8 +24,23 @@ interface Menu {
 
 export default function MenuBar() {
   const { state, dispatch } = useApp();
+  const updateAppearance = useSettingsStore(s => s.updateAppearance);
+  const saveSettings = useSettingsStore(s => s.saveAll);
+  const fileSettings = useSettingsStore(s => s.files);
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  const setSidebarVisible = useCallback((visible: boolean) => {
+    dispatch({ type: 'SET_SIDEBAR_VISIBLE', payload: visible });
+    updateAppearance({ showSidebar: visible });
+    void saveSettings();
+  }, [dispatch, saveSettings, updateAppearance]);
+
+  const setOutlineVisible = useCallback((visible: boolean) => {
+    dispatch({ type: 'SET_OUTLINE_VISIBLE', payload: visible });
+    updateAppearance({ showOutline: visible });
+    void saveSettings();
+  }, [dispatch, saveSettings, updateAppearance]);
 
   const handleNewFile = useCallback(() => {
     const id = `draft-${Date.now()}`;
@@ -47,20 +66,76 @@ export default function MenuBar() {
     if (!activeTab) return;
     try {
       if (activeTab.isDraft) {
-        const selected = await open({ multiple: false, title: '保存文件', filters: [{ name: 'Markdown', extensions: ['md'] }] });
-        if (!selected) return;
-        const path = Array.isArray(selected) ? selected[0] : selected;
+        const path = state.workspacePath
+          ? await availableMarkdownPath(state.workspacePath, activeTab.name)
+          : await (async () => {
+              const selected = await save({
+                title: '保存文件',
+                defaultPath: normalizeMarkdownFileName(activeTab.name),
+                filters: [{ name: 'Markdown', extensions: ['md'] }],
+              });
+              if (!selected) return '';
+              const decoded = decodeDialogPath(selected);
+              return /\.md$/i.test(decoded) ? decoded : `${decoded}.md`;
+            })();
+        if (!path) return;
         await writeTextFile(path, activeTab.content);
-        const id = path;
-        const name = path.split('/').pop() || 'untitled.md';
-        dispatch({ type: 'OPEN_TAB', payload: { id, name, path, content: activeTab.content } });
-        dispatch({ type: 'MARK_TAB_SAVED', payload: id });
+        const name = fileNameFromPath(path);
+        dispatch({
+          type: 'SAVE_TAB_AS',
+          payload: { oldId: activeTab.id, id: path, name, path, content: activeTab.content },
+        });
+        dispatch({ type: 'ADD_RECENT_FILE', payload: { path, name, lastOpened: Date.now() } });
+        if (state.workspacePath) {
+          const tree = await readFirstLevel(state.workspacePath, fileSettings.hidePatterns);
+          dispatch({ type: 'SET_WORKSPACE', payload: { path: state.workspacePath, tree } });
+        }
+        message.success(`已保存到 ${name}`);
       } else {
         await writeTextFile(activeTab.path, activeTab.content);
         dispatch({ type: 'MARK_TAB_SAVED', payload: activeTab.id });
+        message.success('已保存');
       }
-    } catch (e) { console.error('Failed to save file:', e); }
-  }, [state.tabs, state.activeTabId, dispatch]);
+    } catch (e) {
+      console.error('Failed to save file:', e);
+      message.error('保存失败');
+    }
+  }, [dispatch, fileSettings.hidePatterns, state.activeTabId, state.tabs, state.workspacePath]);
+
+  const handleSaveAs = useCallback(async () => {
+    const activeTab = state.tabs.find(t => t.id === state.activeTabId);
+    if (!activeTab) return;
+    try {
+      const defaultPath = activeTab.isDraft && state.workspacePath
+        ? `${state.workspacePath}/${normalizeMarkdownFileName(activeTab.name)}`
+        : activeTab.isDraft
+          ? normalizeMarkdownFileName(activeTab.name)
+          : activeTab.path;
+      const selected = await save({
+        title: '另存为',
+        defaultPath,
+        filters: [{ name: 'Markdown', extensions: ['md'] }],
+      });
+      if (!selected) return;
+      const decoded = decodeDialogPath(selected);
+      const path = /\.md$/i.test(decoded) ? decoded : `${decoded}.md`;
+      await writeTextFile(path, activeTab.content);
+      const name = fileNameFromPath(path);
+      dispatch({
+        type: 'SAVE_TAB_AS',
+        payload: { oldId: activeTab.id, id: path, name, path, content: activeTab.content },
+      });
+      dispatch({ type: 'ADD_RECENT_FILE', payload: { path, name, lastOpened: Date.now() } });
+      if (state.workspacePath && path.startsWith(`${state.workspacePath}/`)) {
+        const tree = await readFirstLevel(state.workspacePath, fileSettings.hidePatterns);
+        dispatch({ type: 'SET_WORKSPACE', payload: { path: state.workspacePath, tree } });
+      }
+      message.success(`已保存到 ${name}`);
+    } catch (e) {
+      console.error('Failed to save as:', e);
+      message.error('另存为失败');
+    }
+  }, [dispatch, fileSettings.hidePatterns, state.activeTabId, state.tabs, state.workspacePath]);
 
   const handleExportHTML = useCallback(async () => {
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
@@ -168,7 +243,7 @@ ${htmlBody}
         { label: '打开文件夹' },
         { divider: true },
         { label: '保存', shortcut: '⌘S', action: handleSave },
-        { label: '另存为', shortcut: '⌘⇧S' },
+        { label: '另存为', shortcut: '⌘⇧S', action: handleSaveAs },
         { divider: true },
         { label: '关闭文件', shortcut: '⌘W', action: () => state.activeTabId && dispatch({ type: 'CLOSE_TAB', payload: state.activeTabId }) },
         { label: '最近打开' },
@@ -199,8 +274,8 @@ ${htmlBody}
         { label: '预览模式', action: () => dispatch({ type: 'SET_VIEW_MODE', payload: 'preview' }) },
         { label: '双栏模式', shortcut: '⌘⌥2', action: () => dispatch({ type: 'SET_VIEW_MODE', payload: 'split' }) },
         { divider: true },
-        { label: '显示 / 隐藏侧边栏', action: () => dispatch({ type: 'TOGGLE_SIDEBAR' }) },
-        { label: '显示 / 隐藏大纲', action: () => dispatch({ type: 'TOGGLE_OUTLINE' }) },
+        { label: '显示 / 隐藏侧边栏', action: () => setSidebarVisible(!state.sidebarVisible) },
+        { label: '显示 / 隐藏大纲', action: () => setOutlineVisible(!state.outlineVisible) },
         { divider: true },
         { label: '放大' },
         { label: '缩小' },
@@ -266,7 +341,21 @@ ${htmlBody}
         { label: '关于 Orcha Writer' },
       ],
     },
-  ], [dispatch, state.tabs, state.activeTabId, handleNewFile, handleOpenFile, handleSave]);
+  ], [
+    dispatch,
+    handleExportHTML,
+    handleExportPDF,
+    handleNewFile,
+    handleOpenFile,
+    handleSave,
+    handleSaveAs,
+    setOutlineVisible,
+    setSidebarVisible,
+    state.activeTabId,
+    state.outlineVisible,
+    state.sidebarVisible,
+    state.tabs,
+  ]);
 
   const menus = buildMenus();
 

@@ -14,6 +14,7 @@ import {
   SafetyOutlined,
   ExperimentOutlined,
   InfoCircleOutlined,
+  RobotOutlined,
 } from '@ant-design/icons';
 
 const { Title } = Typography;
@@ -26,6 +27,8 @@ const settingsMenuItems = [
   { key: '/settings/preview', icon: <EyeOutlined />, label: '预览' },
   { key: '/settings/files', icon: <FolderOpenOutlined />, label: '文件与工作区' },
   { key: '/settings/export', icon: <ExportOutlined />, label: '导出' },
+  { key: '/settings/ai/models', icon: <RobotOutlined />, label: 'AI 模型' },
+  { key: '/settings/ai/agents', icon: <RobotOutlined />, label: '智能体' },
   { key: '/settings/shortcuts', icon: <KeyOutlined />, label: '快捷键' },
   { key: '/settings/security', icon: <SafetyOutlined />, label: '安全与隐私' },
   { key: '/settings/advanced', icon: <ExperimentOutlined />, label: '高级' },
@@ -40,6 +43,8 @@ const pageTitleMap: Record<string, string> = {
   preview: '预览',
   files: '文件与工作区',
   export: '导出',
+  models: 'AI 模型',
+  agents: '智能体',
   shortcuts: '快捷键',
   security: '安全与隐私',
   advanced: '高级',

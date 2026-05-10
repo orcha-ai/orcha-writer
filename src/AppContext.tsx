@@ -1,9 +1,9 @@
 import { createContext, useContext, useReducer, useEffect, useState, useCallback } from 'react';
 import type {
   AppState, TabFile, FileNode, ViewMode, ThemeMode,
-  RecentFile, EditorSettings
+  RecentFile, EditorSettings, AppearanceSettings
 } from './types';
-import { defaultEditorSettings } from './types';
+import { defaultAppearanceSettings, defaultEditorSettings } from './types';
 import { readConfig, writeConfig } from './config';
 import { writeTextFile } from './utils/fs';
 
@@ -11,9 +11,12 @@ type AppAction =
   | { type: 'SET_VIEW_MODE'; payload: ViewMode }
   | { type: 'SET_THEME'; payload: ThemeMode }
   | { type: 'TOGGLE_SIDEBAR' }
+  | { type: 'SET_SIDEBAR_VISIBLE'; payload: boolean }
   | { type: 'TOGGLE_OUTLINE' }
+  | { type: 'SET_OUTLINE_VISIBLE'; payload: boolean }
   | { type: 'SET_SIDEBAR_TAB'; payload: 'workspace' | 'recent' }
   | { type: 'OPEN_TAB'; payload: { id: string; name: string; path: string; content: string; isDraft?: boolean } }
+  | { type: 'SAVE_TAB_AS'; payload: { oldId: string; id: string; name: string; path: string; content: string } }
   | { type: 'CLOSE_TAB'; payload: string }
   | { type: 'CLOSE_OTHER_TABS'; payload: string }
   | { type: 'CLOSE_ALL_TABS' }
@@ -69,8 +72,12 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, theme: action.payload };
     case 'TOGGLE_SIDEBAR':
       return { ...state, sidebarVisible: !state.sidebarVisible };
+    case 'SET_SIDEBAR_VISIBLE':
+      return { ...state, sidebarVisible: action.payload };
     case 'TOGGLE_OUTLINE':
       return { ...state, outlineVisible: !state.outlineVisible };
+    case 'SET_OUTLINE_VISIBLE':
+      return { ...state, outlineVisible: action.payload };
     case 'SET_SIDEBAR_TAB':
       return { ...state, sidebarActiveTab: action.payload };
     case 'OPEN_TAB': {
@@ -84,6 +91,47 @@ function appReducer(state: AppState, action: AppAction): AppState {
         isDraft: action.payload.isDraft || false,
       };
       return { ...state, tabs: [...state.tabs, newTab], activeTabId: newTab.id };
+    }
+    case 'SAVE_TAB_AS': {
+      const existing = state.tabs.find(t => t.id === action.payload.id && t.id !== action.payload.oldId);
+      if (existing) {
+        return {
+          ...state,
+          tabs: state.tabs
+            .filter(t => t.id !== action.payload.oldId)
+            .map(t => (
+              t.id === existing.id
+                ? {
+                    ...t,
+                    name: action.payload.name,
+                    path: action.payload.path,
+                    content: action.payload.content,
+                    saved: true,
+                    isDraft: false,
+                  }
+                : t
+            )),
+          activeTabId: existing.id,
+        };
+      }
+
+      return {
+        ...state,
+        tabs: state.tabs.map(t => (
+          t.id === action.payload.oldId
+            ? {
+                ...t,
+                id: action.payload.id,
+                name: action.payload.name,
+                path: action.payload.path,
+                content: action.payload.content,
+                saved: true,
+                isDraft: false,
+              }
+            : t
+        )),
+        activeTabId: action.payload.id,
+      };
     }
     case 'CLOSE_TAB': {
       const idx = state.tabs.findIndex(t => t.id === action.payload);
@@ -193,15 +241,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
     Promise.all([
-        readConfig<RecentFile[]>('recent-files', []),
-        readConfig<ViewMode>('view-mode', 'split' as ViewMode),
-        readConfig<ThemeMode>('theme', 'system' as ThemeMode),
-    ]).then(([recentFiles, viewMode, theme]) => {
-        if (!mounted) return;
-        dispatch({ type: 'SET_RECENT_FILES', payload: recentFiles });
-        dispatch({ type: 'SET_VIEW_MODE', payload: viewMode });
-        dispatch({ type: 'SET_THEME', payload: theme });
-      })
+      readConfig<RecentFile[]>('recent-files', []),
+      readConfig<ViewMode>('view-mode', 'split' as ViewMode),
+      readConfig<ThemeMode>('theme', 'system' as ThemeMode),
+      readConfig<AppearanceSettings>('appearance', defaultAppearanceSettings),
+    ]).then(([recentFiles, viewMode, theme, appearance]) => {
+      if (!mounted) return;
+      dispatch({ type: 'SET_RECENT_FILES', payload: recentFiles });
+      dispatch({ type: 'SET_VIEW_MODE', payload: viewMode });
+      dispatch({ type: 'SET_THEME', payload: theme });
+      dispatch({
+        type: 'SET_SIDEBAR_VISIBLE',
+        payload: appearance.showSidebar ?? defaultAppearanceSettings.showSidebar,
+      });
+      dispatch({
+        type: 'SET_OUTLINE_VISIBLE',
+        payload: appearance.showOutline ?? defaultAppearanceSettings.showOutline,
+      });
+    })
       .catch((error) => {
         console.warn('[AppContext] Failed to load persisted config:', error);
       })
@@ -236,6 +293,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!initialized) return;
     writeConfig('theme', state.theme);
   }, [state.theme, initialized]);
+
+  // Persist panel visibility so workspace/outline collapse survives restart.
+  useEffect(() => {
+    if (!initialized) return;
+    void (async () => {
+      const appearance = await readConfig<AppearanceSettings>('appearance', defaultAppearanceSettings);
+      await writeConfig('appearance', {
+        ...defaultAppearanceSettings,
+        ...appearance,
+        showSidebar: state.sidebarVisible,
+        showOutline: state.outlineVisible,
+      });
+    })().catch((error) => {
+      console.warn('[AppContext] Failed to persist panel visibility:', error);
+    });
+  }, [initialized, state.outlineVisible, state.sidebarVisible]);
 
   // Persist recent files whenever they change
   useEffect(() => {

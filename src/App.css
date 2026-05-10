@@ -537,6 +537,12 @@
   border-left-color: var(--accent) !important;
 }
 
+.cm-editor .cm-selectionBackground,
+.cm-editor.cm-focused .cm-selectionBackground,
+.cm-editor .cm-content ::selection {
+  background: color-mix(in srgb, var(--accent) 28%, transparent) !important;
+}
+
 /* Markdown syntax highlighting */
 .cm-editor .cm-heading {
   color: var(--text-heading) !important;

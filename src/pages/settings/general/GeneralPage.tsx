@@ -31,8 +31,8 @@ export default function GeneralPage() {
         >
           <Form.Item label="启动时打开" name="startupOpen">
             <Select style={{ width: 240 }}>
-              <Select.Option value="blank">空白页</Select.Option>
               <Select.Option value="last-workspace">最近工作区</Select.Option>
+              <Select.Option value="blank">空白页</Select.Option>
               <Select.Option value="specific-workspace">指定工作区</Select.Option>
             </Select>
           </Form.Item>

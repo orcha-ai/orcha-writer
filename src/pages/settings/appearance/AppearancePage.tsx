@@ -83,6 +83,10 @@ export default function AppearancePage() {
             <Switch />
           </Form.Item>
 
+          <Form.Item label="显示大纲" name="showOutline" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+
           <Form.Item label="显示标签栏" name="showTabs" valuePropName="checked">
             <Switch />
           </Form.Item>

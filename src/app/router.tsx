@@ -13,6 +13,8 @@ import PreviewPage from '../pages/settings/preview/PreviewPage';
 import SecurityPage from '../pages/settings/security/SecurityPage';
 import AdvancedPage from '../pages/settings/advanced/AdvancedPage';
 import AboutPage from '../pages/settings/about/AboutPage';
+import AiModelConfigPage from '../pages/settings/ai/AiModelConfigPage';
+import AgentConfigPage from '../pages/settings/ai/AgentConfigPage';
 
 export const router = createBrowserRouter([
   {
@@ -43,7 +45,9 @@ export const router = createBrowserRouter([
           { path: 'files', element: <FilesPage /> },
           { path: 'export', element: <ExportPage /> },
           { path: 'plugins/*', element: <Navigate to="/settings/general" replace /> },
-          { path: 'ai/*', element: <Navigate to="/settings/general" replace /> },
+          { path: 'ai', element: <Navigate to="/settings/ai/models" replace /> },
+          { path: 'ai/models', element: <AiModelConfigPage /> },
+          { path: 'ai/agents', element: <AgentConfigPage /> },
           { path: 'shortcuts', element: <ShortcutsPage /> },
           { path: 'security', element: <SecurityPage /> },
           { path: 'advanced', element: <AdvancedPage /> },

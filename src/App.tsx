@@ -7,11 +7,51 @@ import Outline from './components/Outline';
 import StatusBar from './components/StatusBar';
 import SearchPanel from './components/SearchPanel';
 import CommandPalette from './components/CommandPalette';
+import { AIChatPanel, createCodeMirrorEditorBridge } from './modules/ai-chat';
+import { useApp } from './AppContext';
+import { writeTextFile } from './utils/fs';
+import { dirname } from './utils/markdownImages';
+import { useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import './App.css';
 import './styles/preview-themes.css';
 import './styles/code-themes.css';
 
+function formatAIDocumentTimestamp(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    '-',
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+  ].join('');
+}
+
 export default function WorkspaceContent() {
+  const { state, dispatch } = useApp();
+  const navigate = useNavigate();
+  const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId);
+  const editorBridge = useMemo(() => createCodeMirrorEditorBridge(), []);
+
+  const handleCreateMarkdownFile = useCallback(async (content: string) => {
+    const fileName = `AI生成文档-${formatAIDocumentTimestamp(new Date())}.md`;
+    const activeDir = activeTab && !activeTab.isDraft && /[/\\]/.test(activeTab.path)
+      ? dirname(activeTab.path)
+      : '';
+
+    if (activeDir) {
+      const path = `${activeDir}/${fileName}`;
+      await writeTextFile(path, content);
+      dispatch({ type: 'OPEN_TAB', payload: { id: path, name: fileName, path, content } });
+      return;
+    }
+
+    const id = `draft-ai-${Date.now()}`;
+    dispatch({ type: 'OPEN_TAB', payload: { id, name: fileName, path: id, content, isDraft: true } });
+  }, [activeTab, dispatch]);
+
   return (
     <>
       <Toolbar />
@@ -29,6 +69,15 @@ export default function WorkspaceContent() {
           </div>
         </div>
         <Outline />
+        <AIChatPanel
+          documentId={activeTab?.id || 'empty-document'}
+          documentPath={activeTab?.isDraft ? undefined : activeTab?.path}
+          documentTitle={activeTab?.name || '未命名.md'}
+          editorBridge={editorBridge}
+          onOpenSettings={() => navigate('/settings/ai/models')}
+          onOpenAgentManager={() => navigate('/settings/ai/agents')}
+          onCreateMarkdownFile={handleCreateMarkdownFile}
+        />
       </div>
       <StatusBar />
       <CommandPalette />

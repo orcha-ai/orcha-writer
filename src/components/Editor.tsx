@@ -13,6 +13,7 @@ import { message } from 'antd';
 import type { TabFile } from '../types';
 import { copyFile, ensureDir, readClipboardFileUrls, readClipboardImage, writeBinaryFile } from '../utils/fs';
 import { basename, dirname, formatMarkdownImageUrl, markdownImagePathForDocument, stripExtension } from '../utils/markdownImages';
+import type { EditorSelection } from '../modules/ai-chat/types/editor-bridge';
 
 export function ScrollSyncProvider({ children }: { children: React.ReactNode }) {
   return children;
@@ -24,6 +25,45 @@ export function useScrollSync() {
 
 let activeView: EditorView | null = null;
 export function getActiveEditorView(): EditorView | null { return activeView; }
+
+type EditorSelectionListener = (selection: EditorSelection | null) => void;
+const editorSelectionListeners = new Set<EditorSelectionListener>();
+
+export function subscribeEditorSelection(listener: EditorSelectionListener): () => void {
+  editorSelectionListeners.add(listener);
+  listener(activeView ? readEditorSelection(activeView) : null);
+  return () => editorSelectionListeners.delete(listener);
+}
+
+function readEditorSelection(view: EditorView): EditorSelection | null {
+  const selection = view.state.selection.main;
+  if (selection.empty) return null;
+
+  const from = Math.min(selection.from, selection.to);
+  const to = Math.max(selection.from, selection.to);
+  const text = view.state.doc.sliceString(from, to);
+  const start = view.coordsAtPos(from);
+  const end = view.coordsAtPos(to);
+  const rect = start && end
+    ? {
+        left: Math.min(start.left, end.left),
+        top: Math.min(start.top, end.top),
+        width: Math.max(24, Math.abs(end.left - start.left)),
+        height: Math.max(start.bottom, end.bottom) - Math.min(start.top, end.top),
+      }
+    : undefined;
+
+  return {
+    range: { from, to },
+    text,
+    rect,
+  };
+}
+
+function emitEditorSelection(view: EditorView | null): void {
+  const selection = view ? readEditorSelection(view) : null;
+  editorSelectionListeners.forEach((listener) => listener(selection));
+}
 
 let activePasteClipboardImages: (() => Promise<boolean>) | null = null;
 export async function pasteClipboardImagesIntoActiveEditor(): Promise<boolean> {
@@ -339,6 +379,7 @@ export default function Editor() {
   // rAF-based scroll handler for smooth sync
   let rafId = 0;
   const onEditorScroll = () => {
+    if (viewRef.current) emitEditorSelection(viewRef.current);
     if (!syncEnabled.current || mode.current === 'edit') return;
     if (rafId) cancelAnimationFrame(rafId);
     rafId = requestAnimationFrame(() => {
@@ -536,6 +577,7 @@ export default function Editor() {
           EditorView.updateListener.of((update) => {
             if (update.docChanged) handleUpdate(update.view);
             if (update.docChanged || update.selectionSet) updateEditorStatus(update.view, update.docChanged);
+            if (update.docChanged || update.selectionSet || update.focusChanged) emitEditorSelection(update.view);
           }),
           EditorView.domEventHandlers({
             paste: (event, view) => {
@@ -629,6 +671,7 @@ export default function Editor() {
     activeView = view;
     activePasteClipboardImages = pasteClipboardImages;
     updateEditorStatus(view, true);
+    emitEditorSelection(view);
 
     const scroller = view.dom.querySelector('.cm-scroller');
     if (scroller) {
@@ -643,6 +686,7 @@ export default function Editor() {
       viewRef.current = null;
       if (activeView === view) activeView = null;
       if (activePasteClipboardImages === pasteClipboardImages) activePasteClipboardImages = null;
+      emitEditorSelection(null);
     };
   }, [activeTab?.id, handleUpdate, pasteClipboardImages, updateEditorStatus]);
 
