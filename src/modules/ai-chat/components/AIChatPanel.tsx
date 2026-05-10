@@ -6,7 +6,7 @@ import { useAiStore } from '../../../store';
 import { findUsableAgent, normalizeAIAgents } from '../services/aiAgentService';
 import { findCommand, getAgentCommands, getAllAICommands } from '../services/aiCommandService';
 import { buildAIContext } from '../services/aiContextBuilder';
-import { sendAIChatRequest } from '../services/aiRequestService';
+import { isAIRequestCancelled, sendAIChatRequest, type AIStreamUpdate } from '../services/aiRequestService';
 import { createAIId, nowIso } from '../services/id';
 import { useAIChatStore } from '../stores/aiChatStore';
 import type {
@@ -116,6 +116,11 @@ export function AIChatPanel({
   const previousMessageCountRef = useRef(0);
   const previousConversationIdRef = useRef<string | null>(null);
   const shouldFollowResponseRef = useRef(true);
+  const activeRequestRef = useRef<{
+    abort: () => void;
+    conversationId: string;
+    assistantMessageId: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!loaded) void load();
@@ -263,6 +268,24 @@ export function AIChatPanel({
     addMessage(conversation.id, assistantMessage);
     setSending(true);
 
+    const abortController = new AbortController();
+    activeRequestRef.current = {
+      abort: () => abortController.abort(),
+      conversationId: conversation.id,
+      assistantMessageId: assistantMessage.id,
+    };
+    let latestStreamUpdate: AIStreamUpdate | null = null;
+    let streamFlushTimer: number | null = null;
+    const flushStreamUpdate = () => {
+      streamFlushTimer = null;
+      if (!latestStreamUpdate) return;
+      updateMessage(conversation.id, assistantMessage.id, {
+        content: latestStreamUpdate.content || (thinking.enabled ? '' : '正在生成...'),
+        reasoningContent: latestStreamUpdate.reasoningContent,
+        status: 'streaming',
+      });
+    };
+
     try {
       const response = await sendAIChatRequest({
         request,
@@ -270,7 +293,19 @@ export function AIChatPanel({
         command,
         model,
         provider,
+        abortSignal: abortController.signal,
+        onStreamUpdate: (update) => {
+          if (abortController.signal.aborted) return;
+          latestStreamUpdate = update;
+          if (streamFlushTimer !== null) return;
+          streamFlushTimer = window.setTimeout(flushStreamUpdate, 80);
+        },
       });
+      if (streamFlushTimer !== null) {
+        window.clearTimeout(streamFlushTimer);
+        flushStreamUpdate();
+      }
+      if (abortController.signal.aborted) return;
       updateMessage(conversation.id, assistantMessage.id, {
         content: response.content,
         reasoningContent: response.reasoningContent,
@@ -298,6 +333,38 @@ export function AIChatPanel({
         endedAt: nowIso(),
       });
     } catch (error) {
+      if (streamFlushTimer !== null) {
+        window.clearTimeout(streamFlushTimer);
+        streamFlushTimer = null;
+      }
+      if (abortController.signal.aborted || isAIRequestCancelled(error)) {
+        updateMessage(conversation.id, assistantMessage.id, {
+          status: 'cancelled',
+          errorCode: 'cancelled',
+          errorMessage: '已取消生成',
+          resultCards: undefined,
+        });
+        appendRequestLog({
+          id: createAIId('log'),
+          conversationId: conversation.id,
+          messageId: assistantMessage.id,
+          agentId: currentAgent.id,
+          modelConfigId: model?.id,
+          provider: provider?.name,
+          model: model?.model,
+          commandId: command?.id,
+          contextSources: context.includedSources,
+          inputLength: userInput.length,
+          deepThinkingEnabled: thinking.enabled,
+          thinkingBudget: thinking.budget,
+          status: 'cancelled',
+          errorCode: 'cancelled',
+          errorMessage: '已取消生成',
+          startedAt,
+          endedAt: nowIso(),
+        });
+        return;
+      }
       const errorMessage = getErrorMessage(error);
       updateMessage(conversation.id, assistantMessage.id, {
         content: '',
@@ -334,9 +401,29 @@ export function AIChatPanel({
         endedAt: nowIso(),
       });
     } finally {
-      setSending(false);
+      if (streamFlushTimer !== null) {
+        window.clearTimeout(streamFlushTimer);
+      }
+      if (activeRequestRef.current?.assistantMessageId === assistantMessage.id) {
+        activeRequestRef.current = null;
+        setSending(false);
+      }
     }
   }, [addMessage, appendRequestLog, conversation, currentAgent, model, provider, updateMessage]);
+
+  const cancelCurrentRequest = useCallback(() => {
+    const activeRequest = activeRequestRef.current;
+    if (!activeRequest) return;
+    activeRequest.abort();
+    updateMessage(activeRequest.conversationId, activeRequest.assistantMessageId, {
+      status: 'cancelled',
+      errorCode: 'cancelled',
+      errorMessage: '已取消生成',
+      resultCards: undefined,
+    });
+    activeRequestRef.current = null;
+    setSending(false);
+  }, [updateMessage]);
 
   const sendMessage = useCallback(async (
     userInput: string,
@@ -577,6 +664,7 @@ export function AIChatPanel({
         thinkingEnabled={deepThinkingEnabled}
         thinkingBudget={thinkingBudget}
         onChangeThinking={setDeepThinkingEnabled}
+        onCancel={cancelCurrentRequest}
         onSend={(value) => void sendMessage(value)}
       />
       <SelectionAIPopover

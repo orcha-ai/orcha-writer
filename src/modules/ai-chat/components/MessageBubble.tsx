@@ -78,8 +78,9 @@ export function MessageBubble({ message, onResultAction }: MessageBubbleProps) {
       <div className="ai-message-meta">
         <span>{isUser ? '你' : 'AI'}</span>
         {message.agentName && <Tag bordered={false}>{message.agentName}</Tag>}
-        {message.status === 'pending' && !message.deepThinkingEnabled && <Spin size="small" />}
+        {(message.status === 'pending' || message.status === 'streaming') && !message.deepThinkingEnabled && <Spin size="small" />}
         {message.status === 'failed' && <Tag color="red">失败</Tag>}
+        {message.status === 'cancelled' && <Tag color="default">已取消</Tag>}
       </div>
       <ThinkingProcess message={message} />
       {shouldShowContent && (

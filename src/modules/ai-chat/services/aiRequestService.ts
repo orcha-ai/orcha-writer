@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type { AiModelConfig, AiProviderConfig } from '../../../types';
 import { buildPrompt } from './aiPromptBuilder';
 import { createAIId } from './id';
@@ -17,6 +18,8 @@ export interface SendAIChatOptions {
   command?: AICommandPreset;
   model?: AiModelConfig;
   provider?: AiProviderConfig;
+  onStreamUpdate?: (update: AIStreamUpdate) => void;
+  abortSignal?: AbortSignal;
 }
 
 interface NativeAIChatResponse {
@@ -28,6 +31,37 @@ interface NativeAIChatResponse {
     outputTokens?: number;
     totalTokens?: number;
   };
+}
+
+interface NativeAIChatStreamEvent {
+  streamId: string;
+  contentDelta?: string;
+  reasoningDelta?: string;
+}
+
+export interface AIStreamUpdate {
+  content: string;
+  reasoningContent?: string;
+  contentDelta?: string;
+  reasoningDelta?: string;
+}
+
+export const AI_REQUEST_CANCELLED_MESSAGE = 'AI 请求已取消';
+
+export function isAIRequestCancelled(error: unknown): boolean {
+  if (error instanceof DOMException && error.name === 'AbortError') return true;
+  const message = typeof error === 'string'
+    ? error
+    : error instanceof Error
+      ? error.message
+      : '';
+  return message.includes(AI_REQUEST_CANCELLED_MESSAGE);
+}
+
+function throwIfCancelled(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new Error(AI_REQUEST_CANCELLED_MESSAGE);
+  }
 }
 
 const COMMON_RESULT_ACTIONS: AIResultAction[] = [
@@ -155,10 +189,15 @@ function canUseNativeProvider(model: AiModelConfig | undefined, provider: AiProv
   return Boolean(model && provider?.enabled);
 }
 
+function canUseStreamingProvider(provider: AiProviderConfig): boolean {
+  return provider.type === 'openai-compatible' || provider.type === 'custom';
+}
+
 async function sendNativeAIChat(options: SendAIChatOptions): Promise<AIChatResponse> {
   const { request, agent, command, model, provider } = options;
+  throwIfCancelled(options.abortSignal);
   if (!model || !provider) throw new Error('模型配置不可用');
-  if (!provider.baseUrl?.trim()) throw new Error('模型供应商请求地址未配置，请在 AI 模型设置里填写完整请求地址');
+  if (!provider.baseUrl?.trim()) throw new Error('模型供应商请求地址未配置，请在 AI 模型设置里填写请求地址');
   if (requiresCredential(provider.type) && !provider.credentialRef?.trim()) {
     throw new Error('模型凭据未配置，请在 AI 模型设置里填写凭据引用或 API Key');
   }
@@ -170,23 +209,70 @@ async function sendNativeAIChat(options: SendAIChatOptions): Promise<AIChatRespo
     context: request.context,
     userInput: request.userInput,
   });
-  const response = await invoke<NativeAIChatResponse>('ai_send_chat', {
-    request: {
-      providerType: provider.type,
-      apiUrl: provider.baseUrl,
-      credentialRef: provider.credentialRef?.trim() || undefined,
-      model: model.model,
-      messages: [
-        { role: 'system', content: prompt.system },
-        { role: 'user', content: prompt.user },
-      ],
-      temperature: model.temperature,
-      topP: model.topP,
-      maxTokens: model.maxTokens,
-      enableThinking: thinkingSupported ? request.deepThinkingEnabled : undefined,
-      thinkingBudget: thinkingSupported && request.deepThinkingEnabled ? request.thinkingBudget : undefined,
-    },
-  });
+  const nativeRequest = {
+    providerType: provider.type,
+    apiUrl: provider.baseUrl,
+    credentialRef: provider.credentialRef?.trim() || undefined,
+    model: model.model,
+    messages: [
+      { role: 'system', content: prompt.system },
+      { role: 'user', content: prompt.user },
+    ],
+    temperature: model.temperature,
+    topP: model.topP,
+    maxTokens: model.maxTokens,
+    enableThinking: thinkingSupported ? request.deepThinkingEnabled : undefined,
+    thinkingBudget: thinkingSupported && request.deepThinkingEnabled ? request.thinkingBudget : undefined,
+  };
+  let response: NativeAIChatResponse;
+
+  if (canUseStreamingProvider(provider)) {
+    const streamId = createAIId('stream');
+    let content = '';
+    let reasoningContent = '';
+    const cancelStream = () => {
+      void invoke('ai_cancel_chat_stream', { streamId });
+    };
+    options.abortSignal?.addEventListener('abort', cancelStream, { once: true });
+    const unlisten = await listen<NativeAIChatStreamEvent>('ai-chat-stream', (event) => {
+      if (event.payload.streamId !== streamId) return;
+      if (options.abortSignal?.aborted) return;
+      const contentDelta = event.payload.contentDelta || '';
+      const reasoningDelta = event.payload.reasoningDelta || '';
+      if (contentDelta) content += contentDelta;
+      if (reasoningDelta) reasoningContent += reasoningDelta;
+      options.onStreamUpdate?.({
+        content,
+        reasoningContent: reasoningContent || undefined,
+        contentDelta: contentDelta || undefined,
+        reasoningDelta: reasoningDelta || undefined,
+      });
+    });
+
+    try {
+      throwIfCancelled(options.abortSignal);
+      response = await invoke<NativeAIChatResponse>('ai_send_chat_stream', {
+        request: {
+          ...nativeRequest,
+          streamId,
+        },
+      });
+      throwIfCancelled(options.abortSignal);
+      options.onStreamUpdate?.({
+        content: response.content,
+        reasoningContent: response.reasoningContent,
+      });
+    } finally {
+      options.abortSignal?.removeEventListener('abort', cancelStream);
+      unlisten();
+    }
+  } else {
+    throwIfCancelled(options.abortSignal);
+    response = await invoke<NativeAIChatResponse>('ai_send_chat', {
+      request: nativeRequest,
+    });
+    throwIfCancelled(options.abortSignal);
+  }
 
   return {
     messageId: createAIId('msg'),
@@ -201,6 +287,7 @@ async function sendNativeAIChat(options: SendAIChatOptions): Promise<AIChatRespo
 
 export async function sendAIChatRequest(options: SendAIChatOptions): Promise<AIChatResponse> {
   const { request, agent, command, model, provider } = options;
+  throwIfCancelled(options.abortSignal);
   if (canUseNativeProvider(model, provider) && isTauriRuntime()) {
     return sendNativeAIChat(options);
   }
@@ -213,6 +300,7 @@ export async function sendAIChatRequest(options: SendAIChatOptions): Promise<AIC
   });
 
   await new Promise((resolve) => window.setTimeout(resolve, 420));
+  throwIfCancelled(options.abortSignal);
 
   const promptLength = prompt.system.length + prompt.user.length;
   const content = localMarkdownDraft(options);

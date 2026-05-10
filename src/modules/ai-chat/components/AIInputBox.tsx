@@ -1,6 +1,6 @@
 import { Button, Dropdown, Input, Switch, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
-import { Bot, Brain, ChevronDown, Send, Settings } from 'lucide-react';
+import { Bot, Brain, ChevronDown, Send, Settings, Square } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { AIAgentConfig, AICommandPreset } from '../types';
 
@@ -8,6 +8,7 @@ interface AIInputBoxProps {
   disabled?: boolean;
   sending?: boolean;
   onSend: (value: string) => void;
+  onCancel?: () => void;
   modelLabel?: string;
   agents: AIAgentConfig[];
   currentAgent: AIAgentConfig;
@@ -33,6 +34,7 @@ export function AIInputBox({
   disabled,
   sending,
   onSend,
+  onCancel,
   modelLabel,
   agents,
   currentAgent,
@@ -207,8 +209,15 @@ export function AIInputBox({
             />
           </span>
         </Tooltip>
-        <Button type="primary" size="small" icon={<Send size={15} />} loading={sending} disabled={disabled} onClick={submit}>
-          发送
+        <Button
+          type={sending ? 'default' : 'primary'}
+          danger={sending}
+          size="small"
+          icon={sending ? <Square size={13} /> : <Send size={15} />}
+          disabled={disabled}
+          onClick={sending ? onCancel : submit}
+        >
+          {sending ? '取消' : '发送'}
         </Button>
       </div>
     </div>

@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -16,6 +17,9 @@ use serde_json::{json, Value};
 // ── PendingOpenFiles: stores files to open from cold start or Opened events ──
 #[derive(Default)]
 struct PendingOpenFiles(Mutex<Vec<String>>);
+
+#[derive(Default)]
+struct CancelledAiStreams(Mutex<HashSet<String>>);
 
 // ── OpenedDocument: returned by open_markdown_file command ──
 #[derive(Serialize)]
@@ -45,6 +49,7 @@ struct AiChatMessageInput {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AiChatRequest {
+    stream_id: Option<String>,
     provider_type: String,
     api_url: String,
     credential_ref: Option<String>,
@@ -57,7 +62,7 @@ struct AiChatRequest {
     thinking_budget: Option<u32>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AiTokenUsage {
     input_tokens: Option<u64>,
@@ -72,6 +77,14 @@ struct AiChatResponse {
     reasoning_content: Option<String>,
     model: Option<String>,
     usage: Option<AiTokenUsage>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AiChatStreamEvent {
+    stream_id: String,
+    content_delta: Option<String>,
+    reasoning_delta: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -627,10 +640,23 @@ fn require_ai_credential(credential: Option<String>, provider_name: &str) -> Res
     credential.ok_or_else(|| format!("{} 凭据未配置", provider_name))
 }
 
-fn ai_request_endpoint(api_url: &str) -> Result<String, String> {
+fn append_chat_completions_endpoint(api_url: &str) -> String {
+    let trimmed = api_url.trim().trim_end_matches('/');
+    if trimmed.to_ascii_lowercase().ends_with("/chat/completions") {
+        trimmed.to_string()
+    } else {
+        format!("{}/chat/completions", trimmed)
+    }
+}
+
+fn ai_request_endpoint(provider_type: &str, api_url: &str) -> Result<String, String> {
     let trimmed = api_url.trim();
     if trimmed.is_empty() {
         return Err("模型供应商请求地址未配置".to_string());
+    }
+
+    if provider_type == "openai-compatible" {
+        return Ok(append_chat_completions_endpoint(trimmed));
     }
 
     Ok(trimmed.to_string())
@@ -644,6 +670,32 @@ fn request_messages(messages: &[AiChatMessageInput]) -> Vec<Value> {
             "content": message.content,
         }))
         .collect()
+}
+
+fn openai_like_request_body(request: &AiChatRequest, stream: bool) -> Value {
+    let mut body = json!({
+        "model": request.model,
+        "messages": request_messages(&request.messages),
+        "stream": stream,
+    });
+
+    if let Some(temperature) = request.temperature {
+        body["temperature"] = json!(temperature);
+    }
+    if let Some(top_p) = request.top_p {
+        body["top_p"] = json!(top_p);
+    }
+    if let Some(max_tokens) = request.max_tokens {
+        body["max_tokens"] = json!(max_tokens);
+    }
+    if let Some(enable_thinking) = request.enable_thinking {
+        body["enable_thinking"] = json!(enable_thinking);
+    }
+    if let Some(thinking_budget) = request.thinking_budget {
+        body["thinking_budget"] = json!(thinking_budget);
+    }
+
+    body
 }
 
 fn parse_openai_response(response_text: &str) -> Result<AiChatResponse, String> {
@@ -824,6 +876,114 @@ fn first_string_field(value: &Value, fields: &[&str]) -> Option<String> {
     None
 }
 
+fn first_raw_string_field(value: &Value, fields: &[&str]) -> Option<String> {
+    for field in fields {
+        if let Some(text) = value.get(field).and_then(|item| item.as_str()) {
+            if !text.is_empty() {
+                return Some(text.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn parse_openai_usage_value(value: Option<&Value>) -> Option<AiTokenUsage> {
+    let usage = value?;
+    Some(AiTokenUsage {
+        input_tokens: usage.get("prompt_tokens").and_then(|item| item.as_u64()),
+        output_tokens: usage.get("completion_tokens").and_then(|item| item.as_u64()),
+        total_tokens: usage.get("total_tokens").and_then(|item| item.as_u64()),
+    })
+}
+
+fn collect_openai_stream_delta(
+    data: &str,
+    content: &mut String,
+    reasoning_content: &mut String,
+    model: &mut Option<String>,
+    usage: &mut Option<AiTokenUsage>,
+) -> Result<(Option<String>, Option<String>), String> {
+    let parsed: Value = serde_json::from_str(data)
+        .map_err(|e| format!("解析 AI 流式响应失败: {}", e))?;
+
+    if model.is_none() {
+        *model = parsed
+            .get("model")
+            .and_then(|item| item.as_str())
+            .map(|text| text.to_string());
+    }
+    if let Some(parsed_usage) = parse_openai_usage_value(parsed.get("usage")) {
+        *usage = Some(parsed_usage);
+    }
+
+    let mut content_delta = String::new();
+    let mut reasoning_delta = String::new();
+    if let Some(choices) = parsed.get("choices").and_then(|item| item.as_array()) {
+        for choice in choices {
+            if let Some(delta) = choice.get("delta") {
+                if let Some(text) = first_raw_string_field(delta, &["content"]) {
+                    content_delta.push_str(&text);
+                }
+                if let Some(text) = first_raw_string_field(
+                    delta,
+                    &["reasoning_content", "reasoning", "thinking"],
+                ) {
+                    reasoning_delta.push_str(&text);
+                }
+            }
+        }
+    }
+
+    let content_delta = if content_delta.is_empty() {
+        None
+    } else {
+        content.push_str(&content_delta);
+        Some(content_delta)
+    };
+    let reasoning_delta = if reasoning_delta.is_empty() {
+        None
+    } else {
+        reasoning_content.push_str(&reasoning_delta);
+        Some(reasoning_delta)
+    };
+
+    Ok((content_delta, reasoning_delta))
+}
+
+fn emit_ai_chat_stream_delta(
+    app: &AppHandle,
+    stream_id: &str,
+    content_delta: Option<String>,
+    reasoning_delta: Option<String>,
+) {
+    if content_delta.is_none() && reasoning_delta.is_none() {
+        return;
+    }
+
+    let _ = app.emit(
+        "ai-chat-stream",
+        AiChatStreamEvent {
+            stream_id: stream_id.to_string(),
+            content_delta,
+            reasoning_delta,
+        },
+    );
+}
+
+fn is_ai_stream_cancelled(app: &AppHandle, stream_id: &str) -> bool {
+    app.state::<CancelledAiStreams>()
+        .0
+        .lock()
+        .map(|cancelled| cancelled.contains(stream_id))
+        .unwrap_or(false)
+}
+
+fn clear_ai_stream_cancelled(app: &AppHandle, stream_id: &str) {
+    if let Ok(mut cancelled) = app.state::<CancelledAiStreams>().0.lock() {
+        cancelled.remove(stream_id);
+    }
+}
+
 fn parse_custom_response(response_text: &str, model: &str) -> Result<AiChatResponse, String> {
     if let Ok(response) = parse_openai_response(response_text) {
         return Ok(response);
@@ -846,12 +1006,36 @@ fn parse_custom_response(response_text: &str, model: &str) -> Result<AiChatRespo
     })
 }
 
-fn ensure_success(status: reqwest::StatusCode, response_text: String) -> Result<String, String> {
+fn compact_ai_error_response(response_text: &str) -> String {
+    let trimmed = response_text.trim();
+    if trimmed.is_empty() {
+        return "服务返回空错误内容".to_string();
+    }
+
+    const MAX_ERROR_LENGTH: usize = 600;
+    if trimmed.chars().count() > MAX_ERROR_LENGTH {
+        let preview: String = trimmed.chars().take(MAX_ERROR_LENGTH).collect();
+        format!("{}...", preview)
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn ensure_success(
+    status: reqwest::StatusCode,
+    endpoint: &str,
+    response_text: String,
+) -> Result<String, String> {
     if status.is_success() {
         return Ok(response_text);
     }
 
-    Err(format!("AI 服务返回错误 {}: {}", status.as_u16(), response_text))
+    Err(format!(
+        "AI 服务返回错误 {}\n请求: POST {}\n响应: {}",
+        status.as_u16(),
+        endpoint,
+        compact_ai_error_response(&response_text)
+    ))
 }
 
 async fn send_openai_like_request(
@@ -866,27 +1050,7 @@ async fn send_openai_like_request(
     } else {
         api_key
     };
-    let mut body = json!({
-        "model": request.model,
-        "messages": request_messages(&request.messages),
-        "stream": false,
-    });
-
-    if let Some(temperature) = request.temperature {
-        body["temperature"] = json!(temperature);
-    }
-    if let Some(top_p) = request.top_p {
-        body["top_p"] = json!(top_p);
-    }
-    if let Some(max_tokens) = request.max_tokens {
-        body["max_tokens"] = json!(max_tokens);
-    }
-    if let Some(enable_thinking) = request.enable_thinking {
-        body["enable_thinking"] = json!(enable_thinking);
-    }
-    if let Some(thinking_budget) = request.thinking_budget {
-        body["thinking_budget"] = json!(thinking_budget);
-    }
+    let body = openai_like_request_body(request, false);
 
     let mut builder = client
         .post(endpoint)
@@ -905,7 +1069,118 @@ async fn send_openai_like_request(
         .await
         .map_err(|e| format!("读取 AI 响应失败: {}", e))?;
 
-    ensure_success(status, response_text)
+    ensure_success(status, endpoint, response_text)
+}
+
+async fn send_openai_like_stream_request(
+    client: &reqwest::Client,
+    request: &AiChatRequest,
+    endpoint: &str,
+    api_key: Option<String>,
+    require_key: bool,
+    app: &AppHandle,
+    stream_id: &str,
+) -> Result<AiChatResponse, String> {
+    let api_key = if require_key {
+        Some(require_ai_credential(api_key, "OpenAI Compatible")?)
+    } else {
+        api_key
+    };
+    let body = openai_like_request_body(request, true);
+
+    if is_ai_stream_cancelled(app, stream_id) {
+        return Err("AI 请求已取消".to_string());
+    }
+
+    let mut builder = client.post(endpoint).json(&body);
+    if let Some(api_key) = api_key {
+        builder = builder.bearer_auth(api_key);
+    }
+
+    let mut response = builder
+        .send()
+        .await
+        .map_err(|e| format!("AI 请求失败: {}", e))?;
+    let status = response.status();
+    if !status.is_success() {
+        let response_text = response
+            .text()
+            .await
+            .map_err(|e| format!("读取 AI 响应失败: {}", e))?;
+        return ensure_success(status, endpoint, response_text).map(|_| AiChatResponse {
+            content: String::new(),
+            reasoning_content: None,
+            model: None,
+            usage: None,
+        });
+    }
+
+    let mut buffer = String::new();
+    let mut content = String::new();
+    let mut reasoning_content = String::new();
+    let mut model = None;
+    let mut usage = None;
+    let mut done = false;
+
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("读取 AI 流式响应失败: {}", e))?
+    {
+        if is_ai_stream_cancelled(app, stream_id) {
+            return Err("AI 请求已取消".to_string());
+        }
+
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(line_end) = buffer.find('\n') {
+            if is_ai_stream_cancelled(app, stream_id) {
+                return Err("AI 请求已取消".to_string());
+            }
+
+            let line: String = buffer.drain(..=line_end).collect();
+            let line = line.trim();
+            if !line.starts_with("data:") {
+                continue;
+            }
+
+            let data = line.trim_start_matches("data:").trim();
+            if data == "[DONE]" {
+                done = true;
+                break;
+            }
+            if data.is_empty() {
+                continue;
+            }
+
+            let (content_delta, reasoning_delta) = collect_openai_stream_delta(
+                data,
+                &mut content,
+                &mut reasoning_content,
+                &mut model,
+                &mut usage,
+            )?;
+            emit_ai_chat_stream_delta(app, stream_id, content_delta, reasoning_delta);
+        }
+
+        if done {
+            break;
+        }
+    }
+
+    if content.is_empty() && reasoning_content.is_empty() {
+        return Err("AI 返回了空结果".to_string());
+    }
+
+    Ok(AiChatResponse {
+        content,
+        reasoning_content: if reasoning_content.is_empty() {
+            None
+        } else {
+            Some(reasoning_content)
+        },
+        model,
+        usage,
+    })
 }
 
 async fn send_anthropic_request(
@@ -965,7 +1240,7 @@ async fn send_anthropic_request(
         .await
         .map_err(|e| format!("读取 AI 响应失败: {}", e))?;
 
-    ensure_success(status, response_text)
+    ensure_success(status, endpoint, response_text)
 }
 
 async fn send_gemini_request(
@@ -1031,7 +1306,7 @@ async fn send_gemini_request(
         .await
         .map_err(|e| format!("读取 AI 响应失败: {}", e))?;
 
-    ensure_success(status, response_text)
+    ensure_success(status, endpoint, response_text)
 }
 
 async fn send_ollama_request(
@@ -1074,13 +1349,13 @@ async fn send_ollama_request(
         .await
         .map_err(|e| format!("读取 AI 响应失败: {}", e))?;
 
-    ensure_success(status, response_text)
+    ensure_success(status, endpoint, response_text)
 }
 
 // ── Command: send AI chat request from the Rust side ──
 #[command]
 async fn ai_send_chat(request: AiChatRequest) -> Result<AiChatResponse, String> {
-    let endpoint = ai_request_endpoint(&request.api_url)?;
+    let endpoint = ai_request_endpoint(&request.provider_type, &request.api_url)?;
     let credential = resolve_ai_credential(request.credential_ref.as_deref())?;
     let client = reqwest::Client::new();
 
@@ -1108,6 +1383,63 @@ async fn ai_send_chat(request: AiChatRequest) -> Result<AiChatResponse, String> 
         }
         other => Err(format!("暂不支持的模型供应商类型: {}", other)),
     }
+}
+
+// ── Command: send streaming AI chat request from the Rust side ──
+#[command]
+async fn ai_send_chat_stream(app: AppHandle, request: AiChatRequest) -> Result<AiChatResponse, String> {
+    let Some(stream_id) = request.stream_id.clone() else {
+        return Err("流式请求缺少 streamId".to_string());
+    };
+    let endpoint = ai_request_endpoint(&request.provider_type, &request.api_url)?;
+    let credential = resolve_ai_credential(request.credential_ref.as_deref())?;
+    let client = reqwest::Client::new();
+
+    let result = match request.provider_type.as_str() {
+        "openai-compatible" => {
+            send_openai_like_stream_request(
+                &client,
+                &request,
+                &endpoint,
+                credential,
+                true,
+                &app,
+                &stream_id,
+            )
+            .await
+        }
+        "custom" => {
+            send_openai_like_stream_request(
+                &client,
+                &request,
+                &endpoint,
+                credential,
+                false,
+                &app,
+                &stream_id,
+            )
+            .await
+        }
+        _ => ai_send_chat(request).await,
+    };
+
+    clear_ai_stream_cancelled(&app, &stream_id);
+    result
+}
+
+// ── Command: cancel an active streaming AI chat request ──
+#[command]
+fn ai_cancel_chat_stream(app: AppHandle, stream_id: String) -> Result<(), String> {
+    if stream_id.trim().is_empty() {
+        return Err("流式请求 ID 为空".to_string());
+    }
+
+    app.state::<CancelledAiStreams>()
+        .0
+        .lock()
+        .map_err(|_| "取消 AI 请求失败".to_string())?
+        .insert(stream_id);
+    Ok(())
 }
 
 // ── Command: ensure config directory exists ──
@@ -1341,6 +1673,7 @@ fn main() {
 
     tauri::Builder::default()
         .manage(PendingOpenFiles(Mutex::new(initial_paths)))
+        .manage(CancelledAiStreams::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -1367,6 +1700,8 @@ fn main() {
             delete_path,
             rename_path,
             ai_send_chat,
+            ai_send_chat_stream,
+            ai_cancel_chat_stream,
             ensure_config_dir,
             detect_pdf_engines,
             export_pdf_chrome,

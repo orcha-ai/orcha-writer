@@ -1,14 +1,30 @@
 import { Card, Space, Typography, Button, Modal, message } from 'antd';
 import { GithubOutlined, BugOutlined, SyncOutlined } from '@ant-design/icons';
 import { open as openPath } from '@tauri-apps/plugin-shell';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import aboutLogo from '../../../assets/brand/orcha-writer-about-logo.png';
-import { checkForUpdates, installAvailableUpdate, relaunchApplication } from '../../../utils/update';
+import { checkForUpdates, getCurrentVersion, installAvailableUpdate, relaunchApplication } from '../../../utils/update';
 
-const { Paragraph } = Typography;
+const { Paragraph, Text } = Typography;
 
 export default function AboutPage() {
   const [checking, setChecking] = useState(false);
+  const [currentVersion, setCurrentVersion] = useState(__APP_VERSION__);
+
+  useEffect(() => {
+    let mounted = true;
+    getCurrentVersion()
+      .then((version) => {
+        if (mounted) setCurrentVersion(version);
+      })
+      .catch(() => {
+        if (mounted) setCurrentVersion(__APP_VERSION__);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleCheckUpdates = async () => {
     setChecking(true);
@@ -80,6 +96,7 @@ export default function AboutPage() {
             style={{ width: '100%', height: 'auto', display: 'block' }}
           />
         </div>
+        <Text type="secondary">版本 {currentVersion}</Text>
 
         <Space style={{ marginTop: 16 }}>
           <Button icon={<SyncOutlined />} type="primary" loading={checking} onClick={handleCheckUpdates}>

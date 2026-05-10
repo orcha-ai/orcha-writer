@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Button, Card, Form, Input, InputNumber, List, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ExperimentOutlined } from '@ant-design/icons';
 import { useAiStore } from '../../../store';
@@ -8,6 +9,11 @@ const { Text } = Typography;
 
 type ProviderFormValues = Omit<AiProviderConfig, 'id'>;
 type ModelFormValues = Omit<AiModelConfig, 'id'>;
+
+interface NativeAIChatResponse {
+  content: string;
+  model?: string;
+}
 
 const PROVIDER_TYPE_LABELS: Record<AiProviderConfig['type'], string> = {
   'openai-compatible': 'OpenAI Compatible',
@@ -19,26 +25,34 @@ const PROVIDER_TYPE_LABELS: Record<AiProviderConfig['type'], string> = {
 
 const PROVIDER_ENDPOINT_HINTS: Record<AiProviderConfig['type'], { placeholder: string; extra: string }> = {
   'openai-compatible': {
-    placeholder: 'https://api.openai.com/v1/chat/completions',
-    extra: '填写完整 Chat Completions 请求地址，程序不会再自动拼接路径。',
+    placeholder: 'https://api.openai.com/v1',
+    extra: '填写 OpenAI 兼容接口基础地址即可，程序会统一补 /chat/completions；如果已包含该路径则不会重复拼接。',
   },
   anthropic: {
     placeholder: 'https://api.anthropic.com/v1/messages',
-    extra: '填写完整 Messages 请求地址，请在凭据引用里配置 Anthropic API Key。',
+    extra: '按服务商要求填写请求地址，程序会按原样请求；请在凭据引用里配置 Anthropic API Key。',
   },
   gemini: {
     placeholder: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent',
-    extra: '填写完整 generateContent 请求地址；API Key 可填凭据引用，也可自行放在 URL 查询参数里。',
+    extra: '按服务商要求填写请求地址，程序会按原样请求；API Key 可填凭据引用，也可自行放在 URL 查询参数里。',
   },
   ollama: {
     placeholder: 'http://localhost:11434/api/chat',
-    extra: '填写完整 Ollama Chat 请求地址，本地 Ollama 通常不需要凭据。',
+    extra: '按服务商要求填写请求地址，程序会按原样请求；本地 Ollama 通常不需要凭据。',
   },
   custom: {
     placeholder: 'https://example.com/api/chat',
-    extra: '填写完整自定义请求地址；Custom 会按 OpenAI 风格发送，并尽量解析常见返回字段。',
+    extra: '按服务端要求填写请求地址，程序会按原样请求；Custom 会按 OpenAI 风格发送，并尽量解析常见返回字段。',
   },
 };
+
+function isTauriRuntime(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+function requiresCredential(providerType: AiProviderConfig['type']): boolean {
+  return providerType === 'openai-compatible' || providerType === 'anthropic';
+}
 
 export default function AiModelConfigPage() {
   const {
@@ -59,6 +73,8 @@ export default function AiModelConfigPage() {
   const [modelModalOpen, setModelModalOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<AiProviderConfig | null>(null);
   const [editingModel, setEditingModel] = useState<AiModelConfig | null>(null);
+  const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
+  const [testingModelId, setTestingModelId] = useState<string | null>(null);
   const thinkingSupported = Form.useWatch('thinkingSupported', modelForm);
   const providerType = Form.useWatch('type', providerForm) || editingProvider?.type || 'openai-compatible';
   const endpointHint = PROVIDER_ENDPOINT_HINTS[providerType];
@@ -125,12 +141,80 @@ export default function AiModelConfigPage() {
     setModelModalOpen(false);
   };
 
-  const handleTestProvider = (provider: AiProviderConfig) => {
+  const testModelConnection = async (provider: AiProviderConfig, model: AiModelConfig) => {
+    const response = await invoke<NativeAIChatResponse>('ai_send_chat', {
+      request: {
+        providerType: provider.type,
+        apiUrl: provider.baseUrl,
+        credentialRef: provider.credentialRef?.trim() || undefined,
+        model: model.model,
+        messages: [
+          { role: 'system', content: '你是 Orcha Writer 的模型连接测试。只回复 OK。' },
+          { role: 'user', content: '回复 OK' },
+        ],
+        temperature: 0,
+        topP: 1,
+        maxTokens: 32,
+        enableThinking: false,
+      },
+    });
+    return response;
+  };
+
+  const validateProviderForTest = (provider: AiProviderConfig): boolean => {
     if (!provider.baseUrl.trim()) {
       message.warning('请先配置请求地址');
+      return false;
+    }
+    if (!isTauriRuntime()) {
+      message.warning('当前不是 Tauri 运行环境，无法发起真实连接测试');
+      return false;
+    }
+    if (requiresCredential(provider.type) && !provider.credentialRef?.trim()) {
+      message.warning('模型凭据未配置，请先填写凭据引用或 API Key');
+      return false;
+    }
+    return true;
+  };
+
+  const handleTestProvider = async (provider: AiProviderConfig) => {
+    if (!validateProviderForTest(provider)) return;
+
+    const model = models.find((item) => item.providerId === provider.id && item.enabled) ||
+      models.find((item) => item.providerId === provider.id);
+    if (!model) {
+      message.warning('请先为该供应商添加模型配置，再执行真实连接测试');
       return;
     }
-    message.success(`${provider.name} 参数完整，可用于后续连接测试`);
+
+    setTestingProviderId(provider.id);
+    try {
+      const response = await testModelConnection(provider, model);
+      message.success(`${provider.name} 真实连接成功，使用模型：${response.model || model.model}`);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setTestingProviderId(null);
+    }
+  };
+
+  const handleTestModel = async (model: AiModelConfig) => {
+    const provider = providers.find((item) => item.id === model.providerId);
+    if (!provider) {
+      message.warning('模型对应的供应商不存在，请重新选择供应商');
+      return;
+    }
+    if (!validateProviderForTest(provider)) return;
+
+    setTestingModelId(model.id);
+    try {
+      const response = await testModelConnection(provider, model);
+      message.success(`${model.name} 真实连接成功，模型：${response.model || model.model}`);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setTestingModelId(null);
+    }
   };
 
   const providerColumns = [
@@ -167,7 +251,14 @@ export default function AiModelConfigPage() {
           <Popconfirm title="确认删除？相关模型和智能体也会移除。" onConfirm={() => removeProvider(record.id)}>
             <Button size="small" danger icon={<DeleteOutlined />} type="text">删除</Button>
           </Popconfirm>
-          <Button size="small" icon={<ExperimentOutlined />} type="text" onClick={() => handleTestProvider(record)}>
+          <Button
+            size="small"
+            icon={<ExperimentOutlined />}
+            type="text"
+            loading={testingProviderId === record.id}
+            disabled={Boolean(testingProviderId && testingProviderId !== record.id)}
+            onClick={() => handleTestProvider(record)}
+          >
             测试
           </Button>
         </Space>
@@ -230,6 +321,16 @@ export default function AiModelConfigPage() {
                   <Switch size="small" checked={model.enabled} onChange={() => toggleModel(model.id)} />,
                   <Button
                     size="small"
+                    icon={<ExperimentOutlined />}
+                    type="text"
+                    loading={testingModelId === model.id}
+                    disabled={Boolean(testingProviderId || (testingModelId && testingModelId !== model.id))}
+                    onClick={() => handleTestModel(model)}
+                  >
+                    测试
+                  </Button>,
+                  <Button
+                    size="small"
                     icon={<EditOutlined />}
                     type="text"
                     onClick={() => {
@@ -288,7 +389,9 @@ export default function AiModelConfigPage() {
             label="请求地址"
             name="baseUrl"
             rules={[{ required: true, message: '请输入请求地址' }]}
-            extra={endpointHint.extra}
+            extra={
+              <Text type="secondary">{endpointHint.extra}</Text>
+            }
           >
             <Input placeholder={endpointHint.placeholder} />
           </Form.Item>
