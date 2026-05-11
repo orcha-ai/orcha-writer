@@ -4,6 +4,7 @@ import { Save } from 'lucide-react';
 export default function StatusBar() {
   const { state } = useApp();
   const activeTab = state.tabs.find(t => t.id === state.activeTabId);
+  const blockStatus = state.viewMode === 'block' ? state.blockSelectionStatus : null;
 
   return (
     <div className="statusbar">
@@ -25,6 +26,20 @@ export default function StatusBar() {
         {activeTab?.isDraft && (
           <span>草稿</span>
         )}
+      </div>
+
+      <div className="statusbar-center">
+        {blockStatus ? (
+          <div className="statusbar-item statusbar-block-info" title={`${blockStatus.id} · ${blockStatus.summary}`}>
+            <span>当前块：{blockStatus.typeLabel}</span>
+            <span>{blockStatus.sourceLabel}</span>
+            <span>{blockStatus.characterCount} 字</span>
+          </div>
+        ) : state.viewMode === 'block' && activeTab ? (
+          <div className="statusbar-item">
+            <span>未选中块</span>
+          </div>
+        ) : null}
       </div>
 
       <div className="statusbar-right">

@@ -9,6 +9,7 @@ import { readTextFile } from '../../utils/fs';
 import { installAvailableUpdate, relaunchApplication } from '../../utils/update';
 import { findFirstMdFile, readFirstLevel } from '../../utils/workspace';
 import type { FileSettings, GeneralSettings } from '../../types';
+import { normalizeAppLanguage } from '../../i18n';
 
 function normalizeThemeColor(color: string | undefined): string {
   const value = color?.trim();
@@ -138,6 +139,10 @@ export function SettingsApplier() {
 
   // Sync general settings to AppContext
   useEffect(() => {
+    const language = normalizeAppLanguage(general.language);
+    document.documentElement.lang = language;
+    document.documentElement.setAttribute('data-locale', language);
+
     dispatch({
       type: 'UPDATE_SETTINGS',
       payload: {
@@ -146,7 +151,7 @@ export function SettingsApplier() {
         syncScroll: preview.syncScroll,
       },
     });
-  }, [dispatch, general.autoSave, files.autoSaveInterval, preview.syncScroll]);
+  }, [dispatch, general.autoSave, general.language, files.autoSaveInterval, preview.syncScroll]);
 
   // Keep recent files capped by the user-configured count.
   useEffect(() => {
@@ -157,17 +162,11 @@ export function SettingsApplier() {
     }
   }, [dispatch, general.recentFileCount, settingsReady, state.recentFiles]);
 
-  // Apply close-window behavior.
+  // Always quit the app when the main window is closed.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
 
     void getCurrentWindow().onCloseRequested(event => {
-      const closeBehavior = useSettingsStore.getState().general.closeBehavior;
-      if (closeBehavior === 'minimize') {
-        event.preventDefault();
-        void getCurrentWindow().minimize();
-        return;
-      }
       event.preventDefault();
       void invoke('exit_app');
     }).then(fn => {

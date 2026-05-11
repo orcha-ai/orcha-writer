@@ -14,10 +14,6 @@ import {
   Monitor,
   Settings,
   ScrollText,
-  PanelLeftClose,
-  PanelLeftOpen,
-  PanelRightClose,
-  PanelRightOpen,
 } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
@@ -66,6 +62,25 @@ function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
     && event.altKey === parts.includes('Alt')
     && event.shiftKey === parts.includes('Shift')
     && normalizeShortcutKey(event.key) === normalizeShortcutKey(key);
+}
+
+function isEditableElement(element: Element | null): boolean {
+  return element instanceof HTMLInputElement
+    || element instanceof HTMLTextAreaElement
+    || element instanceof HTMLSelectElement
+    || Boolean(element?.closest('[contenteditable="true"]'));
+}
+
+function isPrimarySelectAllShortcut(event: KeyboardEvent): boolean {
+  const isMac = navigator.platform.toUpperCase().includes('MAC');
+  const primaryPressed = isMac ? event.metaKey : event.ctrlKey;
+  const secondaryPressed = isMac ? event.ctrlKey : event.metaKey;
+
+  return primaryPressed
+    && !secondaryPressed
+    && !event.altKey
+    && !event.shiftKey
+    && normalizeShortcutKey(event.key) === 'A';
 }
 
 function selectedEditorText(): string {
@@ -670,6 +685,9 @@ ${htmlBody}
       case 'edit.replace':
         dispatch({ type: 'OPEN_SEARCH', payload: { replace: true } });
         break;
+      case 'view.block':
+        dispatch({ type: 'SET_VIEW_MODE', payload: 'block' });
+        break;
       case 'view.edit':
         dispatch({ type: 'SET_VIEW_MODE', payload: 'edit' });
         break;
@@ -811,7 +829,10 @@ ${htmlBody}
           void handlePaste();
           break;
         case 'select_all':
-          if (!selectAllEditorContent()) document.execCommand('selectAll');
+          selectAllEditorContent();
+          break;
+        case 'view_block':
+          dispatch({ type: 'SET_VIEW_MODE', payload: 'block' });
           break;
         case 'view_edit':
           dispatch({ type: 'SET_VIEW_MODE', payload: 'edit' });
@@ -1044,18 +1065,28 @@ ${htmlBody}
   // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const activeElement = document.activeElement instanceof Element ? document.activeElement : null;
+      const editableFocused = isEditableElement(activeElement);
+
+      if (isPrimarySelectAllShortcut(e)) {
+        if (editableFocused) return;
+        e.preventDefault();
+        selectAllEditorContent();
+        return;
+      }
+
       const matchedShortcut = shortcuts.find(shortcut =>
         shortcut.enabled && matchesShortcut(e, shortcut.keys)
       );
       if (matchedShortcut) {
+        if (matchedShortcut.id === 'select_all' && editableFocused) return;
         e.preventDefault();
         runShortcutAction(matchedShortcut.id);
         return;
       }
 
       if (e.key === 'Escape') {
-        const active = document.activeElement;
-        if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA') return;
+        if (editableFocused) return;
         navigate('/workspace');
       }
     };
@@ -1085,22 +1116,23 @@ ${htmlBody}
       <div className="toolbar">
         {/* Left section */}
         <div className="toolbar-section left">
-          <button className="toolbar-btn" onClick={handleNewFile} title="新建文件">
+          <button className="toolbar-btn" onClick={handleNewFile} data-tooltip="新建文件" aria-label="新建文件">
             <FilePlus size={16} />
           </button>
-          <button className="toolbar-btn" onClick={handleOpenFile} title="打开文件">
+          <button className="toolbar-btn" onClick={handleOpenFile} data-tooltip="打开文件" aria-label="打开文件">
             <FileText size={16} />
           </button>
-          <button className="toolbar-btn" onClick={handleOpenFolder} title="打开文件夹">
+          <button className="toolbar-btn" onClick={handleOpenFolder} data-tooltip="打开文件夹" aria-label="打开文件夹">
             <FolderOpen size={16} />
           </button>
-          <button className="toolbar-btn" onClick={handleSave} title="保存">
+          <button className="toolbar-btn" onClick={handleSave} data-tooltip="保存" aria-label="保存">
             <Save size={16} />
           </button>
           <button
             className={`toolbar-btn ${state.searchOpen ? 'active' : ''}`}
             onClick={() => dispatch({ type: 'OPEN_SEARCH' })}
-            title="搜索"
+            data-tooltip="搜索"
+            aria-label="搜索"
           >
             <Search size={16} />
           </button>
@@ -1112,17 +1144,28 @@ ${htmlBody}
         <div className="toolbar-section center">
           <div className="view-toggle">
             <button
+              className={`view-toggle-btn ${state.viewMode === 'block' ? 'active' : ''}`}
+              onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'block' })}
+              data-tooltip="块编辑模式"
+              aria-label="块编辑模式"
+            >
+              <ScrollText size={14} />
+              <span>块编辑</span>
+            </button>
+            <button
               className={`view-toggle-btn ${state.viewMode === 'edit' ? 'active' : ''}`}
               onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'edit' })}
-              title="编辑模式"
+              data-tooltip="MD 源码模式"
+              aria-label="MD 源码模式"
             >
               <Edit3 size={14} />
-              <span>编辑</span>
+              <span>MD 源码</span>
             </button>
             <button
               className={`view-toggle-btn ${state.viewMode === 'preview' ? 'active' : ''}`}
               onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'preview' })}
-              title="预览模式"
+              data-tooltip="预览模式"
+              aria-label="预览模式"
             >
               <Eye size={14} />
               <span>预览</span>
@@ -1130,7 +1173,8 @@ ${htmlBody}
             <button
               className={`view-toggle-btn ${state.viewMode === 'split' ? 'active' : ''}`}
               onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'split' })}
-              title="双栏模式"
+              data-tooltip="双栏模式"
+              aria-label="双栏模式"
             >
               <Columns size={14} />
               <span>双栏</span>
@@ -1146,21 +1190,24 @@ ${htmlBody}
             <button
               className={`theme-toggle-btn ${state.theme === 'light' ? 'active' : ''}`}
               onClick={() => setThemeMode('light')}
-              title="浅色主题"
+              data-tooltip="浅色主题"
+              aria-label="浅色主题"
             >
               <Sun size={13} />
             </button>
             <button
               className={`theme-toggle-btn ${state.theme === 'dark' ? 'active' : ''}`}
               onClick={() => setThemeMode('dark')}
-              title="深色主题"
+              data-tooltip="深色主题"
+              aria-label="深色主题"
             >
               <Moon size={13} />
             </button>
             <button
               className={`theme-toggle-btn ${state.theme === 'system' ? 'active' : ''}`}
               onClick={() => setThemeMode('system')}
-              title="跟随系统"
+              data-tooltip="跟随系统"
+              aria-label="跟随系统"
             >
               <Monitor size={13} />
             </button>
@@ -1171,7 +1218,8 @@ ${htmlBody}
           <button
             className={`toolbar-btn ${state.editorSettings.syncScroll ? 'active' : ''}`}
             onClick={toggleSyncScroll}
-            title="同屏滚动"
+            data-tooltip="同屏滚动"
+            aria-label="同屏滚动"
           >
             <ScrollText size={16} />
           </button>
@@ -1179,26 +1227,12 @@ ${htmlBody}
           <button
             className="toolbar-btn"
             onClick={() => navigate('/settings/general')}
-            title="设置"
+            data-tooltip="设置"
+            aria-label="设置"
           >
             <Settings size={16} />
           </button>
 
-          <button
-            className="toolbar-btn"
-            onClick={toggleSidebar}
-            title={state.sidebarVisible ? '隐藏工作区' : '显示工作区'}
-          >
-            {state.sidebarVisible ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
-          </button>
-
-          <button
-            className="toolbar-btn"
-            onClick={toggleOutline}
-            title={state.outlineVisible ? '隐藏大纲' : '显示大纲'}
-          >
-            {state.outlineVisible ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-          </button>
         </div>
       </div>
 

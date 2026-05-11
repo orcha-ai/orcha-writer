@@ -3,8 +3,11 @@ import { AppProvider, useApp } from '../../AppContext';
 import { ScrollSyncProvider } from '../../components/Editor';
 import { SettingsApplier } from './SettingsApplier';
 import { ConfigProvider, theme } from 'antd';
+import zhCN from 'antd/locale/zh_CN';
+import enUS from 'antd/locale/en_US';
 import { useState, useMemo, useEffect } from 'react';
 import { useSettingsStore } from '../../store';
+import { isEnglishLanguage } from '../../i18n';
 
 function normalizeThemeColor(color: string | undefined): string {
   const value = color?.trim();
@@ -14,6 +17,7 @@ function normalizeThemeColor(color: string | undefined): string {
 function AntThemeProvider({ children }: { children: React.ReactNode }) {
   const { state } = useApp();
   const themeColor = useSettingsStore(s => s.appearance.themeColor);
+  const language = useSettingsStore(s => s.general.language);
   const [systemDark, setSystemDark] = useState(
     window.matchMedia('(prefers-color-scheme: dark)').matches
   );
@@ -32,6 +36,7 @@ function AntThemeProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <ConfigProvider
+      locale={isEnglishLanguage(language) ? enUS : zhCN}
       theme={{
         algorithm: isDark ? [theme.darkAlgorithm] : [theme.defaultAlgorithm],
         token: {

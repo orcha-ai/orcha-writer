@@ -13,8 +13,21 @@ import {
 import { readConfig, writeConfig } from '../config';
 import { normalizePreviewThemeId } from '../previewThemes';
 import { normalizePreviewCodeThemeId } from '../codeThemes';
+import { normalizeAppLanguage } from '../i18n';
 
 const EXPORT_CONFIG_VERSION = '1.0.0';
+
+function normalizeGeneralSettings(value: unknown): GeneralSettings {
+  const raw = value as Partial<GeneralSettings>;
+  return {
+    language: normalizeAppLanguage(raw?.language),
+    startupOpen: raw?.startupOpen ?? defaultGeneralSettings.startupOpen,
+    autoSave: raw?.autoSave ?? defaultGeneralSettings.autoSave,
+    autoUpdate: raw?.autoUpdate ?? defaultGeneralSettings.autoUpdate,
+    recentFileCount: raw?.recentFileCount ?? defaultGeneralSettings.recentFileCount,
+    lastViewMode: raw?.lastViewMode ?? defaultGeneralSettings.lastViewMode,
+  };
+}
 
 function wrapExportConfig(settings: ExportSettings): ExportConfig {
   return {
@@ -166,7 +179,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   updateAdvanced: (partial) => set((s) => ({ advanced: { ...s.advanced, ...partial } })),
 
   loadAll: async () => {
-    const general = await readConfig<GeneralSettings>('app', defaultGeneralSettings);
+    const general = await readConfig<unknown>('app', defaultGeneralSettings);
     const appearance = await readConfig<AppearanceSettings>('appearance', defaultAppearanceSettings);
     const editor = await readConfig<EditorSettingsV2>('editor', defaultEditorSettingsV2);
     const markdown = await readConfig<unknown>('markdown', defaultMarkdownSettings);
@@ -177,7 +190,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const advanced = await readConfig<AdvancedSettings>('advanced', defaultAdvancedSettings);
 
     set({
-      general: { ...defaultGeneralSettings, ...general },
+      general: normalizeGeneralSettings(general),
       appearance: { ...defaultAppearanceSettings, ...appearance },
       editor: normalizeEditorSettings(editor),
       markdown: normalizeMarkdownSettings(markdown),

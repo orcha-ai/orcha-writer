@@ -16,56 +16,71 @@ import {
   InfoCircleOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
+import { useSettingsStore } from '../../store';
+import { getLocaleText } from '../../i18n';
 
 const { Title } = Typography;
 
-const settingsMenuItems = [
-  { key: '/settings/general', icon: <SettingOutlined />, label: '通用' },
-  { key: '/settings/appearance', icon: <LayoutOutlined />, label: '外观' },
-  { key: '/settings/editor', icon: <EditOutlined />, label: '编辑器' },
-  { key: '/settings/markdown', icon: <FontSizeOutlined />, label: 'Markdown' },
-  { key: '/settings/preview', icon: <EyeOutlined />, label: '预览' },
-  { key: '/settings/files', icon: <FolderOpenOutlined />, label: '文件与工作区' },
-  { key: '/settings/export', icon: <ExportOutlined />, label: '导出' },
-  { key: '/settings/ai/models', icon: <RobotOutlined />, label: 'AI 模型' },
-  { key: '/settings/ai/agents', icon: <RobotOutlined />, label: '智能体' },
-  { key: '/settings/shortcuts', icon: <KeyOutlined />, label: '快捷键' },
-  { key: '/settings/security', icon: <SafetyOutlined />, label: '安全与隐私' },
-  { key: '/settings/advanced', icon: <ExperimentOutlined />, label: '高级' },
-  { key: '/settings/about', icon: <InfoCircleOutlined />, label: '关于' },
-];
+const settingsMenuConfig = [
+  { key: '/settings/general', icon: <SettingOutlined />, labelKey: 'general' },
+  { key: '/settings/appearance', icon: <LayoutOutlined />, labelKey: 'appearance' },
+  { key: '/settings/editor', icon: <EditOutlined />, labelKey: 'editor' },
+  { key: '/settings/markdown', icon: <FontSizeOutlined />, labelKey: 'markdown' },
+  { key: '/settings/preview', icon: <EyeOutlined />, labelKey: 'preview' },
+  { key: '/settings/files', icon: <FolderOpenOutlined />, labelKey: 'files' },
+  { key: '/settings/export', icon: <ExportOutlined />, labelKey: 'export' },
+  { key: '/settings/ai/models', icon: <RobotOutlined />, labelKey: 'models' },
+  { key: '/settings/ai/agents', icon: <RobotOutlined />, labelKey: 'agents' },
+  { key: '/settings/shortcuts', icon: <KeyOutlined />, labelKey: 'shortcuts' },
+  { key: '/settings/security', icon: <SafetyOutlined />, labelKey: 'security' },
+  { key: '/settings/advanced', icon: <ExperimentOutlined />, labelKey: 'advanced' },
+  { key: '/settings/about', icon: <InfoCircleOutlined />, labelKey: 'about' },
+] as const;
 
-const pageTitleMap: Record<string, string> = {
-  general: '通用',
-  appearance: '外观',
-  editor: '编辑器',
-  markdown: 'Markdown',
-  preview: '预览',
-  files: '文件与工作区',
-  export: '导出',
-  models: 'AI 模型',
-  agents: '智能体',
-  shortcuts: '快捷键',
-  security: '安全与隐私',
-  advanced: '高级',
-  about: '关于',
+type SettingsMenuLabelKey = typeof settingsMenuConfig[number]['labelKey'];
+
+const pageTitleKeyMap: Record<string, SettingsMenuLabelKey> = {
+  general: 'general',
+  appearance: 'appearance',
+  editor: 'editor',
+  markdown: 'markdown',
+  preview: 'preview',
+  files: 'files',
+  export: 'export',
+  models: 'models',
+  agents: 'agents',
+  shortcuts: 'shortcuts',
+  security: 'security',
+  advanced: 'advanced',
+  about: 'about',
 };
 
 export function SettingsLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const language = useSettingsStore(s => s.general.language);
+  const text = getLocaleText(language);
+
+  const settingsMenuItems = useMemo(() => (
+    settingsMenuConfig.map(item => ({
+      key: item.key,
+      icon: item.icon,
+      label: text.settings.menu[item.labelKey],
+    }))
+  ), [text]);
 
   const selectedKey = useMemo(() => {
     const path = location.pathname;
-    if (settingsMenuItems.some((item) => item.key === path)) return path;
+    if (settingsMenuConfig.some((item) => item.key === path)) return path;
     return '/settings/general';
   }, [location.pathname]);
 
   const pageTitle = useMemo(() => {
     const segments = location.pathname.split('/').filter(Boolean);
     const lastSegment = segments[segments.length - 1] || 'general';
-    return pageTitleMap[lastSegment] || '设置';
-  }, [location.pathname]);
+    const titleKey = pageTitleKeyMap[lastSegment];
+    return titleKey ? text.settings.menu[titleKey] : text.settings.menu.settings;
+  }, [location.pathname, text]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -98,7 +113,7 @@ export function SettingsLayout() {
             onClick={() => navigate('/workspace')}
           >
             <ArrowLeftOutlined style={{ fontSize: 12 }} />
-            返回工作区
+            {text.settings.menu.backToWorkspace}
           </div>
         </div>
 

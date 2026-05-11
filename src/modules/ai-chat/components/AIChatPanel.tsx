@@ -75,6 +75,13 @@ function getErrorMessage(error: unknown): string {
 const EMPTY_MESSAGES: AIMessage[] = [];
 const CHAT_SCROLL_BOTTOM_THRESHOLD = 72;
 
+interface BlockAIEventDetail {
+  prompt: string;
+  commandId?: string;
+  resultMode?: AICommandPreset['resultMode'];
+  selection?: EditorSelection | null;
+}
+
 function isNearScrollBottom(element: HTMLElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= CHAT_SCROLL_BOTTOM_THRESHOLD;
 }
@@ -476,6 +483,26 @@ export function AIChatPanel({
     model?.thinkingSupported,
     sendWithContext,
   ]);
+
+  useEffect(() => {
+    const handleBlockAI = (event: Event) => {
+      const detail = (event as CustomEvent<BlockAIEventDetail>).detail;
+      if (!detail?.prompt) return;
+      if (detail.selection?.range) {
+        editorBridge.restoreSelection(detail.selection.range);
+      }
+      setCollapsed(false);
+      setSelection(null);
+      void sendMessage(detail.prompt, detail.commandId, {
+        strategy: detail.selection?.text.trim() ? 'selection_with_cursor' : 'current_document',
+        resultMode: detail.resultMode,
+        selection: detail.selection,
+      });
+    };
+
+    window.addEventListener('orcha-block-ai', handleBlockAI);
+    return () => window.removeEventListener('orcha-block-ai', handleBlockAI);
+  }, [editorBridge, sendMessage]);
 
   const regenerateFrom = useCallback((assistantMessage: AIMessage) => {
     if (!conversation) return;

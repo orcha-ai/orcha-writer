@@ -3,10 +3,12 @@ import { SaveOutlined } from '@ant-design/icons';
 import { useSettingsStore } from '../../../store';
 import type { GeneralSettings } from '../../../types';
 import { useEffect } from 'react';
+import { APP_LANGUAGES, getLocaleText } from '../../../i18n';
 
 export default function GeneralPage() {
   const { general, updateGeneral, saveAll } = useSettingsStore();
   const [form] = Form.useForm();
+  const text = getLocaleText(general.language);
 
   useEffect(() => {
     form.setFieldsValue(general);
@@ -16,7 +18,7 @@ export default function GeneralPage() {
     const values = await form.validateFields() as Partial<GeneralSettings>;
     updateGeneral(values);
     await saveAll();
-    message.success('设置已保存');
+    message.success(text.common.saved);
   };
 
   return (
@@ -29,48 +31,51 @@ export default function GeneralPage() {
           wrapperCol={{ span: 12 }}
           initialValues={general}
         >
-          <Form.Item label="启动时打开" name="startupOpen">
+          <Form.Item label={text.settings.general.language} name="language">
+            <Select style={{ width: 200 }}>
+              {APP_LANGUAGES.map((language) => (
+                <Select.Option key={language.value} value={language.value}>
+                  {language.label}
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Form.Item label={text.settings.general.startupOpen} name="startupOpen">
             <Select style={{ width: 240 }}>
-              <Select.Option value="last-workspace">最近工作区</Select.Option>
-              <Select.Option value="blank">空白页</Select.Option>
-              <Select.Option value="specific-workspace">指定工作区</Select.Option>
+              <Select.Option value="last-workspace">{text.settings.general.startupLastWorkspace}</Select.Option>
+              <Select.Option value="blank">{text.settings.general.startupBlank}</Select.Option>
+              <Select.Option value="specific-workspace">{text.settings.general.startupSpecificWorkspace}</Select.Option>
             </Select>
           </Form.Item>
 
           <Form.Item
-            label="自动保存"
+            label={text.settings.general.autoSave}
             name="autoSave"
             valuePropName="checked"
-            tooltip="定期保存已打开文件；未命名草稿会保存到本地草稿缓存"
+            tooltip={text.settings.general.autoSaveTooltip}
           >
             <Switch />
           </Form.Item>
 
           <Form.Item
-            label="自动检查更新"
+            label={text.settings.general.autoUpdate}
             name="autoUpdate"
             valuePropName="checked"
-            tooltip="启动时自动检查并尝试下载安装；更新安装后提示重启，自动通道不可用时回退到发布页"
+            tooltip={text.settings.general.autoUpdateTooltip}
           >
             <Switch />
           </Form.Item>
 
-          <Form.Item label="最近文件数量" name="recentFileCount">
+          <Form.Item label={text.settings.general.recentFileCount} name="recentFileCount">
             <InputNumber min={1} max={50} style={{ width: 120 }} />
-          </Form.Item>
-
-          <Form.Item label="关闭窗口行为" name="closeBehavior">
-            <Select style={{ width: 200 }}>
-              <Select.Option value="exit">退出应用</Select.Option>
-              <Select.Option value="minimize">最小化窗口</Select.Option>
-            </Select>
           </Form.Item>
         </Form>
       </Card>
 
       <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
         <Button type="primary" icon={<SaveOutlined />} onClick={handleSave}>
-          保存设置
+          {text.common.saveSettings}
         </Button>
       </div>
     </div>

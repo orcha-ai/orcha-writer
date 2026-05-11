@@ -7,7 +7,9 @@ import Outline from './components/Outline';
 import StatusBar from './components/StatusBar';
 import SearchPanel from './components/SearchPanel';
 import CommandPalette from './components/CommandPalette';
+import GlobalContextMenu from './components/GlobalContextMenu';
 import { AIChatPanel, createCodeMirrorEditorBridge } from './modules/ai-chat';
+import { BlockEditor } from './modules/block-editor';
 import { useApp } from './AppContext';
 import { writeTextFile } from './utils/fs';
 import { dirname } from './utils/markdownImages';
@@ -62,8 +64,9 @@ export default function WorkspaceContent() {
           <div style={{ position: 'relative', flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
             <SearchPanel />
             <div className="editor-container">
+              <BlockEditor />
               <Editor />
-              <div className="resize-handle" />
+              <div className={`resize-handle ${state.viewMode === 'split' ? '' : 'hidden'}`} />
               <Preview />
             </div>
           </div>
@@ -81,6 +84,7 @@ export default function WorkspaceContent() {
       </div>
       <StatusBar />
       <CommandPalette />
+      <GlobalContextMenu />
     </>
   );
 }

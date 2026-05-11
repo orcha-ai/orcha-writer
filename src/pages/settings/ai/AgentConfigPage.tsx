@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
-import { Card, List, Button, Space, Switch, Popconfirm, Tag, Typography, Modal, Form, Input, Select, Checkbox, message } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
+import { Card, List, Button, Space, Switch, Popconfirm, Tag, Typography, Drawer, Form, Input, Select, Checkbox, message } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useAiStore } from '../../../store';
-import type { AgentCapability, AgentConfig } from '../../../types';
+import type { AgentCapability, AgentConfig, AiModelConfig, AiProviderConfig } from '../../../types';
 
 const { Text } = Typography;
 
@@ -15,16 +15,37 @@ const CAPABILITIES: AgentCapability[] = [
 ];
 
 type AgentFormValues = Omit<AgentConfig, 'id' | 'capabilities' | 'modelConfigId'> & {
+  providerId?: string;
   modelConfigId?: string;
   capabilityCodes: string[];
 };
 
-function toFormValues(agent: AgentConfig | null, fallbackModelId: string): AgentFormValues {
+function providerTypeLabel(type: AiProviderConfig['type']): string {
+  const labels: Record<AiProviderConfig['type'], string> = {
+    'openai-compatible': 'OpenAI Compatible',
+    anthropic: 'Anthropic',
+    gemini: 'Gemini',
+    ollama: 'Ollama',
+    custom: 'Custom',
+  };
+  return labels[type] || type;
+}
+
+function modelDisplayName(model: AiModelConfig): string {
+  return model.name === model.model ? model.model : `${model.name} (${model.model})`;
+}
+
+function toFormValues(agent: AgentConfig | null, fallbackModelId: string, models: AiModelConfig[], providers: AiProviderConfig[]): AgentFormValues {
+  const selectedModelId = agent?.modelConfigId || fallbackModelId || undefined;
+  const selectedModel = selectedModelId ? models.find((model) => model.id === selectedModelId) : undefined;
+  const fallbackProviderId = selectedModel?.providerId || providers[0]?.id || undefined;
+
   return {
     name: agent?.name || '',
     icon: agent?.icon || '',
     description: agent?.description || '',
-      modelConfigId: agent?.modelConfigId || fallbackModelId || undefined,
+    providerId: fallbackProviderId,
+    modelConfigId: selectedModelId,
     systemPrompt: agent?.systemPrompt || '',
     enabled: agent?.enabled ?? true,
     accessScope: agent?.accessScope || 'current-document',
@@ -33,15 +54,24 @@ function toFormValues(agent: AgentConfig | null, fallbackModelId: string): Agent
 }
 
 export default function AgentConfigPage() {
-  const { agents, models, addAgent, updateAgent, toggleAgent, removeAgent } = useAiStore();
+  const { agents, providers, models, addAgent, updateAgent, toggleAgent, removeAgent } = useAiStore();
   const [form] = Form.useForm<AgentFormValues>();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<AgentConfig | null>(null);
+  const providerId = Form.useWatch('providerId', form);
+
+  const providerById = useMemo(() => new Map(providers.map((provider) => [provider.id, provider])), [providers]);
+  const modelById = useMemo(() => new Map(models.map((model) => [model.id, model])), [models]);
+  const modelsForSelectedProvider = useMemo(
+    () => models.filter((model) => model.providerId === providerId),
+    [models, providerId],
+  );
 
   useEffect(() => {
     if (!open) return;
-    form.setFieldsValue(toFormValues(editing, models[0]?.id || ''));
-  }, [editing, form, models, open]);
+    const fallbackModel = models.find((model) => model.enabled) || models[0];
+    form.setFieldsValue(toFormValues(editing, fallbackModel?.id || '', models, providers));
+  }, [editing, form, models, open, providers]);
 
   const handleSubmit = async () => {
     const values = await form.validateFields();
@@ -68,6 +98,12 @@ export default function AgentConfigPage() {
       message.success('智能体已创建');
     }
     setOpen(false);
+  };
+
+  const handleProviderChange = (nextProviderId: string) => {
+    const nextModel = models.find((model) => model.providerId === nextProviderId && model.enabled) ||
+      models.find((model) => model.providerId === nextProviderId);
+    form.setFieldValue('modelConfigId', nextModel?.id);
   };
 
   return (
@@ -118,7 +154,15 @@ export default function AgentConfigPage() {
                       {agent.icon}
                       {agent.name}
                       <Tag>{agent.accessScope}</Tag>
-                      {agent.modelConfigId && <Tag>{models.find((model) => model.id === agent.modelConfigId)?.name || '模型已删除'}</Tag>}
+                      {agent.modelConfigId && (() => {
+                        const model = modelById.get(agent.modelConfigId);
+                        const provider = model ? providerById.get(model.providerId) : undefined;
+                        return (
+                          <Tag>
+                            {model ? `${provider?.name || '厂商已删除'} / ${modelDisplayName(model)}` : '模型已删除'}
+                          </Tag>
+                        );
+                      })()}
                       {!agent.enabled && <Tag color="default">已禁用</Tag>}
                     </Space>
                   }
@@ -130,14 +174,17 @@ export default function AgentConfigPage() {
         )}
       </Card>
 
-      <Modal
+      <Drawer
         title={editing ? '编辑智能体' : '新建智能体'}
         open={open}
-        onOk={handleSubmit}
-        onCancel={() => setOpen(false)}
-        okText="保存"
-        cancelText="取消"
-        width={640}
+        onClose={() => setOpen(false)}
+        width={560}
+        extra={
+          <Space>
+            <Button onClick={() => setOpen(false)}>取消</Button>
+            <Button type="primary" onClick={handleSubmit}>保存</Button>
+          </Space>
+        }
       >
         <Form form={form} layout="vertical">
           <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入智能体名称' }]}>
@@ -149,11 +196,54 @@ export default function AgentConfigPage() {
           <Form.Item label="描述" name="description">
             <Input placeholder="用于说明该智能体的主要用途" />
           </Form.Item>
-          <Form.Item label="模型配置" name="modelConfigId">
-            <Select allowClear disabled={models.length === 0} placeholder={models.length === 0 ? '暂无模型配置' : '不指定则使用第一个可用模型'}>
-              {models.map((model) => (
-                <Select.Option key={model.id} value={model.id}>
-                  {model.name} ({model.model})
+          <Form.Item
+            label="大模型厂商"
+            name="providerId"
+            rules={[{ required: true, message: '请选择大模型厂商' }]}
+            extra="先选择厂商，再从该厂商下选择具体模型配置。"
+          >
+            <Select
+              showSearch
+              disabled={providers.length === 0}
+              placeholder={providers.length === 0 ? '暂无大模型厂商，请先到 AI 模型页添加供应商' : '请选择大模型厂商'}
+              optionFilterProp="label"
+              onChange={handleProviderChange}
+            >
+              {providers.map((provider) => (
+                <Select.Option key={provider.id} value={provider.id} label={`${provider.name} ${providerTypeLabel(provider.type)}`}>
+                  <Space>
+                    <span>{provider.name}</span>
+                    <Tag>{providerTypeLabel(provider.type)}</Tag>
+                    {!provider.enabled && <Tag color="default">已禁用</Tag>}
+                  </Space>
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Form.Item
+            label="模型"
+            name="modelConfigId"
+            rules={[{ required: true, message: '请选择模型' }]}
+          >
+            <Select
+              showSearch
+              disabled={!providerId || modelsForSelectedProvider.length === 0}
+              placeholder={
+                !providerId
+                  ? '请先选择大模型厂商'
+                  : modelsForSelectedProvider.length === 0
+                    ? '该厂商暂无模型配置'
+                    : '请选择模型'
+              }
+              optionFilterProp="label"
+            >
+              {modelsForSelectedProvider.map((model) => (
+                <Select.Option key={model.id} value={model.id} label={`${model.name} ${model.model}`}>
+                  <Space>
+                    <span>{modelDisplayName(model)}</span>
+                    {model.thinkingSupported && <Tag color="blue">深度思考</Tag>}
+                    {!model.enabled && <Tag color="default">已禁用</Tag>}
+                  </Space>
                 </Select.Option>
               ))}
             </Select>
@@ -180,7 +270,7 @@ export default function AgentConfigPage() {
             <Switch />
           </Form.Item>
         </Form>
-      </Modal>
+      </Drawer>
     </div>
   );
 }

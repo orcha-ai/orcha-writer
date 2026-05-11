@@ -1,7 +1,7 @@
 import { createContext, useContext, useReducer, useEffect, useState, useCallback } from 'react';
 import type {
   AppState, TabFile, FileNode, ViewMode, ThemeMode,
-  RecentFile, EditorSettings, AppearanceSettings
+  RecentFile, EditorSettings, AppearanceSettings, BlockSelectionStatus
 } from './types';
 import { defaultAppearanceSettings, defaultEditorSettings } from './types';
 import { readConfig, writeConfig } from './config';
@@ -25,6 +25,8 @@ type AppAction =
   | { type: 'MARK_TAB_SAVED'; payload: string }
   | { type: 'MARK_TAB_SAVED_IF_CONTENT'; payload: { id: string; content: string } }
   | { type: 'MARK_TAB_UNSAVED'; payload: string }
+  | { type: 'RENAME_TAB_TITLE'; payload: { id: string; name: string } }
+  | { type: 'RENAME_PATH'; payload: { oldPath: string; newPath: string; name: string } }
   | { type: 'SET_WORKSPACE'; payload: { path: string; tree: FileNode[] } }
   | { type: 'SET_RECENT_FILES'; payload: RecentFile[] }
   | { type: 'ADD_RECENT_FILE'; payload: RecentFile }
@@ -40,7 +42,8 @@ type AppAction =
   | { type: 'TOGGLE_COMMAND_PALETTE' }
   | { type: 'SET_COMMAND_PALETTE_OPEN'; payload: boolean }
   | { type: 'TOGGLE_SETTINGS' }
-  | { type: 'UPDATE_SETTINGS'; payload: Partial<EditorSettings> };
+  | { type: 'UPDATE_SETTINGS'; payload: Partial<EditorSettings> }
+  | { type: 'SET_BLOCK_SELECTION_STATUS'; payload: BlockSelectionStatus | null };
 
 const initialState: AppState = {
   tabs: [],
@@ -62,7 +65,30 @@ const initialState: AppState = {
   commandPaletteOpen: false,
   settingsOpen: false,
   editorSettings: defaultEditorSettings,
+  blockSelectionStatus: null,
 };
+
+function rebasePath(path: string, oldPath: string, newPath: string): string {
+  if (path === oldPath) return newPath;
+  if (path.startsWith(`${oldPath}/`) || path.startsWith(`${oldPath}\\`)) {
+    return `${newPath}${path.slice(oldPath.length)}`;
+  }
+  return path;
+}
+
+function rebaseFileTree(nodes: FileNode[], oldPath: string, newPath: string, name: string): FileNode[] {
+  return nodes.map(node => {
+    const nextNode: FileNode = {
+      ...node,
+      name: node.path === oldPath ? name : node.name,
+      path: rebasePath(node.path, oldPath, newPath),
+    };
+    if (node.children) {
+      nextNode.children = rebaseFileTree(node.children, oldPath, newPath, name);
+    }
+    return nextNode;
+  });
+}
 
 function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
@@ -181,6 +207,37 @@ function appReducer(state: AppState, action: AppAction): AppState {
           t.id === action.payload ? { ...t, saved: false } : t
         ),
       };
+    case 'RENAME_TAB_TITLE':
+      return {
+        ...state,
+        tabs: state.tabs.map(tab =>
+          tab.id === action.payload.id ? { ...tab, name: action.payload.name } : tab
+        ),
+      };
+    case 'RENAME_PATH': {
+      const { oldPath, newPath, name } = action.payload;
+      return {
+        ...state,
+        tabs: state.tabs.map(tab => {
+          const nextPath = rebasePath(tab.path, oldPath, newPath);
+          if (nextPath === tab.path) return tab;
+          return {
+            ...tab,
+            id: rebasePath(tab.id, oldPath, newPath),
+            name: tab.path === oldPath ? name : tab.name,
+            path: nextPath,
+          };
+        }),
+        activeTabId: state.activeTabId ? rebasePath(state.activeTabId, oldPath, newPath) : null,
+        recentFiles: state.recentFiles.map(file => {
+          const nextPath = rebasePath(file.path, oldPath, newPath);
+          return nextPath === file.path
+            ? file
+            : { ...file, path: nextPath, name: file.path === oldPath ? name : file.name };
+        }),
+        workspaceTree: rebaseFileTree(state.workspaceTree, oldPath, newPath, name),
+      };
+    }
     case 'SET_WORKSPACE':
       return { ...state, workspacePath: action.payload.path, workspaceTree: action.payload.tree };
     case 'SET_RECENT_FILES':
@@ -223,6 +280,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, settingsOpen: !state.settingsOpen };
     case 'UPDATE_SETTINGS':
       return { ...state, editorSettings: { ...state.editorSettings, ...action.payload } };
+    case 'SET_BLOCK_SELECTION_STATUS':
+      return { ...state, blockSelectionStatus: action.payload };
     default:
       return state;
   }

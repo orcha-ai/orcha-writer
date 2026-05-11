@@ -1,12 +1,13 @@
 import { useApp } from '../AppContext';
 import { useSettingsStore } from '../store';
-import { FolderOpen, Folder, File, ChevronRight, ChevronDown, FilePlus, Trash2, Pencil } from 'lucide-react';
+import { FolderOpen, Folder, File, ChevronRight, ChevronDown, FilePlus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import type { CSSProperties, MouseEvent } from 'react';
+import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readTextFile, rename, remove } from '../utils/fs';
 import { buildHidePatterns, findFirstMdFile, readFirstLevel } from '../utils/workspace';
 import type { FileNode, RecentFile } from '../types';
+import { getLocaleText, normalizeAppLanguage } from '../i18n';
 
 const SIDEBAR_MIN_WIDTH = 180;
 const SIDEBAR_MAX_WIDTH = 420;
@@ -24,6 +25,7 @@ interface TreeHandlers {
   renameValue: string;
   onRenameChange: (value: string) => void;
   onRenameSubmit: () => void | Promise<void>;
+  onRenameCancel: () => void;
   onRename: (item: FileNode) => void | Promise<void>;
   onDelete: (item: FileNode) => void | Promise<void>;
 }
@@ -31,6 +33,7 @@ interface TreeHandlers {
 interface WorkspaceTreeProps extends TreeHandlers {
   tree: FileNode[];
   openFolder: () => void | Promise<void>;
+  text: ReturnType<typeof getLocaleText>;
 }
 
 interface TreeNodeProps extends TreeHandlers {
@@ -43,9 +46,24 @@ function clampSidebarWidth(width: unknown): number {
   return Math.min(Math.max(Math.round(width), SIDEBAR_MIN_WIDTH), SIDEBAR_MAX_WIDTH);
 }
 
+function renamedPath(path: string, nextName: string): string {
+  const separatorIndex = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  return separatorIndex >= 0 ? `${path.slice(0, separatorIndex + 1)}${nextName}` : nextName;
+}
+
+function rebasePath(path: string, oldPath: string, newPath: string): string {
+  if (path === oldPath) return newPath;
+  if (path.startsWith(`${oldPath}/`) || path.startsWith(`${oldPath}\\`)) {
+    return `${newPath}${path.slice(oldPath.length)}`;
+  }
+  return path;
+}
+
 export default function Sidebar() {
   const { state, dispatch } = useApp();
-  const { files, appearance, updateAppearance, saveAll } = useSettingsStore();
+  const { files, appearance, general, updateAppearance, saveAll } = useSettingsStore();
+  const text = getLocaleText(general.language);
+  const appLanguage = normalizeAppLanguage(general.language);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: FileNode | null } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -64,6 +82,9 @@ export default function Sidebar() {
   const hidePatternsRef = useRef(hidePatterns);
   const widthRef = useRef(sidebarWidth);
   const resizeStartRef = useRef({ x: 0, width: sidebarWidth });
+  const renameInFlightRef = useRef(false);
+  const renameCancelledRef = useRef(false);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => { expandedRef.current = expandedFolders; }, [expandedFolders]);
   useEffect(() => { treeRef.current = state.workspaceTree; }, [state.workspaceTree]);
@@ -82,6 +103,12 @@ export default function Sidebar() {
     updateAppearance({ sidebarWidth: nextWidth });
     await saveAll();
   }, [saveAll, updateAppearance]);
+
+  const setSidebarVisible = useCallback((visible: boolean) => {
+    dispatch({ type: 'SET_SIDEBAR_VISIBLE', payload: visible });
+    updateAppearance({ showSidebar: visible });
+    void saveAll();
+  }, [dispatch, saveAll, updateAppearance]);
 
   const handleResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!state.sidebarVisible) return;
@@ -169,7 +196,7 @@ export default function Sidebar() {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: '选择工作区文件夹',
+        title: text.sidebar.chooseWorkspaceFolder,
       });
       if (!selected) return;
       const path = Array.isArray(selected) ? selected[0] : selected;
@@ -189,7 +216,7 @@ export default function Sidebar() {
     } catch (e) {
       console.error('Failed to open folder:', e);
     }
-  }, [dispatch, hidePatterns]);
+  }, [dispatch, hidePatterns, text.sidebar.chooseWorkspaceFolder]);
 
   const openFile = useCallback(async (node: FileNode) => {
     if (node.type !== 'file') return;
@@ -198,7 +225,7 @@ export default function Sidebar() {
     const supportedExts = ['md', 'markdown', 'mdown', 'mkd', 'txt', 'text'];
 
     if (!supportedExts.includes(ext)) {
-      dispatch({ type: 'OPEN_TAB', payload: { id, name: node.name, path: node.path, content: `# ${node.name}\n\n暂不支持打开 .${ext} 格式文件\n` } });
+      dispatch({ type: 'OPEN_TAB', payload: { id, name: node.name, path: node.path, content: `# ${node.name}\n\n${text.sidebar.unsupportedFile(ext)}\n` } });
       return;
     }
 
@@ -209,7 +236,7 @@ export default function Sidebar() {
     } catch {
       dispatch({ type: 'OPEN_TAB', payload: { id, name: node.name, path: node.path, content: `# ${node.name.replace(/\.\w+$/, '')}\n\n` } });
     }
-  }, [dispatch]);
+  }, [dispatch, text.sidebar]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, item: FileNode | null) => {
     e.preventDefault();
@@ -218,37 +245,89 @@ export default function Sidebar() {
 
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
+  useEffect(() => {
+    if (!contextMenu) return undefined;
+
+    const handlePointerDown = (event: globalThis.MouseEvent) => {
+      const target = event.target instanceof Node ? event.target : null;
+      if (target && contextMenuRef.current?.contains(target)) return;
+      closeContextMenu();
+    };
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') closeContextMenu();
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('scroll', closeContextMenu, true);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('scroll', closeContextMenu, true);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [closeContextMenu, contextMenu]);
+
   const handleRename = useCallback(async (item: FileNode) => {
+    renameInFlightRef.current = false;
+    renameCancelledRef.current = false;
     setRenaming(item.path);
     setRenameValue(item.name);
     setContextMenu(null);
   }, []);
 
+  const handleRenameCancel = useCallback(() => {
+    renameInFlightRef.current = false;
+    renameCancelledRef.current = true;
+    setRenaming(null);
+    setRenameValue('');
+  }, []);
+
   const handleRenameSubmit = useCallback(async () => {
-    if (!renaming || !renameValue) return;
-    const dirPath = renaming.substring(0, renaming.lastIndexOf('/'));
-    const newPath = dirPath ? `${dirPath}/${renameValue}` : renameValue;
+    if (!renaming || renameInFlightRef.current) return;
+    if (renameCancelledRef.current) {
+      renameCancelledRef.current = false;
+      return;
+    }
+    const oldPath = renaming;
+    const nextName = renameValue.trim();
+    if (!nextName) {
+      handleRenameCancel();
+      return;
+    }
+
+    const newPath = renamedPath(oldPath, nextName);
+    if (newPath === oldPath) {
+      handleRenameCancel();
+      return;
+    }
+
+    renameInFlightRef.current = true;
     try {
-      await rename(renaming, newPath);
+      await rename(oldPath, newPath);
       function updateTree(nodes: FileNode[]): FileNode[] {
         return nodes.map(node => {
-          if (node.path === renaming) return { ...node, name: renameValue, path: newPath };
-          if (node.children) return { ...node, children: updateTree(node.children) };
+          const rebasedPath = rebasePath(node.path, oldPath, newPath);
+          const renamedNode = {
+            ...node,
+            name: node.path === oldPath ? nextName : node.name,
+            path: rebasedPath,
+          };
+          if (node.children) return { ...renamedNode, children: updateTree(node.children) };
+          if (rebasedPath !== node.path) return renamedNode;
           return node;
         });
       }
       dispatch({ type: 'SET_WORKSPACE', payload: { path: state.workspacePath!, tree: updateTree(state.workspaceTree) } });
-      const activeTab = state.tabs.find(t => t.path === renaming);
-      if (activeTab) {
-        const content = await readTextFile(newPath);
-        dispatch({ type: 'CLOSE_TAB', payload: activeTab.id });
-        dispatch({ type: 'OPEN_TAB', payload: { id: newPath, name: renameValue, path: newPath, content } });
-      }
+      dispatch({ type: 'RENAME_PATH', payload: { oldPath, newPath, name: nextName } });
     } catch (e) {
       console.error('Failed to rename:', e);
+    } finally {
+      renameInFlightRef.current = false;
+      setRenaming(null);
+      setRenameValue('');
     }
-    setRenaming(null);
-  }, [renaming, renameValue, dispatch, state.workspacePath, state.workspaceTree, state.tabs]);
+  }, [dispatch, handleRenameCancel, renameValue, renaming, state.workspacePath, state.workspaceTree]);
 
   const handleDelete = useCallback(async (item: FileNode) => {
     setContextMenu(null);
@@ -268,6 +347,19 @@ export default function Sidebar() {
     }
   }, [dispatch, state.workspacePath, state.workspaceTree, state.tabs]);
 
+  if (!state.sidebarVisible) {
+    return (
+      <button
+        className="side-panel-toggle workspace-panel-toggle"
+        onClick={() => setSidebarVisible(true)}
+        title={text.sidebar.showWorkspace}
+        aria-label={text.sidebar.showWorkspace}
+      >
+        <PanelLeftOpen size={14} />
+      </button>
+    );
+  }
+
   return (
     <>
       <div
@@ -279,13 +371,22 @@ export default function Sidebar() {
             className={`sidebar-tab ${state.sidebarActiveTab === 'workspace' ? 'active' : ''}`}
             onClick={() => dispatch({ type: 'SET_SIDEBAR_TAB', payload: 'workspace' })}
           >
-            工作区
+            {text.sidebar.workspace}
           </button>
           <button
             className={`sidebar-tab ${state.sidebarActiveTab === 'recent' ? 'active' : ''}`}
             onClick={() => dispatch({ type: 'SET_SIDEBAR_TAB', payload: 'recent' })}
           >
-            最近文件
+            {text.sidebar.recentFiles}
+          </button>
+          <div className="sidebar-tab-spacer" />
+          <button
+            className="panel-collapse-btn"
+            onClick={() => setSidebarVisible(false)}
+            title={text.sidebar.hideWorkspace}
+            aria-label={text.sidebar.hideWorkspace}
+          >
+            <PanelLeftClose size={14} />
           </button>
         </div>
 
@@ -304,13 +405,15 @@ export default function Sidebar() {
               renameValue={renameValue}
               onRenameChange={setRenameValue}
               onRenameSubmit={handleRenameSubmit}
+              onRenameCancel={handleRenameCancel}
               onRename={handleRename}
               onDelete={handleDelete}
+              text={text}
             />
           )}
 
           {state.sidebarActiveTab === 'recent' && (
-            <RecentFiles recentFiles={state.recentFiles} openFile={async (rf) => {
+            <RecentFiles recentFiles={state.recentFiles} language={appLanguage} text={text} openFile={async (rf) => {
               let content: string;
               try {
                 content = await readTextFile(rf.path);
@@ -329,30 +432,32 @@ export default function Sidebar() {
           className="sidebar-resizer"
           role="separator"
           aria-orientation="vertical"
-          aria-label="调整工作区宽度"
+          aria-label={text.sidebar.resizeWorkspace}
           onPointerDown={handleResizeStart}
         />
       </div>
 
       {contextMenu && (
         <div
+          ref={contextMenuRef}
           className="context-menu"
           style={{ top: contextMenu.y, left: contextMenu.x }}
+          onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
         >
           {contextMenu.item && (
             <>
               <div className="context-menu-item" onClick={() => handleRename(contextMenu.item!)}>
-                <Pencil size={14} /> 重命名
+                <Pencil size={14} /> {text.contextMenu.rename}
               </div>
               {contextMenu.item.type === 'folder' && (
                 <div className="context-menu-item">
-                  <FilePlus size={14} /> 新建文件
+                  <FilePlus size={14} /> {text.contextMenu.newFile}
                 </div>
               )}
               <div className="context-menu-divider" />
               <div className="context-menu-item danger" onClick={() => handleDelete(contextMenu.item!)}>
-                <Trash2 size={14} /> 删除
+                <Trash2 size={14} /> {text.contextMenu.delete}
               </div>
             </>
           )}
@@ -364,21 +469,21 @@ export default function Sidebar() {
 
 function WorkspaceTree({
   tree, expandedFolders, loadingFolders, toggleFolder, openFile, openFolder, activeTabId,
-  onContextMenu, renaming, renameValue, onRenameChange, onRenameSubmit, onRename, onDelete
+  onContextMenu, renaming, renameValue, onRenameChange, onRenameSubmit, onRenameCancel, onRename, onDelete, text
 }: WorkspaceTreeProps) {
   if (tree.length === 0) {
     return (
       <div style={{ padding: '20px 16px', textAlign: 'center' }}>
         <FolderOpen size={32} style={{ opacity: 0.3, margin: '0 auto 12px' }} />
         <p style={{ color: 'var(--text-tertiary)', fontSize: '12px', marginBottom: '12px' }}>
-          打开文件夹开始工作
+          {text.sidebar.openFolderHint}
         </p>
         <button
           className="welcome-btn secondary"
           style={{ fontSize: '12px', padding: '6px 16px' }}
           onClick={openFolder}
         >
-          打开文件夹
+          {text.sidebar.openFolder}
         </button>
       </div>
     );
@@ -401,6 +506,7 @@ function WorkspaceTree({
           renameValue={renameValue}
           onRenameChange={onRenameChange}
           onRenameSubmit={onRenameSubmit}
+          onRenameCancel={onRenameCancel}
           onRename={onRename}
           onDelete={onDelete}
         />
@@ -409,13 +515,44 @@ function WorkspaceTree({
   );
 }
 
-function TreeNode({ node, depth, expandedFolders, loadingFolders, toggleFolder, openFile, activeTabId, onContextMenu, renaming, renameValue, onRenameChange, onRenameSubmit, onRename, onDelete }: TreeNodeProps) {
+function TreeNode({ node, depth, expandedFolders, loadingFolders, toggleFolder, openFile, activeTabId, onContextMenu, renaming, renameValue, onRenameChange, onRenameSubmit, onRenameCancel, onRename, onDelete }: TreeNodeProps) {
   const isExpanded = expandedFolders.has(node.path);
   const isLoading = loadingFolders?.has(node.path);
   const isActive = activeTabId === node.path;
   const isRenaming = renaming === node.path;
   const childCount = node.children?.length ?? 0;
   const depthStyle: DepthStyle = { '--depth': depth };
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'F2' || isRenaming) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void onRename(node);
+  };
+  const nameNode = isRenaming ? (
+    <input
+      className="rename-input"
+      value={renameValue}
+      onChange={(e) => onRenameChange(e.target.value)}
+      onBlur={() => { void onRenameSubmit(); }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          e.stopPropagation();
+          void onRenameSubmit();
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          onRenameCancel();
+        }
+      }}
+      onClick={(e) => e.stopPropagation()}
+      onFocus={(e) => e.currentTarget.select()}
+      autoFocus
+    />
+  ) : (
+    <span className="name">{node.name}</span>
+  );
 
   if (node.type === 'folder') {
     return (
@@ -423,7 +560,9 @@ function TreeNode({ node, depth, expandedFolders, loadingFolders, toggleFolder, 
         <div
           className={`file-tree-item ${isActive ? 'active' : ''}`}
           style={depthStyle}
+          tabIndex={0}
           onClick={() => toggleFolder(node.path)}
+          onKeyDown={handleKeyDown}
           onContextMenu={(e) => onContextMenu(e, node)}
           title={`${node.path}`}
         >
@@ -435,7 +574,7 @@ function TreeNode({ node, depth, expandedFolders, loadingFolders, toggleFolder, 
             <ChevronRight size={12} className="chevron" />
           )}
           <Folder size={14} className="icon" />
-          <span className="name">{node.name}</span>
+          {nameNode}
           <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 2 }}>{childCount}</span>
         </div>
         {isExpanded && node.children?.map((child) => (
@@ -453,6 +592,7 @@ function TreeNode({ node, depth, expandedFolders, loadingFolders, toggleFolder, 
             renameValue={renameValue}
             onRenameChange={onRenameChange}
             onRenameSubmit={onRenameSubmit}
+            onRenameCancel={onRenameCancel}
             onRename={onRename}
             onDelete={onDelete}
           />
@@ -465,35 +605,35 @@ function TreeNode({ node, depth, expandedFolders, loadingFolders, toggleFolder, 
     <div
       className={`file-tree-item ${isActive ? 'active' : ''}`}
       style={depthStyle}
+      tabIndex={0}
       onClick={() => openFile(node)}
+      onKeyDown={handleKeyDown}
       onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, node); }}
     >
       <span style={{ width: 12 }} />
       <File size={14} className="icon" />
-      {isRenaming ? (
-        <input
-          className="rename-input"
-          value={renameValue}
-          onChange={(e) => onRenameChange(e.target.value)}
-          onBlur={onRenameSubmit}
-          onKeyDown={(e) => { if (e.key === 'Enter') onRenameSubmit(); if (e.key === 'Escape') onRenameSubmit(); }}
-          onClick={(e) => e.stopPropagation()}
-          autoFocus
-        />
-      ) : (
-        <span className="name">{node.name}</span>
-      )}
+      {nameNode}
     </div>
   );
 }
 
-function RecentFiles({ recentFiles, openFile }: { recentFiles: RecentFile[]; openFile: (rf: RecentFile) => void | Promise<void> }) {
+function RecentFiles({
+  recentFiles,
+  language,
+  text,
+  openFile,
+}: {
+  recentFiles: RecentFile[];
+  language: string;
+  text: ReturnType<typeof getLocaleText>;
+  openFile: (rf: RecentFile) => void | Promise<void>;
+}) {
   if (recentFiles.length === 0) {
     return (
       <div style={{ padding: '20px 16px', textAlign: 'center' }}>
         <File size={32} style={{ opacity: 0.3, margin: '0 auto 12px' }} />
         <p style={{ color: 'var(--text-tertiary)', fontSize: '12px' }}>
-          暂无最近文件
+          {text.sidebar.noRecentFiles}
         </p>
       </div>
     );
@@ -508,20 +648,20 @@ function RecentFiles({ recentFiles, openFile }: { recentFiles: RecentFile[]; ope
             <div className="recent-file-name">{rf.name}</div>
             <div className="recent-file-path">{rf.path}</div>
           </div>
-          <span className="recent-file-time">{formatTime(rf.lastOpened)}</span>
+          <span className="recent-file-time">{formatTime(rf.lastOpened, language, text)}</span>
         </div>
       ))}
     </div>
   );
 }
 
-function formatTime(timestamp: number): string {
+function formatTime(timestamp: number, language: string, text: ReturnType<typeof getLocaleText>): string {
   const diff = Date.now() - timestamp;
-  if (diff < 60000) return '刚刚';
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`;
-  if (diff < 172800000) return '昨天';
-  return new Date(timestamp).toLocaleDateString('zh-CN');
+  if (diff < 60000) return text.sidebar.now;
+  if (diff < 3600000) return text.sidebar.minutesAgo(Math.floor(diff / 60000));
+  if (diff < 86400000) return text.sidebar.hoursAgo(Math.floor(diff / 3600000));
+  if (diff < 172800000) return text.sidebar.yesterday;
+  return new Date(timestamp).toLocaleDateString(language);
 }
 
 function findNode(tree: FileNode[], path: string): FileNode | null {

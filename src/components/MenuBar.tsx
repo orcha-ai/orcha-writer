@@ -270,7 +270,8 @@ ${htmlBody}
     {
       label: '视图',
       items: [
-        { label: '编辑模式', action: () => dispatch({ type: 'SET_VIEW_MODE', payload: 'edit' }) },
+        { label: '块编辑模式', action: () => dispatch({ type: 'SET_VIEW_MODE', payload: 'block' }) },
+        { label: 'MD 源码模式', action: () => dispatch({ type: 'SET_VIEW_MODE', payload: 'edit' }) },
         { label: '预览模式', action: () => dispatch({ type: 'SET_VIEW_MODE', payload: 'preview' }) },
         { label: '双栏模式', shortcut: '⌘⌥2', action: () => dispatch({ type: 'SET_VIEW_MODE', payload: 'split' }) },
         { divider: true },

@@ -105,6 +105,20 @@ function localRewrite(originalText: string, command?: AICommandPreset): string {
     return `> 当前是本地草稿模式，配置可用模型后会生成真实译文。\n\n${text}`;
   }
 
+  if (command?.id === 'block_convert_to_list') {
+    return text
+      .split(/\n|。|；|;|、/)
+      .map((line) => line.replace(/^[-*\d.)\s]+/, '').trim())
+      .filter(Boolean)
+      .slice(0, 8)
+      .map((line) => `- ${line}`)
+      .join('\n') || '- 补充列表项';
+  }
+
+  if (command?.id === 'block_shorten') {
+    return text.length > 160 ? `${text.slice(0, 154).trim()}...` : text;
+  }
+
   return text
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/([。！？!?])\s+/g, '$1\n')
@@ -139,6 +153,10 @@ function localMarkdownDraft(options: SendAIChatOptions): string {
 
   if (command?.id === 'generate_readme') {
     return `${modelLine}\n\n# ${context.documentTitle?.replace(/\.md$/i, '') || '项目 README'}\n\n## 简介\n\n${normalizeWhitespace(source).slice(0, 240) || '在这里补充项目简介。'}\n\n## 使用\n\n~~~bash\n# 在这里补充使用命令\n~~~\n\n## 配置\n\n- 根据项目需要补充配置说明。\n\n## 常见问题\n\n- 在这里记录常见问题和解决方案。`;
+  }
+
+  if (command?.id === 'block_generate_next') {
+    return `${modelLine}\n\n${normalizeWhitespace(source).slice(0, 220) || '继续补充当前主题。'}\n\n- 下一步可以展开一个更具体的观点。\n- 保持和上一个块一致的写作语气。`;
   }
 
   if (command?.id === 'summarize_document') {

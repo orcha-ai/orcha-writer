@@ -9,7 +9,7 @@
   gap: 12px;
   padding: 14px;
   border-left: 1px solid var(--border-primary);
-  background: #f6f8fb;
+  background: var(--bg-secondary);
   color: var(--text-primary);
   overflow: hidden;
 }
@@ -21,10 +21,6 @@
   gap: 10px;
   align-items: center;
   padding: 10px 6px;
-}
-
-[data-theme="dark"] .ai-chat-panel {
-  background: var(--bg-secondary);
 }
 
 .ai-chat-header,
@@ -657,7 +653,7 @@
   width: 280px;
   transform: translate(-50%, -100%);
   padding: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.62);
+  border: 1px solid color-mix(in srgb, var(--border-primary) 72%, transparent);
   border-radius: 16px;
   background: color-mix(in srgb, var(--bg-popover) 88%, transparent);
   box-shadow: var(--shadow-popover);

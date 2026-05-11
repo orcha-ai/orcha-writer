@@ -10,6 +10,7 @@ import { getPreviewThemeClassName } from '../previewThemes';
 import { getPreviewCodeThemeClassName } from '../codeThemes';
 import { pathExists } from '../utils/fs';
 import { normalizeMarkdownImageSyntax, resolveMarkdownImageSource } from '../utils/markdownImages';
+import { getLocaleText, normalizeAppLanguage } from '../i18n';
 
 interface HeadingInfo {
   level: number;
@@ -20,7 +21,60 @@ interface HeadingInfo {
 interface MarkdownRenderEnv {
   headings: HeadingInfo[];
   slugCounts: Record<string, number>;
+  bodyLineOffset: number;
 }
+
+interface MarkdownRendererOptions {
+  langPrefix?: string;
+  highlight?: ((content: string, language: string, attrs: string) => string) | null;
+}
+
+const CODE_LANGUAGE_LABELS: Record<string, string> = {
+  bash: 'Bash',
+  c: 'C',
+  cpp: 'C++',
+  csharp: 'C#',
+  css: 'CSS',
+  go: 'Go',
+  html: 'HTML',
+  java: 'Java',
+  javascript: 'JavaScript',
+  js: 'JavaScript',
+  json: 'JSON',
+  jsx: 'JSX',
+  markdown: 'Markdown',
+  md: 'Markdown',
+  php: 'PHP',
+  python: 'Python',
+  py: 'Python',
+  rust: 'Rust',
+  rs: 'Rust',
+  sh: 'Shell',
+  shell: 'Shell',
+  sql: 'SQL',
+  ts: 'TypeScript',
+  tsx: 'TSX',
+  typescript: 'TypeScript',
+  xml: 'XML',
+  yaml: 'YAML',
+  yml: 'YAML',
+};
+
+const CODE_LANGUAGE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: '', label: 'Plain Text' },
+  { value: 'shell', label: 'Shell' },
+  { value: 'python', label: 'Python' },
+  { value: 'java', label: 'Java' },
+  { value: 'javascript', label: 'JavaScript' },
+  { value: 'typescript', label: 'TypeScript' },
+  { value: 'json', label: 'JSON' },
+  { value: 'html', label: 'HTML' },
+  { value: 'css', label: 'CSS' },
+  { value: 'sql', label: 'SQL' },
+  { value: 'go', label: 'Go' },
+  { value: 'rust', label: 'Rust' },
+  { value: 'markdown', label: 'Markdown' },
+];
 
 function escapeHtml(content: string): string {
   return content
@@ -29,6 +83,75 @@ function escapeHtml(content: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function extractCodeLanguage(info: string): string {
+  return info.trim().split(/\s+/)[0]?.replace(/[^\w#+.-]/g, '') || '';
+}
+
+function formatCodeLanguage(language: string): string {
+  if (!language) return '纯文本';
+  return CODE_LANGUAGE_LABELS[language.toLowerCase()] || language.toUpperCase();
+}
+
+function resolveHighlightLanguage(language: string): string {
+  const normalized = language.toLowerCase();
+  const aliases: Record<string, string> = {
+    bash: 'bash',
+    shell: 'bash',
+    sh: 'bash',
+    py: 'python',
+    js: 'javascript',
+    ts: 'typescript',
+    md: 'markdown',
+    rs: 'rust',
+    yml: 'yaml',
+  };
+  return aliases[normalized] || normalized;
+}
+
+function renderHighlightedCode(content: string, language: string, codeHighlight: boolean): string {
+  const highlightLanguage = resolveHighlightLanguage(language);
+  if (codeHighlight && highlightLanguage && hljs.getLanguage(highlightLanguage)) {
+    try {
+      return hljs.highlight(content, { language: highlightLanguage, ignoreIllegals: true }).value;
+    } catch {
+      return escapeHtml(content);
+    }
+  }
+  return escapeHtml(content);
+}
+
+function renderCodeLanguageOptions(language: string, plainTextLabel: string): string {
+  const normalizedLanguage = language.toLowerCase();
+  const hasLanguage = CODE_LANGUAGE_OPTIONS.some(option => option.value === normalizedLanguage);
+  const options = hasLanguage || !normalizedLanguage
+    ? CODE_LANGUAGE_OPTIONS
+    : [...CODE_LANGUAGE_OPTIONS, { value: normalizedLanguage, label: formatCodeLanguage(normalizedLanguage) }];
+
+  return options.map(option => {
+    const label = option.value ? option.label : plainTextLabel;
+    const selected = option.value === normalizedLanguage ? ' selected' : '';
+    return `<option value="${escapeHtml(option.value)}"${selected}>${escapeHtml(label)}</option>`;
+  }).join('');
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  textarea.remove();
 }
 
 function slugify(content: string): string {
@@ -46,10 +169,10 @@ function uniqueSlug(base: string, env: MarkdownRenderEnv): string {
   return count === 0 ? base : `${base}-${count + 1}`;
 }
 
-function extractFrontMatter(content: string, enabled: boolean): { body: string; html: string } {
-  if (!enabled) return { body: content, html: '' };
+function extractFrontMatter(content: string, enabled: boolean): { body: string; html: string; lineOffset: number } {
+  if (!enabled) return { body: content, html: '', lineOffset: 0 };
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
-  if (!match) return { body: content, html: '' };
+  if (!match) return { body: content, html: '', lineOffset: 0 };
 
   const raw = match[1].trim();
   const rows = raw
@@ -58,9 +181,11 @@ function extractFrontMatter(content: string, enabled: boolean): { body: string; 
     .filter((line): line is RegExpMatchArray => Boolean(line));
 
   const body = content.slice(match[0].length);
+  const lineOffset = (match[0].match(/\r?\n/g) || []).length;
   if (rows.length === 0) {
     return {
       body,
+      lineOffset,
       html: `<section class="md-frontmatter"><pre>${escapeHtml(raw)}</pre></section>`,
     };
   }
@@ -71,7 +196,7 @@ function extractFrontMatter(content: string, enabled: boolean): { body: string; 
     ))
     .join('');
 
-  return { body, html: `<dl class="md-frontmatter">${html}</dl>` };
+  return { body, html: `<dl class="md-frontmatter">${html}</dl>`, lineOffset };
 }
 
 function renderToc(headings: HeadingInfo[]): string {
@@ -147,12 +272,13 @@ function sanitizeHtml(content: string, preview: PreviewSettings, security: Secur
   return content;
 }
 
-function applySecurity(html: string, security: SecuritySettings): string {
+function applySecurity(html: string, security: SecuritySettings, language: string): string {
+  const text = getLocaleText(language);
   let next = html;
   if (!security.allowExternalContent) {
     next = next.replace(
       /<img([^>]+?)src=["']https?:\/\/[^"']+["']([^>]*)>/gi,
-      '<span class="blocked-external-content">外部图片已隐藏</span>',
+      `<span class="blocked-external-content">${escapeHtml(text.preview.imageHidden)}</span>`,
     );
   }
   return next;
@@ -169,7 +295,8 @@ function highlightSearch(html: string, query: string): string {
 }
 
 // Build markdown-it instance with heading IDs and safe HTML
-function createMd(markdown: MarkdownSettings, preview: PreviewSettings, security: SecuritySettings, documentPath?: string) {
+function createMd(markdown: MarkdownSettings, preview: PreviewSettings, security: SecuritySettings, language: string, documentPath?: string) {
+  const text = getLocaleText(language);
   const md = new MarkdownIt(markdown.dialect === 'commonmark' ? 'commonmark' : 'default', {
     html: preview.htmlRender !== 'disable',
     linkify: true,
@@ -178,14 +305,7 @@ function createMd(markdown: MarkdownSettings, preview: PreviewSettings, security
     langPrefix: 'language-',
     highlight: markdown.codeHighlight
       ? (content, language) => {
-        if (language && hljs.getLanguage(language)) {
-          try {
-            return hljs.highlight(content, { language, ignoreIllegals: true }).value;
-          } catch {
-            return escapeHtml(content);
-          }
-        }
-        return escapeHtml(content);
+        return renderHighlightedCode(content, language, true);
       }
       : undefined,
   });
@@ -219,6 +339,37 @@ function createMd(markdown: MarkdownSettings, preview: PreviewSettings, security
   md.renderer.rules.html_block = (tokens: Token[], idx: number) => sanitizeHtml(tokens[idx].content, preview, security);
   md.renderer.rules.html_inline = (tokens: Token[], idx: number) => sanitizeHtml(tokens[idx].content, preview, security);
 
+  const renderCodeBlock = (token: Token, content: string, codeLanguage: string, options: MarkdownRendererOptions, env: MarkdownRenderEnv): string => {
+    const normalizedLanguage = codeLanguage.toLowerCase();
+    const languageClass = normalizedLanguage ? ` class="${escapeHtml(`${options.langPrefix || 'language-'}${normalizedLanguage}`)}"` : '';
+    const lineStart = Array.isArray(token.map) ? token.map[0] + env.bodyLineOffset : -1;
+    const highlighted = markdown.codeHighlight && options.highlight
+      ? options.highlight(content, normalizedLanguage, '')
+      : '';
+    const codeHtml = highlighted || escapeHtml(content);
+    const languageOptions = renderCodeLanguageOptions(normalizedLanguage, text.preview.plainText);
+    const lineStartAttr = lineStart >= 0 ? ` data-line-start="${lineStart}"` : '';
+
+    return [
+      `<div class="md-code-block" data-code-kind="${token.type === 'fence' ? 'fence' : 'indented'}"${lineStartAttr}>`,
+      '<div class="md-code-toolbar">',
+      `<select class="md-code-language-select" aria-label="${escapeHtml(text.preview.codeLanguage)}" data-code-language="${escapeHtml(normalizedLanguage)}">${languageOptions}</select>`,
+      `<button type="button" class="md-code-copy" aria-label="${escapeHtml(text.preview.copyCode)}">${escapeHtml(text.preview.copyCode)}</button>`,
+      '</div>',
+      `<pre class="md-code-pre"><code${languageClass}>${codeHtml}</code></pre>`,
+      '</div>',
+    ].join('');
+  };
+
+  md.renderer.rules.fence = (tokens: Token[], idx: number, options, env) => {
+    const token = tokens[idx];
+    return renderCodeBlock(token, token.content, extractCodeLanguage(token.info), options, env as MarkdownRenderEnv);
+  };
+
+  md.renderer.rules.code_block = (tokens: Token[], idx: number, options, env) => {
+    return renderCodeBlock(tokens[idx], tokens[idx].content, '', options, env as MarkdownRenderEnv);
+  };
+
   const renderImage = md.renderer.rules.image ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
   md.renderer.rules.image = (tokens, idx, options, env, self) => {
     const token = tokens[idx];
@@ -239,27 +390,46 @@ function createMd(markdown: MarkdownSettings, preview: PreviewSettings, security
   return md;
 }
 
-function renderMarkdown(content: string, markdown: MarkdownSettings, preview: PreviewSettings, security: SecuritySettings, documentPath?: string): string {
+function renderMarkdown(content: string, markdown: MarkdownSettings, preview: PreviewSettings, security: SecuritySettings, language: string, documentPath?: string): string {
   const frontMatter = extractFrontMatter(content, markdown.frontMatter);
-  const env: MarkdownRenderEnv = { headings: [], slugCounts: {} };
-  const md = createMd(markdown, preview, security, documentPath);
+  const env: MarkdownRenderEnv = { headings: [], slugCounts: {}, bodyLineOffset: frontMatter.lineOffset };
+  const md = createMd(markdown, preview, security, language, documentPath);
   const raw = frontMatter.html + md.render(normalizeMarkdownImageSyntax(frontMatter.body), env);
   return injectToc(raw, markdown, env.headings);
 }
 
+function replaceFenceLanguage(content: string, lineStart: number, language: string): string {
+  if (lineStart < 0) return content;
+  const newline = content.includes('\r\n') ? '\r\n' : '\n';
+  const lines = content.split(/\r?\n/);
+  const line = lines[lineStart];
+  if (typeof line !== 'string') return content;
+  const match = line.match(/^(\s*)(`{3,}|~{3,})(.*)$/);
+  if (!match) return content;
+
+  const currentInfo = match[3].trim();
+  const trailingInfo = currentInfo ? currentInfo.replace(/^\S+\s*/, '').trim() : '';
+  const nextInfo = [language, trailingInfo].filter(Boolean).join(' ');
+  lines[lineStart] = `${match[1]}${match[2]}${nextInfo}`;
+  return lines.join(newline);
+}
+
 export default function Preview() {
-  const { state } = useApp();
+  const { state, dispatch } = useApp();
+  const general = useSettingsStore(s => s.general);
   const markdown = useSettingsStore(s => s.markdown);
   const preview = useSettingsStore(s => s.preview);
   const security = useSettingsStore(s => s.security);
   const activeTab = state.tabs.find(t => t.id === state.activeTabId);
   const previewRef = useRef<HTMLDivElement>(null);
+  const appLanguage = normalizeAppLanguage(general.language);
+  const text = getLocaleText(appLanguage);
 
   const html = useMemo(() => {
     if (!activeTab) return '';
-    const raw = renderMarkdown(activeTab.content, markdown, preview, security, activeTab.path);
-    return highlightSearch(applySecurity(raw, security), state.searchQuery);
-  }, [activeTab, markdown, preview, security, state.searchQuery]);
+    const raw = renderMarkdown(activeTab.content, markdown, preview, security, appLanguage, activeTab.path);
+    return highlightSearch(applySecurity(raw, security, appLanguage), state.searchQuery);
+  }, [activeTab, appLanguage, markdown, preview, security, state.searchQuery]);
 
   // Highlight active match when searchMatchIndex changes
   useEffect(() => {
@@ -279,14 +449,14 @@ export default function Preview() {
     const buildImageLoadError = async (image: HTMLImageElement) => {
       const filePath = image.dataset.orchaFilePath || '';
       const exists = filePath
-        ? await pathExists(filePath).then(value => value ? '是' : '否').catch(error => `检查失败：${String(error)}`)
-        : '未解析到本地路径';
+        ? await pathExists(filePath).then(value => value ? text.preview.existsYes : text.preview.existsNo).catch(error => text.preview.checkFailed(String(error)))
+        : text.preview.localPathMissing;
       const details = [
-        `文件存在：${exists}`,
-        `Markdown 路径：${image.dataset.orchaOriginalSrc || image.getAttribute('src') || ''}`,
-        `本地路径：${filePath || '无'}`,
-        `资源地址：${image.dataset.orchaResolvedSrc || image.currentSrc || image.src || ''}`,
-        image.dataset.orchaNote ? `解析备注：${image.dataset.orchaNote}` : '',
+        `${text.preview.fileExists}：${exists}`,
+        `${text.preview.markdownPath}：${image.dataset.orchaOriginalSrc || image.getAttribute('src') || ''}`,
+        `${text.preview.localPath}：${filePath || text.preview.noLocalPath}`,
+        `${text.preview.resourceUrl}：${image.dataset.orchaResolvedSrc || image.currentSrc || image.src || ''}`,
+        image.dataset.orchaNote ? `${text.preview.parseNote}：${image.dataset.orchaNote}` : '',
       ].filter(Boolean).join('\n');
 
       const box = document.createElement('span');
@@ -294,7 +464,7 @@ export default function Preview() {
       box.setAttribute('role', 'note');
 
       const title = document.createElement('strong');
-      title.textContent = '图片加载失败';
+      title.textContent = text.preview.imageLoadFailed;
 
       const code = document.createElement('code');
       code.textContent = details;
@@ -322,13 +492,39 @@ export default function Preview() {
     });
 
     const handleClick = (event: MouseEvent) => {
+      const copyButton = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>('button.md-code-copy');
+      if (copyButton) {
+        event.preventDefault();
+        const code = copyButton.closest('.md-code-block')?.querySelector('code')?.textContent || '';
+        void copyTextToClipboard(code).then(() => {
+            copyButton.classList.add('is-copied');
+            copyButton.textContent = text.preview.copiedCode;
+            window.setTimeout(() => {
+              copyButton.classList.remove('is-copied');
+              copyButton.textContent = text.preview.copyCode;
+            }, 1200);
+          }).catch(() => {
+          copyButton.textContent = text.preview.copyFailed;
+          window.setTimeout(() => {
+            copyButton.textContent = text.preview.copyCode;
+          }, 1200);
+        });
+        return;
+      }
+
+      const languageSelect = (event.target as HTMLElement | null)?.closest<HTMLSelectElement>('select.md-code-language-select');
+      if (languageSelect) {
+        event.stopPropagation();
+        return;
+      }
+
       const link = (event.target as HTMLElement | null)?.closest('a');
       if (!link) return;
       const href = link.getAttribute('href') || '';
       if (!/^https?:\/\//i.test(href)) return;
 
       event.preventDefault();
-      if (security.confirmExternalLinks && !window.confirm(`打开外部链接？\n${href}`)) {
+      if (security.confirmExternalLinks && !window.confirm(text.preview.externalLinkConfirm(href))) {
         return;
       }
 
@@ -339,14 +535,39 @@ export default function Preview() {
       }
     };
 
+    const handleChange = (event: Event) => {
+      const select = (event.target as HTMLElement | null)?.closest<HTMLSelectElement>('select.md-code-language-select');
+      if (!select) return;
+
+      const codeBlock = select.closest<HTMLElement>('.md-code-block');
+      const code = codeBlock?.querySelector<HTMLElement>('code');
+      if (!codeBlock || !code) return;
+
+      const nextLanguage = select.value;
+      const codeText = code.textContent || '';
+      code.className = nextLanguage ? `language-${nextLanguage}` : '';
+      code.innerHTML = renderHighlightedCode(codeText, nextLanguage, markdown.codeHighlight);
+      select.dataset.codeLanguage = nextLanguage;
+
+      const lineStart = Number(codeBlock.dataset.lineStart);
+      if (codeBlock.dataset.codeKind === 'fence' && activeTab && Number.isFinite(lineStart)) {
+        const nextContent = replaceFenceLanguage(activeTab.content, lineStart, nextLanguage);
+        if (nextContent !== activeTab.content) {
+          dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: nextContent } });
+        }
+      }
+    };
+
     root.addEventListener('click', handleClick);
+    root.addEventListener('change', handleChange);
     return () => {
       root.removeEventListener('click', handleClick);
+      root.removeEventListener('change', handleChange);
       images.forEach(image => image.removeEventListener('error', handleImageError));
     };
-  }, [preview.openExternalLink, security.confirmExternalLinks, html]);
+  }, [activeTab, dispatch, html, markdown.codeHighlight, preview.openExternalLink, security.confirmExternalLinks, text]);
 
-  const isHidden = state.viewMode === 'edit';
+  const isHidden = state.viewMode === 'edit' || state.viewMode === 'block';
   const previewThemeClassName = getPreviewThemeClassName(preview.previewTheme);
   const codeThemeClassName = getPreviewCodeThemeClassName(preview.codeTheme);
 
@@ -361,7 +582,7 @@ export default function Preview() {
         />
       ) : (
         <div className="empty-state">
-          <p>打开或创建一个文件开始预览</p>
+          <p>{text.preview.empty}</p>
         </div>
       )}
     </div>

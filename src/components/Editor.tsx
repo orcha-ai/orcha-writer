@@ -380,7 +380,7 @@ export default function Editor() {
   let rafId = 0;
   const onEditorScroll = () => {
     if (viewRef.current) emitEditorSelection(viewRef.current);
-    if (!syncEnabled.current || mode.current === 'edit') return;
+    if (!syncEnabled.current || mode.current === 'edit' || mode.current === 'block') return;
     if (rafId) cancelAnimationFrame(rafId);
     rafId = requestAnimationFrame(() => {
       if (viewRef.current) syncPreviewScroll(viewRef.current);
@@ -710,6 +710,27 @@ export default function Editor() {
     pendingRef.current = null;
   }, [activeTab?.id]);
 
+  // Keep the hidden CodeMirror source view in sync with block/preview edits.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !activeTab) return;
+    const currentContent = view.state.doc.toString();
+    if (currentContent === activeTab.content) return;
+
+    lastSyncedContentRef.current = activeTab.content;
+    lastSavedRef.current = activeTab.content;
+    pendingRef.current = null;
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: activeTab.content },
+    });
+    updateEditorStatus(view, true);
+  }, [activeTab?.content, activeTab?.id, updateEditorStatus]);
+
   // Sync viewMode changes
   useEffect(() => {
     if (viewRef.current) {
@@ -720,7 +741,7 @@ export default function Editor() {
   if (!activeTab) return null;
 
   return (
-    <div className={`editor-panel ${state.viewMode === 'preview' ? 'hidden' : ''}`}>
+    <div className={`editor-panel ${state.viewMode === 'preview' || state.viewMode === 'block' ? 'hidden' : ''}`}>
       <div ref={editorRef} style={{ flex: 1, overflow: 'hidden' }} />
     </div>
   );

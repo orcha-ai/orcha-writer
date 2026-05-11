@@ -1,5 +1,8 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
+import type { CSSProperties } from 'react';
 import { useApp } from '../AppContext';
+import { useSettingsStore } from '../store';
+import { PanelRightClose, PanelRightOpen } from 'lucide-react';
 
 interface Heading {
   level: number;
@@ -7,12 +10,22 @@ interface Heading {
   id: string;
 }
 
+type OutlineItemStyle = CSSProperties & { '--level': number };
+
 export default function Outline() {
-  const { state } = useApp();
+  const { state, dispatch } = useApp();
+  const updateAppearance = useSettingsStore(s => s.updateAppearance);
+  const saveSettings = useSettingsStore(s => s.saveAll);
   const activeTab = state.tabs.find(t => t.id === state.activeTabId);
 
+  const setOutlineVisible = useCallback((visible: boolean) => {
+    dispatch({ type: 'SET_OUTLINE_VISIBLE', payload: visible });
+    updateAppearance({ showOutline: visible });
+    void saveSettings();
+  }, [dispatch, saveSettings, updateAppearance]);
+
   const headings = useMemo<Heading[]>(() => {
-    if (!activeTab) return [];
+    if (!activeTab?.content) return [];
     const lines = activeTab.content.split('\n');
     const result: Heading[] = [];
     for (const line of lines) {
@@ -24,13 +37,34 @@ export default function Outline() {
       }
     }
     return result;
-  }, [activeTab?.content]);
+  }, [activeTab]);
 
-  if (!state.outlineVisible) return null;
+  if (!state.outlineVisible) {
+    return (
+      <button
+        className="side-panel-toggle outline-panel-toggle"
+        onClick={() => setOutlineVisible(true)}
+        title="显示大纲"
+        aria-label="显示大纲"
+      >
+        <PanelRightOpen size={14} />
+      </button>
+    );
+  }
 
   return (
     <div className="outline-panel">
-      <div className="outline-header">大纲</div>
+      <div className="outline-header">
+        <span className="outline-title">大纲</span>
+        <button
+          className="panel-collapse-btn"
+          onClick={() => setOutlineVisible(false)}
+          title="隐藏大纲"
+          aria-label="隐藏大纲"
+        >
+          <PanelRightClose size={14} />
+        </button>
+      </div>
       <div className="outline-content">
         {headings.length === 0 ? (
           <div style={{ padding: '12px', color: 'var(--text-tertiary)', fontSize: '12px' }}>
@@ -41,7 +75,7 @@ export default function Outline() {
             <div
               key={i}
               className={`outline-item h${h.level}`}
-              style={{ '--level': h.level } as any}
+              style={{ '--level': h.level } as OutlineItemStyle}
               title={h.text}
               onClick={() => {
                 const target = document.getElementById(h.id);

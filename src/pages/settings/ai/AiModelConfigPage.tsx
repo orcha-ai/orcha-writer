@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Button, Card, Form, Input, InputNumber, List, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
+import { Button, Card, Drawer, Form, Input, InputNumber, List, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ExperimentOutlined } from '@ant-design/icons';
 import { useAiStore } from '../../../store';
 import type { AiModelConfig, AiProviderConfig } from '../../../types';
@@ -408,13 +408,17 @@ export default function AiModelConfigPage() {
         </Form>
       </Modal>
 
-      <Modal
+      <Drawer
         title={editingModel ? '编辑模型配置' : '添加模型配置'}
         open={modelModalOpen}
-        onOk={handleModelSubmit}
-        onCancel={() => setModelModalOpen(false)}
-        okText="保存"
-        cancelText="取消"
+        onClose={() => setModelModalOpen(false)}
+        width={520}
+        extra={
+          <Space>
+            <Button onClick={() => setModelModalOpen(false)}>取消</Button>
+            <Button type="primary" onClick={handleModelSubmit}>保存</Button>
+          </Space>
+        }
       >
         <Form form={modelForm} layout="vertical">
           <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入配置名称' }]}>
@@ -470,7 +474,7 @@ export default function AiModelConfigPage() {
             <Switch />
           </Form.Item>
         </Form>
-      </Modal>
+      </Drawer>
     </div>
   );
 }

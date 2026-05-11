@@ -115,7 +115,8 @@ export default function SettingsModal() {
                   value={state.viewMode}
                   onChange={(e) => dispatch({ type: 'SET_VIEW_MODE', payload: e.target.value as any })}
                 >
-                  <option value="edit">编辑模式</option>
+                  <option value="block">块编辑模式</option>
+                  <option value="edit">MD 源码模式</option>
                   <option value="preview">预览模式</option>
                   <option value="split">双栏模式</option>
                 </select>

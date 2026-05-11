@@ -1,5 +1,6 @@
 import type { PreviewThemeId } from './previewThemes';
 import type { PreviewCodeThemeId } from './codeThemes';
+import type { AppLanguage } from './i18n';
 
 // ===== Core Types =====
 
@@ -19,8 +20,16 @@ export interface TabFile {
   isDraft: boolean;
 }
 
-export type ViewMode = 'edit' | 'preview' | 'split';
+export type ViewMode = 'block' | 'edit' | 'preview' | 'split';
 export type ThemeMode = 'light' | 'dark' | 'system';
+
+export interface BlockSelectionStatus {
+  id: string;
+  typeLabel: string;
+  sourceLabel: string;
+  characterCount: number;
+  summary: string;
+}
 
 export interface AppState {
   tabs: TabFile[];
@@ -42,6 +51,7 @@ export interface AppState {
   commandPaletteOpen: boolean;
   settingsOpen: boolean;
   editorSettings: EditorSettings;
+  blockSelectionStatus: BlockSelectionStatus | null;
 }
 
 export interface RecentFile {
@@ -193,12 +203,11 @@ export interface ShortcutConfig {
 // ===== Settings Types =====
 
 export interface GeneralSettings {
-  language: string;
+  language: AppLanguage;
   startupOpen: 'blank' | 'last-workspace' | 'specific-workspace';
   autoSave: boolean;
   autoUpdate: boolean;
   recentFileCount: number;
-  closeBehavior: 'exit' | 'minimize';
   lastViewMode: ViewMode;
 }
 
@@ -344,7 +353,6 @@ export const defaultGeneralSettings: GeneralSettings = {
   autoSave: true,
   autoUpdate: true,
   recentFileCount: 10,
-  closeBehavior: 'minimize',
   lastViewMode: 'split',
 };
 

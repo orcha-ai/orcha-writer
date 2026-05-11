@@ -5,6 +5,8 @@ import type { FileSettings } from '../../../types';
 import { useEffect, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 
+const CONTROL_WIDTH = 480;
+
 export default function FilesPage() {
   const { files, updateFiles, saveAll } = useSettingsStore();
   const [form] = Form.useForm();
@@ -62,15 +64,15 @@ export default function FilesPage() {
           wrapperCol={{ span: 12 }}
           initialValues={files}
         >
-          <Form.Item label="默认工作区" name="defaultWorkspace">
-            <Input
-              style={{ width: 360 }}
-              addonAfter={
-                <Button type="text" icon={<FolderOpenOutlined />} onClick={handleSelectWorkspace}>
-                  选择目录
-                </Button>
-              }
-            />
+          <Form.Item label="默认工作区">
+            <Space.Compact style={{ width: CONTROL_WIDTH, maxWidth: '100%' }}>
+              <Form.Item name="defaultWorkspace" noStyle>
+                <Input />
+              </Form.Item>
+              <Button icon={<FolderOpenOutlined />} onClick={handleSelectWorkspace}>
+                选择目录
+              </Button>
+            </Space.Compact>
           </Form.Item>
 
           <Form.Item label="自动保存间隔" name="autoSaveInterval">
