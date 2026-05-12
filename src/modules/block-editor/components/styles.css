@@ -6,6 +6,15 @@
   background: var(--bg-primary);
 }
 
+body.block-pointer-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+body.block-pointer-dragging * {
+  cursor: grabbing !important;
+}
+
 .block-document-scroll {
   flex: 1;
   min-width: 0;
@@ -65,25 +74,36 @@
   opacity: 0.55;
 }
 
+.block-row.is-drop-before,
+.block-row.is-drop-after {
+  background: color-mix(in srgb, var(--accent-bg-soft) 54%, transparent);
+}
+
 .block-row.is-drop-before::before,
 .block-row.is-drop-after::after {
   content: "";
   position: absolute;
-  left: 46px;
-  right: 12px;
-  z-index: 20;
-  height: 2px;
+  left: 42px;
+  right: 8px;
+  z-index: 50;
+  height: 3px;
   border-radius: 999px;
   background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-bg-soft);
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--accent-bg-soft) 88%, transparent),
+    -5px 0 0 1px var(--accent),
+    5px 0 0 1px var(--accent);
+  pointer-events: none;
 }
 
 .block-row.is-drop-before::before {
   top: 0;
+  transform: translateY(-50%);
 }
 
 .block-row.is-drop-after::after {
   bottom: 0;
+  transform: translateY(50%);
 }
 
 .block-handle-rail {
@@ -93,7 +113,10 @@
   gap: 2px;
   padding-top: 7px;
   opacity: 0;
+  touch-action: none;
+  user-select: none;
   transition: opacity 0.15s;
+  -webkit-user-drag: none;
 }
 
 .block-row:hover .block-handle-rail,
@@ -121,10 +144,21 @@
 
 .block-drag-handle {
   cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 .block-drag-handle:active {
   cursor: grabbing;
+}
+
+.block-drag-handle svg {
+  pointer-events: none;
+}
+
+.block-editor-shell.is-block-dragging .block-handle-rail {
+  opacity: 1;
 }
 
 .block-content-wrap {
@@ -976,7 +1010,7 @@
 
   .block-row.is-drop-before::before,
   .block-row.is-drop-after::after {
-    left: 28px;
+    left: 26px;
   }
 
   .block-handle-rail {

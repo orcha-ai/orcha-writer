@@ -22,7 +22,7 @@ import {
   X,
 } from 'lucide-react';
 import { message } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useApp } from '../../../AppContext';
 import { resolveMarkdownImageSource } from '../../../utils/markdownImages';
 import { SLASH_COMMANDS } from '../constants/slashCommands';
@@ -55,6 +55,14 @@ type DropPosition = 'before' | 'after';
 interface DragTargetState {
   index: number;
   position: DropPosition;
+}
+
+interface PointerDragState {
+  index: number;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  active: boolean;
 }
 
 interface BlockContextMenuState {
@@ -373,6 +381,34 @@ function blockAIPopoverPosition(rect: DOMRect): { x: number; y: number } {
   return { x, y };
 }
 
+function dropPositionFromEvent(element: HTMLElement, clientY: number): DropPosition {
+  const rect = element.getBoundingClientRect();
+  return clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+}
+
+function blockRowFromPoint(clientX: number, clientY: number): HTMLElement | null {
+  const element = document.elementFromPoint(clientX, clientY);
+  return element instanceof HTMLElement ? element.closest<HTMLElement>('.block-row[data-block-index]') : null;
+}
+
+function blockIndexFromRow(row: HTMLElement | null, length: number): number | null {
+  const parsed = Number.parseInt(row?.dataset.blockIndex || '', 10);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed < length ? parsed : null;
+}
+
+function scrollBlockDocumentDuringDrag(clientY: number): void {
+  const scroller = document.querySelector<HTMLElement>('.block-document-scroll');
+  if (!scroller) return;
+  const rect = scroller.getBoundingClientRect();
+  const edge = 56;
+  const maxStep = 18;
+  if (clientY < rect.top + edge) {
+    scroller.scrollTop -= Math.ceil(((rect.top + edge - clientY) / edge) * maxStep);
+  } else if (clientY > rect.bottom - edge) {
+    scroller.scrollTop += Math.ceil(((clientY - (rect.bottom - edge)) / edge) * maxStep);
+  }
+}
+
 export default function BlockEditor() {
   const { state, dispatch } = useApp();
   const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
@@ -386,9 +422,13 @@ export default function BlockEditor() {
   const [blockAI, setBlockAI] = useState<BlockAIPopoverState | null>(null);
   const [blockAIPrompt, setBlockAIPrompt] = useState('');
   const textareasRef = useRef<Record<number, HTMLTextAreaElement | null>>({});
+  const documentRef = useRef<HTMLDivElement | null>(null);
   const blockMenuRef = useRef<HTMLDivElement | null>(null);
   const blockAIRef = useRef<HTMLDivElement | null>(null);
   const blockAIPromptRef = useRef<HTMLTextAreaElement | null>(null);
+  const pointerDragRef = useRef<PointerDragState | null>(null);
+  const dragTargetRef = useRef<DragTargetState | null>(null);
+  const measuredDocumentWidthRef = useRef(0);
   const historyPastRef = useRef<string[]>([]);
   const historyFutureRef = useRef<string[]>([]);
   const currentTabIdRef = useRef<string | null>(activeTab?.id ?? null);
@@ -399,6 +439,19 @@ export default function BlockEditor() {
     () => normalizeIndices(selectedIndices, blocks.length).map(index => blocks[index]).filter(Boolean),
     [blocks, selectedIndices],
   );
+
+  const resizeBlockTextareas = useCallback(() => {
+    Object.values(textareasRef.current).forEach(resizeTextarea);
+  }, []);
+
+  const setBlockDragTarget = useCallback((target: DragTargetState | null) => {
+    dragTargetRef.current = target;
+    setDragTarget((current) => {
+      if (current == null && target == null) return current;
+      if (current?.index === target?.index && current?.position === target?.position) return current;
+      return target;
+    });
+  }, []);
 
   const filteredCommands = useMemo(() => {
     const query = slash?.query.trim().toLowerCase() || '';
@@ -416,13 +469,15 @@ export default function BlockEditor() {
     setSelectedIndices([]);
     setSlash(null);
     setDragIndex(null);
-    setDragTarget(null);
+    pointerDragRef.current = null;
+    document.body.classList.remove('block-pointer-dragging');
+    setBlockDragTarget(null);
     setBlockMenu(null);
     setBlockAI(null);
     setBlockAIPrompt('');
     historyPastRef.current = [];
     historyFutureRef.current = [];
-  }, [activeTab?.id]);
+  }, [activeTab?.id, setBlockDragTarget]);
 
   useEffect(() => {
     const nextTabId = activeTab?.id ?? null;
@@ -442,9 +497,79 @@ export default function BlockEditor() {
     setSelectedIndices(current => normalizeIndices(current, blocks.length));
   }, [blocks.length]);
 
+  useLayoutEffect(() => {
+    if (state.viewMode !== 'block') return;
+    resizeBlockTextareas();
+  }, [
+    activeTab?.id,
+    blocks.length,
+    resizeBlockTextareas,
+    state.editorSettings.fontFamily,
+    state.editorSettings.fontSize,
+    state.editorSettings.lineHeight,
+    state.viewMode,
+  ]);
+
   useEffect(() => {
-    Object.values(textareasRef.current).forEach(resizeTextarea);
-  }, [activeTab?.id, blocks.length]);
+    if (state.viewMode !== 'block') return undefined;
+
+    let firstFrame = 0;
+    let secondFrame = 0;
+    const timeout = window.setTimeout(resizeBlockTextareas, 120);
+
+    firstFrame = window.requestAnimationFrame(() => {
+      resizeBlockTextareas();
+      secondFrame = window.requestAnimationFrame(resizeBlockTextareas);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+      window.clearTimeout(timeout);
+    };
+  }, [
+    activeTab?.id,
+    blocks.length,
+    resizeBlockTextareas,
+    state.editorSettings.fontFamily,
+    state.editorSettings.fontSize,
+    state.editorSettings.lineHeight,
+    state.viewMode,
+  ]);
+
+  useEffect(() => {
+    if (state.viewMode !== 'block') return undefined;
+    const target = documentRef.current;
+    if (!target) return undefined;
+
+    const resizeWhenWidthChanges = (width: number) => {
+      const roundedWidth = Math.round(width);
+      if (roundedWidth === measuredDocumentWidthRef.current) return;
+      measuredDocumentWidthRef.current = roundedWidth;
+      resizeBlockTextareas();
+    };
+
+    const handleWindowResize = () => {
+      resizeWhenWidthChanges(target.getBoundingClientRect().width);
+    };
+
+    handleWindowResize();
+    window.addEventListener('resize', handleWindowResize);
+
+    if (typeof ResizeObserver === 'undefined') {
+      return () => window.removeEventListener('resize', handleWindowResize);
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      resizeWhenWidthChanges(entries[0]?.contentRect.width ?? target.getBoundingClientRect().width);
+    });
+    observer.observe(target);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', handleWindowResize);
+    };
+  }, [activeTab?.id, resizeBlockTextareas, state.viewMode]);
 
   useEffect(() => {
     if (state.viewMode !== 'block') {
@@ -587,6 +712,111 @@ export default function BlockEditor() {
     const result = moveItemToPosition(blocks, from, target, position);
     syncBlocks(result.items, result.index, { selectedIndices: [result.index] });
   }, [blocks, syncBlocks]);
+
+  const updatePointerDragTarget = useCallback((clientX: number, clientY: number) => {
+    const drag = pointerDragRef.current;
+    if (!drag) return;
+
+    const row = blockRowFromPoint(clientX, clientY);
+    const targetIndex = blockIndexFromRow(row, blocks.length);
+    if (targetIndex == null || targetIndex === drag.index || !row) {
+      setBlockDragTarget(null);
+      return;
+    }
+
+    setBlockDragTarget({
+      index: targetIndex,
+      position: dropPositionFromEvent(row, clientY),
+    });
+  }, [blocks.length, setBlockDragTarget]);
+
+  const clearBlockDragState = useCallback(() => {
+    pointerDragRef.current = null;
+    document.body.classList.remove('block-pointer-dragging');
+    setDragIndex(null);
+    setBlockDragTarget(null);
+  }, [setBlockDragTarget]);
+
+  const finishPointerDrag = useCallback((shouldDrop: boolean) => {
+    const drag = pointerDragRef.current;
+    const target = dragTargetRef.current;
+    clearBlockDragState();
+    if (!shouldDrop || !drag?.active || !target || target.index === drag.index) return;
+    moveBlockToDropTarget(drag.index, target.index, target.position);
+  }, [clearBlockDragState, moveBlockToDropTarget]);
+
+  const handleDragPointerDown = useCallback((event: ReactPointerEvent<HTMLElement>, blockIndex: number) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Some WebViews can reject pointer capture for detached targets; document listeners still handle the drag.
+    }
+
+    pointerDragRef.current = {
+      index: blockIndex,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: true,
+    };
+    document.body.classList.add('block-pointer-dragging');
+    setDragIndex(blockIndex);
+    setBlockDragTarget(null);
+    setSelectedIndex(blockIndex);
+    setSelectedIndices([blockIndex]);
+    setSlash(null);
+    setBlockMenu(null);
+    setBlockAI(null);
+  }, [setBlockDragTarget]);
+
+  useEffect(() => {
+    if (state.viewMode !== 'block') return undefined;
+
+    const handlePointerMove = (event: globalThis.PointerEvent) => {
+      const drag = pointerDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+
+      event.preventDefault();
+      scrollBlockDocumentDuringDrag(event.clientY);
+      updatePointerDragTarget(event.clientX, event.clientY);
+    };
+
+    const handlePointerUp = (event: globalThis.PointerEvent) => {
+      const drag = pointerDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      event.preventDefault();
+      finishPointerDrag(true);
+    };
+
+    const handlePointerCancel = (event: globalThis.PointerEvent) => {
+      const drag = pointerDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      event.preventDefault();
+      finishPointerDrag(false);
+    };
+
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || !pointerDragRef.current) return;
+      event.preventDefault();
+      finishPointerDrag(false);
+    };
+
+    document.addEventListener('pointermove', handlePointerMove, { passive: false });
+    document.addEventListener('pointerup', handlePointerUp, { passive: false });
+    document.addEventListener('pointercancel', handlePointerCancel, { passive: false });
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('pointermove', handlePointerMove);
+      document.removeEventListener('pointerup', handlePointerUp);
+      document.removeEventListener('pointercancel', handlePointerCancel);
+      document.removeEventListener('keydown', handleKeyDown);
+      clearBlockDragState();
+    };
+  }, [clearBlockDragState, finishPointerDrag, state.viewMode, updatePointerDragTarget]);
 
   const moveSelectedBlocksBy = useCallback((delta: -1 | 1) => {
     const targets = getSelectionForBlock();
@@ -973,9 +1203,14 @@ export default function BlockEditor() {
     clearBlockEditorFloatingState();
   }, [clearBlockEditorFloatingState]);
 
+  const handleShellContextMenuCapture = useCallback((event: MouseEvent<HTMLElement>) => {
+    event.preventDefault();
+  }, []);
+
   const handleShellContextMenu = useCallback((event: MouseEvent<HTMLElement>) => {
     if (isBlockEditorContentTarget(event.target)) return;
     event.preventDefault();
+    event.stopPropagation();
     clearBlockEditorFloatingState();
   }, [clearBlockEditorFloatingState]);
 
@@ -1108,6 +1343,7 @@ export default function BlockEditor() {
       <section
         className="block-editor-shell"
         onMouseDown={handleShellMouseDown}
+        onContextMenuCapture={handleShellContextMenuCapture}
         onContextMenu={handleShellContextMenu}
       >
         <div className="empty-state">
@@ -1119,12 +1355,13 @@ export default function BlockEditor() {
 
   return (
     <section
-      className="block-editor-shell"
+      className={['block-editor-shell', dragIndex != null ? 'is-block-dragging' : ''].filter(Boolean).join(' ')}
       onMouseDown={handleShellMouseDown}
+      onContextMenuCapture={handleShellContextMenuCapture}
       onContextMenu={handleShellContextMenu}
     >
       <main className="block-document-scroll">
-        <div className="block-document">
+        <div ref={documentRef} className="block-document">
           <div className="block-list">
             {blocks.map((block, index) => {
               const isSelected = selectedIndex === index || selectedIndices.includes(index);
@@ -1148,6 +1385,7 @@ export default function BlockEditor() {
               return (
                 <div
                   key={`block-row-${index}`}
+                  data-block-index={index}
                   className={[
                     'block-row',
                     `block-row-${block.type}`,
@@ -1159,29 +1397,18 @@ export default function BlockEditor() {
                   ].filter(Boolean).join(' ')}
                   onClick={(event) => selectBlock(index, event)}
                   onContextMenu={(event) => handleBlockContextMenu(event, index)}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    const rect = event.currentTarget.getBoundingClientRect();
-                    setDragTarget({
-                      index,
-                      position: event.clientY < rect.top + rect.height / 2 ? 'before' : 'after',
-                    });
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    if (dragIndex != null && dragTarget) {
-                      moveBlockToDropTarget(dragIndex, dragTarget.index, dragTarget.position);
-                    }
-                    setDragIndex(null);
-                    setDragTarget(null);
-                  }}
                 >
-                  <div className="block-handle-rail">
+                  <div
+                    className="block-handle-rail"
+                    onClick={(event) => event.stopPropagation()}
+                    onPointerDown={(event) => handleDragPointerDown(event, index)}
+                  >
                     <button
                       type="button"
-                      className="block-mini-btn"
+                      className="block-mini-btn block-insert-btn"
                       aria-label="插入块"
                       data-tooltip="插入块"
+                      onPointerDown={(event) => event.stopPropagation()}
                       onClick={(event) => handlePlusClick(event, index)}
                     >
                       <Plus size={14} />
@@ -1189,14 +1416,9 @@ export default function BlockEditor() {
                     <button
                       type="button"
                       className="block-mini-btn block-drag-handle"
-                      draggable
                       aria-label="拖拽移动块"
                       data-tooltip="拖拽"
-                      onDragStart={() => setDragIndex(index)}
-                      onDragEnd={() => {
-                        setDragIndex(null);
-                        setDragTarget(null);
-                      }}
+                      onClick={(event) => event.stopPropagation()}
                     >
                       <GripVertical size={14} />
                     </button>
@@ -1372,6 +1594,7 @@ export default function BlockEditor() {
                             </div>
                             <textarea
                               className="block-textarea block-table-source"
+                              rows={1}
                               value={textareaValue}
                               tabIndex={-1}
                               aria-hidden="true"
@@ -1401,6 +1624,7 @@ export default function BlockEditor() {
                                 resizeTextarea(node);
                               }}
                               className={textareaClassName(block)}
+                              rows={1}
                               value={textareaValue}
                               placeholder={block.type === 'empty' ? '输入 / 添加块，或直接开始写作' : block.type === 'image' ? '图片描述' : '输入内容'}
                               spellCheck

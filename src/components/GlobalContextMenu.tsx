@@ -79,6 +79,7 @@ function selectAllCodeMirror(): boolean {
 function shouldUseCustomMenu(target: Element | null): boolean {
   if (!target) return false;
   if (target.closest('.context-menu')) return false;
+  if (target.closest('.block-editor-shell')) return false;
   if (target.closest('.sidebar')) return false;
   if (target.closest('.tab-bar')) return false;
   return Boolean(
@@ -99,7 +100,10 @@ export default function GlobalContextMenu() {
 
   useEffect(() => {
     const handleContextMenu = (event: MouseEvent) => {
-      if (event.defaultPrevented) return;
+      if (event.defaultPrevented) {
+        closeMenu();
+        return;
+      }
       const target = event.target instanceof Element ? event.target : null;
       if (!shouldUseCustomMenu(target)) return;
 
