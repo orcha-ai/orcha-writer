@@ -27,12 +27,146 @@ function findMatches(text: string, query: string): Array<{ from: number; to: num
   return matches;
 }
 
+interface BlockSearchMatch {
+  textarea: HTMLTextAreaElement;
+  from: number;
+  to: number;
+}
+
+const BLOCK_SEARCH_ACTIVE_CLASS = 'is-search-active';
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(value, max));
+}
+
+function refreshBlockTextareaLayout(textarea: HTMLTextAreaElement): void {
+  textarea.style.height = '0px';
+  textarea.style.height = `${Math.max(30, textarea.scrollHeight)}px`;
+}
+
+function getBlockTextareas(): HTMLTextAreaElement[] {
+  const textareas = Array.from(document.querySelectorAll<HTMLTextAreaElement>('.block-editor-shell .block-textarea'));
+  textareas.forEach(refreshBlockTextareaLayout);
+  return textareas;
+}
+
+function findBlockSearchMatches(query: string): BlockSearchMatch[] {
+  if (!query) return [];
+  return getBlockTextareas().flatMap((textarea) => (
+    findMatches(textarea.value, query).map(match => ({
+      textarea,
+      from: match.from,
+      to: match.to,
+    }))
+  ));
+}
+
+function clearBlockSearchActive(): void {
+  document.querySelectorAll(`.block-row.${BLOCK_SEARCH_ACTIVE_CLASS}`).forEach((row) => {
+    row.classList.remove(BLOCK_SEARCH_ACTIVE_CLASS);
+  });
+}
+
+function markBlockSearchMatch(match: BlockSearchMatch): void {
+  clearBlockSearchActive();
+  match.textarea.closest('.block-row')?.classList.add(BLOCK_SEARCH_ACTIVE_CLASS);
+}
+
+function measureTextareaOffsetTop(textarea: HTMLTextAreaElement, offset: number): number {
+  const style = window.getComputedStyle(textarea);
+  const mirror = document.createElement('div');
+  const marker = document.createElement('span');
+  const properties = [
+    'boxSizing',
+    'width',
+    'fontFamily',
+    'fontSize',
+    'fontStyle',
+    'fontWeight',
+    'letterSpacing',
+    'lineHeight',
+    'paddingTop',
+    'paddingRight',
+    'paddingBottom',
+    'paddingLeft',
+    'borderTopWidth',
+    'borderRightWidth',
+    'borderBottomWidth',
+    'borderLeftWidth',
+    'textAlign',
+    'textTransform',
+    'wordSpacing',
+    'wordBreak',
+    'tabSize',
+  ] as const;
+
+  properties.forEach((property) => {
+    mirror.style[property] = style[property];
+  });
+  mirror.style.position = 'fixed';
+  mirror.style.left = '-10000px';
+  mirror.style.top = '0';
+  mirror.style.height = 'auto';
+  mirror.style.visibility = 'hidden';
+  mirror.style.whiteSpace = 'pre-wrap';
+  mirror.style.overflowWrap = 'break-word';
+  mirror.style.overflow = 'hidden';
+  mirror.textContent = textarea.value.slice(0, offset);
+  marker.textContent = '\u200b';
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+  const top = marker.offsetTop;
+  mirror.remove();
+  return top;
+}
+
+function scrollBlockSearchMatchIntoView(match: BlockSearchMatch, behavior: ScrollBehavior): void {
+  refreshBlockTextareaLayout(match.textarea);
+  const scroller = match.textarea.closest('.block-document-scroll') as HTMLElement | null;
+  if (!scroller) {
+    match.textarea.scrollIntoView({ behavior, block: 'center' });
+    return;
+  }
+
+  const scrollerRect = scroller.getBoundingClientRect();
+  const textareaRect = match.textarea.getBoundingClientRect();
+  const textareaTop = textareaRect.top - scrollerRect.top + scroller.scrollTop;
+  const style = window.getComputedStyle(match.textarea);
+  const lineHeight = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.6 || 22;
+  const measuredTop = measureTextareaOffsetTop(match.textarea, match.from);
+  const matchOffsetTop = clamp(measuredTop, 0, Math.max(0, match.textarea.scrollHeight - lineHeight));
+  const matchTop = textareaTop + matchOffsetTop;
+  const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  const targetTop = clamp(matchTop - scroller.clientHeight * 0.38, 0, maxTop);
+  scroller.scrollTo({ top: targetTop, behavior });
+}
+
+function activateBlockSearchMatch(match: BlockSearchMatch): void {
+  markBlockSearchMatch(match);
+  const row = match.textarea.closest('.block-row');
+  row?.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+  scrollBlockSearchMatchIntoView(match, 'auto');
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      scrollBlockSearchMatchIntoView(match, 'auto');
+    });
+  });
+}
+
+function setTextareaValue(textarea: HTMLTextAreaElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  if (setter) setter.call(textarea, value);
+  else textarea.value = value;
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 export default function SearchPanel() {
   const { state, dispatch } = useApp();
   const [query, setQuery] = useState('');
   const [replaceText, setReplaceText] = useState('');
   const [matchCount, setMatchCount] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const blockNavigationStartedRef = useRef(false);
 
   useEffect(() => {
     if (state.searchOpen && inputRef.current) {
@@ -45,6 +179,17 @@ export default function SearchPanel() {
   useEffect(() => {
     dispatch({ type: 'SET_SEARCH_QUERY', payload: query });
     dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: 0 });
+    blockNavigationStartedRef.current = false;
+    clearBlockSearchActive();
+
+    if (state.viewMode === 'block') {
+      const frame = window.requestAnimationFrame(() => {
+        const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
+        const blockMatchCount = findBlockSearchMatches(query).length;
+        setMatchCount(blockMatchCount || (activeTab ? countMatches(activeTab.content, query) : 0));
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }
 
     let retries = 0;
     const timer = setInterval(() => {
@@ -63,7 +208,7 @@ export default function SearchPanel() {
       if (!query) {
         view.dispatch({
           effects: setSearchQuery.of(
-            new (SearchQuery as any)({ search: '', caseSensitive: false, regexp: false, valid: false }),
+            new SearchQuery({ search: '', caseSensitive: false, regexp: false }),
           ),
         });
         setMatchCount(0);
@@ -72,7 +217,7 @@ export default function SearchPanel() {
 
       view.dispatch({
         effects: setSearchQuery.of(
-          new (SearchQuery as any)({ search: query, caseSensitive: false, regexp: false, valid: true }),
+          new SearchQuery({ search: query, caseSensitive: false, regexp: false }),
         ),
       });
 
@@ -85,7 +230,12 @@ export default function SearchPanel() {
     }, 50);
 
     return () => clearInterval(timer);
-  }, [dispatch, query, state.activeTabId, state.tabs]);
+  }, [dispatch, query, state.activeTabId, state.tabs, state.viewMode]);
+
+  useEffect(() => {
+    if (state.searchOpen && state.viewMode === 'block') return;
+    clearBlockSearchActive();
+  }, [state.searchOpen, state.viewMode]);
 
   const scrollToMark = useCallback((index: number) => {
     const marks = document.querySelectorAll('mark.search-highlight');
@@ -95,6 +245,18 @@ export default function SearchPanel() {
   }, []);
 
   const handleNext = useCallback(() => {
+    if (state.viewMode === 'block') {
+      const matches = findBlockSearchMatches(query);
+      if (matches.length === 0) return;
+      const nextIndex = blockNavigationStartedRef.current
+        ? (state.searchMatchIndex + 1) % matches.length
+        : 0;
+      blockNavigationStartedRef.current = true;
+      dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: nextIndex });
+      activateBlockSearchMatch(matches[nextIndex]);
+      return;
+    }
+
     if (state.viewMode === 'preview') {
       // Preview mode: use DOM marks
       const nextIndex = matchCount > 0 ? (state.searchMatchIndex + 1) % matchCount : state.searchMatchIndex + 1;
@@ -133,9 +295,21 @@ export default function SearchPanel() {
         }
       }
     }
-  }, [dispatch, matchCount, state.viewMode, state.searchMatchIndex, scrollToMark]);
+  }, [dispatch, matchCount, query, state.viewMode, state.searchMatchIndex, scrollToMark]);
 
   const handlePrev = useCallback(() => {
+    if (state.viewMode === 'block') {
+      const matches = findBlockSearchMatches(query);
+      if (matches.length === 0) return;
+      const nextIndex = blockNavigationStartedRef.current
+        ? (state.searchMatchIndex - 1 + matches.length) % matches.length
+        : matches.length - 1;
+      blockNavigationStartedRef.current = true;
+      dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: nextIndex });
+      activateBlockSearchMatch(matches[nextIndex]);
+      return;
+    }
+
     if (state.viewMode === 'preview') {
       // Preview mode: use DOM marks
       const nextIndex = matchCount > 0 ? (state.searchMatchIndex - 1 + matchCount) % matchCount : Math.max(0, state.searchMatchIndex - 1);
@@ -176,10 +350,29 @@ export default function SearchPanel() {
         }
       }
     }
-  }, [dispatch, matchCount, state.viewMode, state.searchMatchIndex, scrollToMark]);
+  }, [dispatch, matchCount, query, state.viewMode, state.searchMatchIndex, scrollToMark]);
 
   const handleReplaceCurrent = useCallback(() => {
     if (!query) return;
+    if (state.viewMode === 'block') {
+      const matches = findBlockSearchMatches(query);
+      if (matches.length === 0) return;
+      const index = Math.min(state.searchMatchIndex, matches.length - 1);
+      const match = matches[index] || matches[0];
+      const value = match.textarea.value;
+      const nextValue = value.slice(0, match.from) + replaceText + value.slice(match.to);
+      setTextareaValue(match.textarea, nextValue);
+      window.requestAnimationFrame(() => {
+        const nextCount = findBlockSearchMatches(query).length;
+        setMatchCount(nextCount);
+        const nextIndex = Math.min(index, Math.max(0, nextCount - 1));
+        dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: nextIndex });
+        const nextMatch = findBlockSearchMatches(query)[nextIndex];
+        if (nextMatch) activateBlockSearchMatch(nextMatch);
+      });
+      return;
+    }
+
     const view = getActiveEditorView();
     const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
 
@@ -212,10 +405,22 @@ export default function SearchPanel() {
       dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: nextContent } });
       setMatchCount(countMatches(nextContent, query));
     }
-  }, [dispatch, query, replaceText, state.activeTabId, state.tabs]);
+  }, [dispatch, query, replaceText, state.activeTabId, state.searchMatchIndex, state.tabs, state.viewMode]);
 
   const handleReplaceAll = useCallback(() => {
     if (!query) return;
+    if (state.viewMode === 'block') {
+      const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
+      if (!activeTab) return;
+      const replacedCount = countMatches(activeTab.content, query);
+      if (replacedCount === 0) return;
+      const nextContent = activeTab.content.replace(new RegExp(escapeRegExp(query), 'gi'), () => replaceText);
+      dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: nextContent } });
+      setMatchCount(0);
+      dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: 0 });
+      return;
+    }
+
     const view = getActiveEditorView();
     const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
 
@@ -241,20 +446,26 @@ export default function SearchPanel() {
     dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: nextContent } });
     setMatchCount(0);
     dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: 0 });
-  }, [dispatch, query, replaceText, state.activeTabId, state.tabs]);
+  }, [dispatch, query, replaceText, state.activeTabId, state.tabs, state.viewMode]);
 
   // Keyboard shortcuts
   useEffect(() => {
     if (!state.searchOpen) return;
     const handler = (e: KeyboardEvent) => {
+      const target = e.target instanceof Element ? e.target : null;
+      const inSearchPanel = Boolean(target?.closest('.search-panel'));
       if (e.key === 'Escape') {
         dispatch({ type: 'CLOSE_SEARCH' });
       }
+      if (!inSearchPanel) return;
       if (e.key === 'Enter' && state.replaceOpen && e.altKey) {
+        e.preventDefault();
         handleReplaceCurrent();
       } else if (e.key === 'Enter' && e.shiftKey) {
+        e.preventDefault();
         handlePrev();
       } else if (e.key === 'Enter') {
+        e.preventDefault();
         handleNext();
       }
     };

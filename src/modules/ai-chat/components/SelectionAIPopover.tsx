@@ -18,6 +18,10 @@ function slashQuery(input: string): string | null {
   return value.slice(1).trim().toLowerCase();
 }
 
+function isPrimaryShortcut(event: { metaKey: boolean; ctrlKey: boolean }): boolean {
+  return navigator.platform.toUpperCase().includes('MAC') ? event.metaKey : event.ctrlKey;
+}
+
 export function SelectionAIPopover({
   visible,
   selectionText,
@@ -76,10 +80,10 @@ export function SelectionAIPopover({
         <span>{selectionText.length} 字</span>
       </div>
       <div className="ai-selection-input-wrap">
-        <Input
-          size="small"
+        <Input.TextArea
           value={customPrompt}
           placeholder="输入 / 调用快捷指令，或写自定义要求"
+          autoSize={{ minRows: 2, maxRows: 6 }}
           onChange={(event) => setCustomPrompt(event.target.value)}
           onKeyDown={(event) => {
             if (commandMenuOpen && filteredCommands.length > 0) {
@@ -107,14 +111,19 @@ export function SelectionAIPopover({
               setCustomPrompt('');
               return;
             }
-            if (event.key === 'Enter') {
+            if (event.key === 'Enter' && isPrimaryShortcut(event)) {
               event.preventDefault();
               submit();
             }
           }}
-          suffix={
-            <Button type="text" size="small" icon={<Send size={13} />} onClick={submit} />
-          }
+        />
+        <Button
+          className="ai-selection-send"
+          type="primary"
+          size="small"
+          icon={<Send size={13} />}
+          disabled={!customPrompt.trim()}
+          onClick={submit}
         />
         {commandMenuOpen && (
           <div className="ai-slash-command-popover ai-selection-command-popover">

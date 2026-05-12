@@ -114,14 +114,18 @@ export default function AiModelConfigPage() {
 
   const handleProviderSubmit = async () => {
     const values = await providerForm.validateFields();
-    if (editingProvider) {
-      updateProvider(editingProvider.id, values);
-      message.success('供应商已更新');
-    } else {
-      addProvider(values);
-      message.success('供应商已添加');
+    try {
+      if (editingProvider) {
+        await updateProvider(editingProvider.id, values);
+        message.success('供应商已更新');
+      } else {
+        await addProvider(values);
+        message.success('供应商已添加');
+      }
+      setProviderModalOpen(false);
+    } catch (error) {
+      message.error(`保存失败：${error instanceof Error ? error.message : String(error)}`);
     }
-    setProviderModalOpen(false);
   };
 
   const handleModelSubmit = async () => {
@@ -131,14 +135,18 @@ export default function AiModelConfigPage() {
       thinkingEnabled: values.thinkingSupported ? Boolean(values.thinkingEnabled) : false,
       thinkingBudget: values.thinkingSupported ? values.thinkingBudget : undefined,
     };
-    if (editingModel) {
-      updateModel(editingModel.id, modelValues);
-      message.success('模型配置已更新');
-    } else {
-      addModel(modelValues);
-      message.success('模型配置已添加');
+    try {
+      if (editingModel) {
+        await updateModel(editingModel.id, modelValues);
+        message.success('模型配置已更新');
+      } else {
+        await addModel(modelValues);
+        message.success('模型配置已添加');
+      }
+      setModelModalOpen(false);
+    } catch (error) {
+      message.error(`保存失败：${error instanceof Error ? error.message : String(error)}`);
     }
-    setModelModalOpen(false);
   };
 
   const testModelConnection = async (provider: AiProviderConfig, model: AiModelConfig) => {

@@ -15,12 +15,14 @@ import {
   Pilcrow,
   Plus,
   Quote,
+  Send,
   Sparkles,
   Table2,
   Trash2,
+  X,
 } from 'lucide-react';
 import { message } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { useApp } from '../../../AppContext';
 import { resolveMarkdownImageSource } from '../../../utils/markdownImages';
 import { SLASH_COMMANDS } from '../constants/slashCommands';
@@ -28,14 +30,16 @@ import {
   blockToMarkdown,
   blockTypeLabel,
   convertBlock,
-  countBlockCharacters,
   createBlock,
   parseMarkdownToBlocks,
+  parseMarkdownTable,
   plainTextFromBlock,
   serializeBlocks,
+  serializeMarkdownTable,
   updateBlockAttrs,
   updateBlockContent,
 } from '../services/markdownBlocks';
+import type { MarkdownTableModel } from '../services/markdownBlocks';
 import type { BlockType, BlockViewModel, SlashCommand } from '../types/block';
 import './styles.css';
 
@@ -59,6 +63,23 @@ interface BlockContextMenuState {
   blockIndex: number;
 }
 
+interface BlockAIPopoverState {
+  x: number;
+  y: number;
+  blockIndex: number;
+}
+
+interface BlockAISelectionPayload {
+  targetBlocks: BlockViewModel[];
+  selection: {
+    text: string;
+    range: {
+      from: number;
+      to: number;
+    };
+  };
+}
+
 type BlockAIAction = 'polish' | 'expand' | 'shorten' | 'convert_to_list' | 'generate_next_block';
 
 const CONVERT_OPTIONS: Array<{ type: BlockType; label: string }> = [
@@ -74,6 +95,7 @@ const CONVERT_OPTIONS: Array<{ type: BlockType; label: string }> = [
   { type: 'code_block', label: '代码' },
   { type: 'math_block', label: '公式' },
   { type: 'html_block', label: 'HTML' },
+  { type: 'table', label: '表格' },
 ];
 
 const BLOCK_AI_COMMAND_IDS: Record<BlockAIAction, string> = {
@@ -91,6 +113,17 @@ const BLOCK_AI_PROMPTS: Record<BlockAIAction, string> = {
   convert_to_list: '当前块转为列表',
   generate_next_block: '生成下一个块',
 };
+
+const BLOCK_AI_OPTIONS: Array<{ action: BlockAIAction; label: string }> = [
+  { action: 'polish', label: '润色' },
+  { action: 'expand', label: '扩写' },
+  { action: 'shorten', label: '缩短' },
+  { action: 'convert_to_list', label: '转列表' },
+  { action: 'generate_next_block', label: '续写' },
+];
+
+const BLOCK_AI_POPOVER_WIDTH = 360;
+const BLOCK_AI_POPOVER_HEIGHT = 292;
 
 function blockIcon(type: BlockType) {
   switch (type) {
@@ -177,9 +210,69 @@ function cloneBlock(block: BlockViewModel, suffix: string | number): BlockViewMo
   };
 }
 
+function inferMarkdownBlockFromText(block: BlockViewModel, value: string): BlockViewModel | null {
+  if (block.type !== 'paragraph' && block.type !== 'empty') return null;
+  if (!value.includes('\n') || !value.includes('|')) return null;
+
+  const parsedBlocks = parseMarkdownToBlocks(value);
+  if (parsedBlocks.length !== 1 || parsedBlocks[0]?.type !== 'table') return null;
+
+  return {
+    ...parsedBlocks[0],
+    id: block.id,
+    sourceRange: undefined,
+  };
+}
+
+function tableMarkdownFromBlock(block: BlockViewModel): string {
+  return block.content || block.markdown || blockToMarkdown(block);
+}
+
+function cloneTableModel(table: MarkdownTableModel): MarkdownTableModel {
+  return {
+    headers: [...table.headers],
+    alignments: [...table.alignments],
+    rows: table.rows.map(row => [...row]),
+  };
+}
+
+function escapeSearchQuery(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function renderSearchHighlight(value: string, query: string): ReactNode {
+  const text = value || '\u200b';
+  const search = query.trim();
+  if (!search) return text;
+
+  const regex = new RegExp(escapeSearchQuery(search), 'gi');
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
+    parts.push(
+      <mark key={`${match.index}-${match[0]}`} className="block-search-hit">
+        {match[0]}
+      </mark>,
+    );
+    lastIndex = match.index + match[0].length;
+    if (match[0].length === 0) regex.lastIndex += 1;
+  }
+
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts.length > 0 ? parts : text;
+}
+
 function isEditingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(target.closest('textarea, input, select, [contenteditable="true"]'));
+}
+
+function isBlockEditorContentTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest('.block-row, .block-ai-popover, .block-context-menu, .slash-command-menu'));
 }
 
 function textareaClassName(block: BlockViewModel): string {
@@ -196,27 +289,112 @@ function resizeTextarea(textarea: HTMLTextAreaElement | null): void {
   textarea.style.height = `${Math.max(30, textarea.scrollHeight)}px`;
 }
 
+function resizeAIPromptTextarea(textarea: HTMLTextAreaElement | null): void {
+  if (!textarea) return;
+  textarea.style.height = '0px';
+  textarea.style.height = `${Math.min(180, Math.max(76, textarea.scrollHeight))}px`;
+}
+
+function countMarkdownCharacters(markdown: string): number {
+  return Array.from(markdown.replace(/\s/g, '')).length;
+}
+
 function markdownSourceSummary(block: BlockViewModel): string {
   const range = block.sourceRange;
   if (!range) return '运行时新增块';
   return `第 ${range.startLine} - ${range.endLine} 行`;
 }
 
+function listIndentPx(block: BlockViewModel): number {
+  const indent = typeof block.attrs?.indent === 'string' ? block.attrs.indent : '';
+  return Math.min(120, indent.replace(/\t/g, '    ').length * 10);
+}
+
+function blockListIndent(block: BlockViewModel): string {
+  return typeof block.attrs?.indent === 'string' ? block.attrs.indent : '';
+}
+
+function blockListIndentWidth(block: BlockViewModel): number {
+  return blockListIndent(block).replace(/\t/g, '    ').length;
+}
+
+function isListItemBlock(block: BlockViewModel | undefined): boolean {
+  return block?.type === 'bulleted_list_item'
+    || block?.type === 'ordered_list_item'
+    || block?.type === 'todo_item';
+}
+
+function orderedListMarker(blocks: BlockViewModel[], blockIndex: number): string {
+  const block = blocks[blockIndex];
+  if (!block) return '1.';
+  const indent = blockListIndent(block);
+  const indentWidth = blockListIndentWidth(block);
+  const delimiter = String(block.attrs?.delimiter || '.');
+  let firstIndex = blockIndex;
+  let previousItemsAtSameLevel = 0;
+
+  for (let index = blockIndex - 1; index >= 0; index -= 1) {
+    const previous = blocks[index];
+    if (
+      !isListItemBlock(previous)
+      || blockListIndentWidth(previous) < indentWidth
+    ) {
+      break;
+    }
+
+    if (blockListIndent(previous) !== indent) continue;
+    if (previous.type !== 'ordered_list_item') break;
+
+    previousItemsAtSameLevel += 1;
+    firstIndex = index;
+  }
+
+  const first = blocks[firstIndex];
+  const start = typeof first?.attrs?.start === 'number' ? first.attrs.start : 1;
+  return `${start + previousItemsAtSameLevel}${delimiter}`;
+}
+
+function listMarker(blocks: BlockViewModel[], blockIndex: number): string | null {
+  const block = blocks[blockIndex];
+  if (!block) return null;
+  if (block.type === 'bulleted_list_item') return '';
+  if (block.type === 'ordered_list_item') return orderedListMarker(blocks, blockIndex);
+  return null;
+}
+
+function blockAIPopoverPosition(rect: DOMRect): { x: number; y: number } {
+  const margin = 12;
+  const x = Math.max(margin, Math.min(rect.left, window.innerWidth - BLOCK_AI_POPOVER_WIDTH - margin));
+  const below = rect.bottom + 8;
+  const above = rect.top - BLOCK_AI_POPOVER_HEIGHT - 8;
+  const y = below + BLOCK_AI_POPOVER_HEIGHT <= window.innerHeight - margin
+    ? below
+    : Math.max(margin, above);
+  return { x, y };
+}
+
 export default function BlockEditor() {
   const { state, dispatch } = useApp();
   const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
-  const blocks = useMemo(() => parseMarkdownToBlocks(activeTab?.content || ''), [activeTab?.content]);
+  const [blocks, setBlocks] = useState<BlockViewModel[]>(() => parseMarkdownToBlocks(activeTab?.content || ''));
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [slash, setSlash] = useState<SlashState | null>(null);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragTarget, setDragTarget] = useState<DragTargetState | null>(null);
   const [blockMenu, setBlockMenu] = useState<BlockContextMenuState | null>(null);
+  const [blockAI, setBlockAI] = useState<BlockAIPopoverState | null>(null);
+  const [blockAIPrompt, setBlockAIPrompt] = useState('');
   const textareasRef = useRef<Record<number, HTMLTextAreaElement | null>>({});
   const blockMenuRef = useRef<HTMLDivElement | null>(null);
+  const blockAIRef = useRef<HTMLDivElement | null>(null);
+  const blockAIPromptRef = useRef<HTMLTextAreaElement | null>(null);
   const historyPastRef = useRef<string[]>([]);
   const historyFutureRef = useRef<string[]>([]);
+  const currentTabIdRef = useRef<string | null>(activeTab?.id ?? null);
+  const syncedContentRef = useRef(activeTab?.content || '');
   const selectedBlock = selectedIndex == null ? null : blocks[selectedIndex] || null;
+  const blockSearchQuery = state.searchQuery.trim();
   const selectedBlocks = useMemo(
     () => normalizeIndices(selectedIndices, blocks.length).map(index => blocks[index]).filter(Boolean),
     [blocks, selectedIndices],
@@ -240,9 +418,24 @@ export default function BlockEditor() {
     setDragIndex(null);
     setDragTarget(null);
     setBlockMenu(null);
+    setBlockAI(null);
+    setBlockAIPrompt('');
     historyPastRef.current = [];
     historyFutureRef.current = [];
   }, [activeTab?.id]);
+
+  useEffect(() => {
+    const nextTabId = activeTab?.id ?? null;
+    const nextContent = activeTab?.content || '';
+    const tabChanged = currentTabIdRef.current !== nextTabId;
+    const contentChangedExternally = syncedContentRef.current !== nextContent;
+
+    if (!tabChanged && !contentChangedExternally) return;
+
+    currentTabIdRef.current = nextTabId;
+    syncedContentRef.current = nextContent;
+    setBlocks(parseMarkdownToBlocks(nextContent));
+  }, [activeTab?.content, activeTab?.id]);
 
   useEffect(() => {
     setSelectedIndex(current => clampIndex(current, blocks.length));
@@ -251,7 +444,7 @@ export default function BlockEditor() {
 
   useEffect(() => {
     Object.values(textareasRef.current).forEach(resizeTextarea);
-  }, [blocks]);
+  }, [activeTab?.id, blocks.length]);
 
   useEffect(() => {
     if (state.viewMode !== 'block') {
@@ -309,8 +502,10 @@ export default function BlockEditor() {
     if (!activeTab) return;
     if (options.recordHistory !== false) pushHistorySnapshot(activeTab.content);
     const nextContent = serializeBlocks(nextBlocks);
+    syncedContentRef.current = nextContent;
+    setBlocks(nextBlocks);
     dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: nextContent } });
-    dispatch({ type: 'SET_WORD_COUNT', payload: countBlockCharacters(nextBlocks) });
+    dispatch({ type: 'SET_WORD_COUNT', payload: countMarkdownCharacters(nextContent) });
     const nextPrimaryIndex = clampIndex(nextSelectedIndex, nextBlocks.length);
     const nextSelectedIndices = options.selectedIndices == null
       ? (nextPrimaryIndex == null ? [] : [nextPrimaryIndex])
@@ -318,6 +513,7 @@ export default function BlockEditor() {
     setSelectedIndex(nextPrimaryIndex);
     setSelectedIndices(nextSelectedIndices);
     setBlockMenu(null);
+    setBlockAI(null);
   }, [activeTab, dispatch, pushHistorySnapshot, selectedIndex]);
 
   const replaceBlock = useCallback((blockIndex: number, block: BlockViewModel, nextSelectedIndex = blockIndex) => {
@@ -416,8 +612,10 @@ export default function BlockEditor() {
     const previous = historyPastRef.current.pop();
     if (previous == null) return false;
     historyFutureRef.current.push(activeTab.content);
+    syncedContentRef.current = previous;
+    setBlocks(parseMarkdownToBlocks(previous));
     dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: previous } });
-    dispatch({ type: 'SET_WORD_COUNT', payload: countBlockCharacters(parseMarkdownToBlocks(previous)) });
+    dispatch({ type: 'SET_WORD_COUNT', payload: countMarkdownCharacters(previous) });
     setSelectedIndex(null);
     setSelectedIndices([]);
     setSlash(null);
@@ -429,8 +627,10 @@ export default function BlockEditor() {
     const nextContent = historyFutureRef.current.pop();
     if (nextContent == null) return false;
     historyPastRef.current.push(activeTab.content);
+    syncedContentRef.current = nextContent;
+    setBlocks(parseMarkdownToBlocks(nextContent));
     dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: nextContent } });
-    dispatch({ type: 'SET_WORD_COUNT', payload: countBlockCharacters(parseMarkdownToBlocks(nextContent)) });
+    dispatch({ type: 'SET_WORD_COUNT', payload: countMarkdownCharacters(nextContent) });
     setSelectedIndex(null);
     setSelectedIndices([]);
     setSlash(null);
@@ -493,36 +693,84 @@ export default function BlockEditor() {
     }
   }, []);
 
-  const runAIAction = useCallback((action: BlockAIAction, blockIndex: number) => {
+  const buildBlockAISelection = useCallback((blockIndex: number): BlockAISelectionPayload | null => {
     const targets = getSelectionForBlock(blockIndex);
-    const targetBlocks = targets.map(index => blocks[index]).filter(Boolean);
-    if (targetBlocks.length === 0) return;
+    const targetBlocks = targets
+      .map(index => blocks[index])
+      .filter((block): block is BlockViewModel => Boolean(block));
+    if (targetBlocks.length === 0) return null;
     if (targetBlocks.length > 1 && !isContiguousIndices(targets)) {
       message.warning('AI 多块处理暂只支持连续选择，请用 Shift 点击选择范围');
-      return;
+      return null;
     }
 
-    const firstRange = targetBlocks[0]?.sourceRange;
-    const lastRange = targetBlocks[targetBlocks.length - 1]?.sourceRange;
+    const sourceBlocks = parseMarkdownToBlocks(syncedContentRef.current);
+    const firstRange = sourceBlocks[targets[0]]?.sourceRange;
+    const lastRange = sourceBlocks[targets[targets.length - 1]]?.sourceRange;
     if (firstRange?.startOffset == null || lastRange?.endOffset == null) {
       message.warning('选中的块还没有源码映射，请先保存一次块内容');
-      return;
+      return null;
     }
+
+    return {
+      targetBlocks,
+      selection: {
+        text: targetBlocks.map(block => block.markdown || blockToMarkdown(block)).join('\n\n'),
+        range: { from: firstRange.startOffset, to: lastRange.endOffset },
+      },
+    };
+  }, [blocks, getSelectionForBlock]);
+
+  const runAIAction = useCallback((action: BlockAIAction, blockIndex: number) => {
+    const payload = buildBlockAISelection(blockIndex);
+    if (!payload) return;
 
     window.dispatchEvent(new CustomEvent('orcha-block-ai', {
       detail: {
-        prompt: targetBlocks.length > 1
-          ? `${BLOCK_AI_PROMPTS[action]}（共 ${targetBlocks.length} 个块）`
+        prompt: payload.targetBlocks.length > 1
+          ? `${BLOCK_AI_PROMPTS[action]}（共 ${payload.targetBlocks.length} 个块）`
           : BLOCK_AI_PROMPTS[action],
         commandId: BLOCK_AI_COMMAND_IDS[action],
-        selection: {
-          text: targetBlocks.map(block => block.markdown || blockToMarkdown(block)).join('\n\n'),
-          range: { from: firstRange.startOffset, to: lastRange.endOffset },
-        },
+        selection: payload.selection,
       },
     }));
+    setBlockAI(null);
+    setBlockAIPrompt('');
     message.success('已发送到右侧 AI 写作面板');
-  }, [blocks, getSelectionForBlock]);
+  }, [buildBlockAISelection]);
+
+  const runCustomBlockAI = useCallback((prompt: string, blockIndex: number) => {
+    const value = prompt.trim();
+    if (!value) return;
+    const payload = buildBlockAISelection(blockIndex);
+    if (!payload) return;
+
+    window.dispatchEvent(new CustomEvent('orcha-block-ai', {
+      detail: {
+        prompt: value,
+        resultMode: 'diff',
+        selection: payload.selection,
+      },
+    }));
+    setBlockAI(null);
+    setBlockAIPrompt('');
+    message.success('已发送到右侧 AI 写作面板');
+  }, [buildBlockAISelection]);
+
+  const openBlockAIPopover = useCallback((event: MouseEvent<HTMLButtonElement>, blockIndex: number) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const keepMultiSelection = selectedIndices.includes(blockIndex);
+    if (!keepMultiSelection) {
+      setSelectedIndices([blockIndex]);
+    }
+    setSelectedIndex(blockIndex);
+    setSlash(null);
+    setBlockMenu(null);
+    setBlockAIPrompt('');
+    const { x, y } = blockAIPopoverPosition(event.currentTarget.getBoundingClientRect());
+    setBlockAI({ x, y, blockIndex });
+  }, [selectedIndices]);
 
   const applySlashCommand = useCallback((command: SlashCommand) => {
     if (!slash) return;
@@ -560,9 +808,73 @@ export default function BlockEditor() {
   const handleTextChange = useCallback((blockIndex: number, value: string) => {
     const block = blocks[blockIndex];
     if (!block) return;
-    replaceBlock(blockIndex, updateBlockContent(block, value));
+    replaceBlock(blockIndex, inferMarkdownBlockFromText(block, value) ?? updateBlockContent(block, value));
     updateSlashQuery(blockIndex, value);
   }, [blocks, replaceBlock, updateSlashQuery]);
+
+  const updateTableBlock = useCallback((blockIndex: number, updater: (table: MarkdownTableModel) => MarkdownTableModel) => {
+    const block = blocks[blockIndex];
+    if (!block || block.type !== 'table') return;
+    const table = parseMarkdownTable(tableMarkdownFromBlock(block));
+    if (!table) return;
+    const nextTable = updater(cloneTableModel(table));
+    replaceBlock(blockIndex, updateBlockContent(block, serializeMarkdownTable(nextTable)));
+  }, [blocks, replaceBlock]);
+
+  const updateTableCell = useCallback((
+    blockIndex: number,
+    section: 'header' | 'body',
+    rowIndex: number,
+    columnIndex: number,
+    value: string,
+  ) => {
+    updateTableBlock(blockIndex, (table) => {
+      if (section === 'header') {
+        table.headers[columnIndex] = value;
+      } else if (table.rows[rowIndex]) {
+        table.rows[rowIndex][columnIndex] = value;
+      }
+      return table;
+    });
+  }, [updateTableBlock]);
+
+  const addTableRow = useCallback((blockIndex: number) => {
+    updateTableBlock(blockIndex, (table) => {
+      table.rows.push(Array.from({ length: table.headers.length }, () => ''));
+      return table;
+    });
+  }, [updateTableBlock]);
+
+  const addTableColumn = useCallback((blockIndex: number) => {
+    updateTableBlock(blockIndex, (table) => {
+      table.headers.push(`列 ${table.headers.length + 1}`);
+      table.alignments.push('default');
+      table.rows = table.rows.map(row => [...row, '']);
+      return table;
+    });
+  }, [updateTableBlock]);
+
+  const removeTableRow = useCallback((blockIndex: number, rowIndex: number) => {
+    updateTableBlock(blockIndex, (table) => {
+      if (table.rows.length <= 1) return table;
+      table.rows.splice(rowIndex, 1);
+      return table;
+    });
+  }, [updateTableBlock]);
+
+  const removeTableColumn = useCallback((blockIndex: number, columnIndex: number) => {
+    updateTableBlock(blockIndex, (table) => {
+      if (table.headers.length <= 1) return table;
+      table.headers.splice(columnIndex, 1);
+      table.alignments.splice(columnIndex, 1);
+      table.rows = table.rows.map((row) => {
+        const nextRow = [...row];
+        nextRow.splice(columnIndex, 1);
+        return nextRow;
+      });
+      return table;
+    });
+  }, [updateTableBlock]);
 
   const handleTextareaKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>, blockIndex: number) => {
     if (slash?.blockIndex === blockIndex) {
@@ -636,19 +948,55 @@ export default function BlockEditor() {
       y: Math.max(12, Math.min(event.clientY, window.innerHeight - 330)),
       blockIndex,
     });
+    setBlockAI(null);
   }, [selectedIndices]);
 
   const contextSelection = blockMenu ? getSelectionForBlock(blockMenu.blockIndex) : [];
+  const blockAISelection = blockAI ? getSelectionForBlock(blockAI.blockIndex) : [];
+  const blockAIScopeLabel = blockAISelection.length > 1 ? `${blockAISelection.length} 个块` : '当前块';
 
   const runContextAction = useCallback((action: () => void) => {
     action();
     setBlockMenu(null);
   }, []);
 
+  const clearBlockEditorFloatingState = useCallback(() => {
+    setSelectedIndex(null);
+    setSelectedIndices([]);
+    setSlash(null);
+    setBlockMenu(null);
+    setBlockAI(null);
+  }, []);
+
+  const handleShellMouseDown = useCallback((event: MouseEvent<HTMLElement>) => {
+    if (event.button !== 0 || isBlockEditorContentTarget(event.target)) return;
+    clearBlockEditorFloatingState();
+  }, [clearBlockEditorFloatingState]);
+
+  const handleShellContextMenu = useCallback((event: MouseEvent<HTMLElement>) => {
+    if (isBlockEditorContentTarget(event.target)) return;
+    event.preventDefault();
+    clearBlockEditorFloatingState();
+  }, [clearBlockEditorFloatingState]);
+
+  useEffect(() => {
+    if (!blockAI) return undefined;
+    const timer = window.setTimeout(() => {
+      resizeAIPromptTextarea(blockAIPromptRef.current);
+      blockAIPromptRef.current?.focus();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [blockAI]);
+
   useEffect(() => {
     if (state.viewMode !== 'block') return undefined;
 
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (blockAI && event.key === 'Escape') {
+        event.preventDefault();
+        setBlockAI(null);
+        return;
+      }
       if (slash) {
         if (event.key === 'Escape') setSlash(null);
         return;
@@ -696,9 +1044,7 @@ export default function BlockEditor() {
         runAIAction('polish', selectedIndex ?? selection[0]);
       }
       if (event.key === 'Escape') {
-        setSelectedIndex(null);
-        setSelectedIndices([]);
-        setBlockMenu(null);
+        clearBlockEditorFloatingState();
       }
     };
 
@@ -709,6 +1055,8 @@ export default function BlockEditor() {
     deleteBlocksAt,
     duplicateBlocksAt,
     getSelectionForBlock,
+    blockAI,
+    clearBlockEditorFloatingState,
     moveSelectedBlocksBy,
     redoBlockHistory,
     runAIAction,
@@ -735,11 +1083,33 @@ export default function BlockEditor() {
     };
   }, [blockMenu]);
 
+  useEffect(() => {
+    if (!blockAI) return undefined;
+    const closePopover = () => setBlockAI(null);
+    const handlePointerDown = (event: globalThis.MouseEvent) => {
+      const target = event.target instanceof Node ? event.target : null;
+      if (target && blockAIRef.current?.contains(target)) return;
+      if (event.target instanceof HTMLElement && event.target.closest('.block-toolbar')) return;
+      closePopover();
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('scroll', closePopover, true);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('scroll', closePopover, true);
+    };
+  }, [blockAI]);
+
   if (state.viewMode !== 'block') return null;
 
   if (!activeTab) {
     return (
-      <section className="block-editor-shell">
+      <section
+        className="block-editor-shell"
+        onMouseDown={handleShellMouseDown}
+        onContextMenu={handleShellContextMenu}
+      >
         <div className="empty-state">
           <p>打开或新建一个 Markdown 文件后，可以使用块编辑模式。</p>
         </div>
@@ -748,7 +1118,11 @@ export default function BlockEditor() {
   }
 
   return (
-    <section className="block-editor-shell">
+    <section
+      className="block-editor-shell"
+      onMouseDown={handleShellMouseDown}
+      onContextMenu={handleShellContextMenu}
+    >
       <main className="block-document-scroll">
         <div className="block-document">
           <div className="block-list">
@@ -760,10 +1134,17 @@ export default function BlockEditor() {
               const isDropBefore = dragTarget?.index === index && dragTarget.position === 'before';
               const isDropAfter = dragTarget?.index === index && dragTarget.position === 'after';
               const textareaValue = block.type === 'empty' ? block.content : plainTextFromBlock(block);
+              const textareaResizeKey = `${block.id}:${textareaValue.length}`;
               const imagePath = block.type === 'image' ? String(block.attrs?.src || '') : '';
               const resolvedImage = block.type === 'image' && imagePath
                 ? resolveMarkdownImageSource(imagePath, activeTab.path)
                 : null;
+              const marker = listMarker(blocks, index);
+              const isListBlock = isListItemBlock(block);
+              const contentStyle = isListBlock
+                ? ({ '--block-list-indent': `${listIndentPx(block)}px` } as CSSProperties)
+                : undefined;
+              const tableModel = block.type === 'table' ? parseMarkdownTable(tableMarkdownFromBlock(block)) : null;
               return (
                 <div
                   key={`block-row-${index}`}
@@ -821,11 +1202,27 @@ export default function BlockEditor() {
                     </button>
                   </div>
 
-                  <div className="block-content-wrap">
+                  <div
+                    className={[
+                      'block-content-wrap',
+                      isListBlock ? 'is-list-block' : '',
+                      marker != null ? 'has-list-marker' : '',
+                      block.type === 'todo_item' ? 'has-list-checkbox' : '',
+                    ].filter(Boolean).join(' ')}
+                    style={contentStyle}
+                  >
                     {block.type === 'horizontal_rule' ? (
                       <div className="block-hr" />
                     ) : (
                       <>
+                        {marker != null && (
+                          <span
+                            className={`block-list-marker ${block.type === 'ordered_list_item' ? 'block-list-marker-ordered' : 'block-list-marker-bullet'}`}
+                            aria-hidden="true"
+                          >
+                            {marker}
+                          </span>
+                        )}
                         {block.type === 'todo_item' && (
                           <input
                             className="block-checkbox"
@@ -881,30 +1278,149 @@ export default function BlockEditor() {
                             </label>
                           </div>
                         )}
-                        <textarea
-                          ref={(node) => {
-                            textareasRef.current[index] = node;
-                            resizeTextarea(node);
-                          }}
-                          className={textareaClassName(block)}
-                          value={textareaValue}
-                          placeholder={block.type === 'empty' ? '输入 / 添加块，或直接开始写作' : block.type === 'image' ? '图片描述' : '输入内容'}
-                          spellCheck
-                          onChange={(event) => handleTextChange(index, event.target.value)}
-                          onInput={(event) => resizeTextarea(event.currentTarget)}
-                          onFocus={() => {
-                            setSelectedIndex(index);
-                            setSelectedIndices([index]);
-                          }}
-                          onKeyDown={(event) => handleTextareaKeyDown(event, index)}
-                          onClick={(event) => event.stopPropagation()}
-                        />
+                        {block.type === 'table' && tableModel ? (
+                          <div
+                            className="block-table-card"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              selectBlock(index);
+                            }}
+                          >
+                            <div className="block-table-scroll">
+                              <table className="block-table-grid">
+                                <thead>
+                                  <tr>
+                                    {tableModel.headers.map((cell, columnIndex) => (
+                                      <th key={`header-${columnIndex}`}>
+                                        <div className="block-table-cell-wrap">
+                                          {blockSearchQuery && (
+                                            <div className="block-table-input-highlight" aria-hidden="true">
+                                              {renderSearchHighlight(cell, blockSearchQuery)}
+                                            </div>
+                                          )}
+                                          <input
+                                            value={cell}
+                                            aria-label={`表头 ${columnIndex + 1}`}
+                                            onFocus={() => {
+                                              setSelectedIndex(index);
+                                              setSelectedIndices([index]);
+                                            }}
+                                            onChange={(event) => updateTableCell(index, 'header', 0, columnIndex, event.target.value)}
+                                          />
+                                          <button
+                                            type="button"
+                                            className="block-table-cell-action"
+                                            aria-label="删除列"
+                                            disabled={tableModel.headers.length <= 1}
+                                            onClick={() => removeTableColumn(index, columnIndex)}
+                                          >
+                                            <Trash2 size={12} />
+                                          </button>
+                                        </div>
+                                      </th>
+                                    ))}
+                                    <th className="block-table-row-tools" aria-hidden="true" />
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {tableModel.rows.map((row, rowIndex) => (
+                                    <tr key={`row-${rowIndex}`}>
+                                      {tableModel.headers.map((_, columnIndex) => (
+                                        <td key={`cell-${rowIndex}-${columnIndex}`}>
+                                          <div className="block-table-cell-wrap">
+                                            {blockSearchQuery && (
+                                              <div className="block-table-input-highlight" aria-hidden="true">
+                                                {renderSearchHighlight(row[columnIndex] ?? '', blockSearchQuery)}
+                                              </div>
+                                            )}
+                                            <input
+                                              value={row[columnIndex] ?? ''}
+                                              aria-label={`第 ${rowIndex + 1} 行第 ${columnIndex + 1} 列`}
+                                              onFocus={() => {
+                                                setSelectedIndex(index);
+                                                setSelectedIndices([index]);
+                                              }}
+                                              onChange={(event) => updateTableCell(index, 'body', rowIndex, columnIndex, event.target.value)}
+                                            />
+                                          </div>
+                                        </td>
+                                      ))}
+                                      <td className="block-table-row-tools">
+                                        <button
+                                          type="button"
+                                          aria-label="删除行"
+                                          disabled={tableModel.rows.length <= 1}
+                                          onClick={() => removeTableRow(index, rowIndex)}
+                                        >
+                                          <Trash2 size={12} />
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                            <div className="block-table-actions">
+                              <button type="button" onClick={() => addTableRow(index)}>
+                                <Plus size={13} />
+                                <span>行</span>
+                              </button>
+                              <button type="button" onClick={() => addTableColumn(index)}>
+                                <Plus size={13} />
+                                <span>列</span>
+                              </button>
+                            </div>
+                            <textarea
+                              className="block-textarea block-table-source"
+                              value={textareaValue}
+                              tabIndex={-1}
+                              aria-hidden="true"
+                              onChange={(event) => handleTextChange(index, event.target.value)}
+                              onKeyDown={(event) => handleTextareaKeyDown(event, index)}
+                            />
+                          </div>
+                        ) : (
+                          <div className="block-textarea-stack">
+                            {blockSearchQuery && (
+                              <div
+                                className={[
+                                  'block-textarea-highlight',
+                                  `block-textarea-highlight-${block.type}`,
+                                  ['code_block', 'frontmatter', 'html_block', 'math_block', 'table'].includes(block.type) ? 'is-mono' : '',
+                                ].filter(Boolean).join(' ')}
+                                aria-hidden="true"
+                              >
+                                {renderSearchHighlight(textareaValue, blockSearchQuery)}
+                              </div>
+                            )}
+                            <textarea
+                              ref={(node) => {
+                                textareasRef.current[index] = node;
+                                if (!node || node.dataset.blockResizeKey === textareaResizeKey) return;
+                                node.dataset.blockResizeKey = textareaResizeKey;
+                                resizeTextarea(node);
+                              }}
+                              className={textareaClassName(block)}
+                              value={textareaValue}
+                              placeholder={block.type === 'empty' ? '输入 / 添加块，或直接开始写作' : block.type === 'image' ? '图片描述' : '输入内容'}
+                              spellCheck
+                              onChange={(event) => handleTextChange(index, event.target.value)}
+                              onInput={(event) => resizeTextarea(event.currentTarget)}
+                              onFocus={() => {
+                                setSelectedIndex(index);
+                                setSelectedIndices([index]);
+                              }}
+                              onKeyDown={(event) => handleTextareaKeyDown(event, index)}
+                              onClick={(event) => event.stopPropagation()}
+                            />
+                          </div>
+                        )}
                       </>
                     )}
 
                     {isPrimarySelected && (
                       <div className="block-toolbar" onClick={(event) => event.stopPropagation()}>
-                        <button type="button" onClick={() => runAIAction('polish', index)} title="AI 处理">
+                        <button type="button" onClick={(event) => openBlockAIPopover(event, index)} title="AI 处理">
                           <Sparkles size={14} />
                           <span>AI</span>
                         </button>
@@ -969,6 +1485,77 @@ export default function BlockEditor() {
           </div>
         </div>
       </main>
+
+      {blockAI && (
+        <div
+          ref={blockAIRef}
+          className="block-ai-popover"
+          style={{ left: blockAI.x, top: blockAI.y }}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="block-ai-head">
+            <div className="block-ai-title">
+              <Sparkles size={15} />
+              <span>AI 处理</span>
+            </div>
+            <span className="block-ai-scope">{blockAIScopeLabel}</span>
+            <button
+              type="button"
+              className="block-ai-icon-button"
+              aria-label="关闭"
+              onClick={() => setBlockAI(null)}
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <div className="block-ai-quick-actions">
+            {BLOCK_AI_OPTIONS.map(option => (
+              <button
+                key={option.action}
+                type="button"
+                onClick={() => runAIAction(option.action, blockAI.blockIndex)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <div className="block-ai-prompt-wrap">
+            <textarea
+              ref={blockAIPromptRef}
+              className="block-ai-prompt"
+              value={blockAIPrompt}
+              placeholder="输入自定义要求"
+              spellCheck
+              onChange={(event) => {
+                setBlockAIPrompt(event.target.value);
+                resizeAIPromptTextarea(event.currentTarget);
+              }}
+              onInput={(event) => resizeAIPromptTextarea(event.currentTarget)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setBlockAI(null);
+                  return;
+                }
+                if (event.key === 'Enter' && isPrimaryShortcut(event)) {
+                  event.preventDefault();
+                  runCustomBlockAI(blockAIPrompt, blockAI.blockIndex);
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="block-ai-send"
+              aria-label="发送"
+              disabled={!blockAIPrompt.trim()}
+              onClick={() => runCustomBlockAI(blockAIPrompt, blockAI.blockIndex)}
+            >
+              <Send size={15} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {blockMenu && (
         <div

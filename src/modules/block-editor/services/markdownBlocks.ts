@@ -11,6 +11,14 @@ interface MarkdownAstBlockRange {
   to: number;
 }
 
+export type MarkdownTableAlignment = 'default' | 'left' | 'center' | 'right';
+
+export interface MarkdownTableModel {
+  headers: string[];
+  alignments: MarkdownTableAlignment[];
+  rows: string[][];
+}
+
 function hashText(value: string): string {
   let hash = 0;
   for (let index = 0; index < value.length; index += 1) {
@@ -122,12 +130,140 @@ function isFenceEnd(line: string, marker: string): boolean {
   return pattern.test(line);
 }
 
+function hasUnescapedPipe(line: string): boolean {
+  let escaped = false;
+  for (const char of line) {
+    if (char === '|' && !escaped) return true;
+    escaped = char === '\\' && !escaped;
+    if (char !== '\\') escaped = false;
+  }
+  return false;
+}
+
+function splitTableRow(line: string): string[] {
+  let value = line.trim();
+  if (value.startsWith('|')) value = value.slice(1);
+  if (value.endsWith('|')) value = value.slice(0, -1);
+
+  const cells: string[] = [];
+  let cell = '';
+  let escaped = false;
+  for (const char of value) {
+    if (char === '|' && !escaped) {
+      cells.push(cell.trim());
+      cell = '';
+      continue;
+    }
+    cell += char;
+    escaped = char === '\\' && !escaped;
+    if (char !== '\\') escaped = false;
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function isTableSeparatorCell(cell: string): boolean {
+  return /^:?-{1,}:?$/.test(cell.replace(/\s+/g, ''));
+}
+
+function tableAlignmentFromSeparator(cell: string): MarkdownTableAlignment {
+  const normalized = cell.replace(/\s+/g, '');
+  const left = normalized.startsWith(':');
+  const right = normalized.endsWith(':');
+  if (left && right) return 'center';
+  if (left) return 'left';
+  if (right) return 'right';
+  return 'default';
+}
+
+function tableSeparatorForAlignment(alignment: MarkdownTableAlignment): string {
+  switch (alignment) {
+    case 'left':
+      return ':---';
+    case 'center':
+      return ':---:';
+    case 'right':
+      return '---:';
+    case 'default':
+    default:
+      return '---';
+  }
+}
+
+function unescapeTableCell(cell: string): string {
+  return cell.replace(/\\\|/g, '|').trim();
+}
+
+function escapeTableCell(cell: string): string {
+  const value = cell.replace(/\r?\n/g, ' ').trim();
+  let escaped = '';
+  let previous = '';
+  for (const char of value) {
+    escaped += char === '|' && previous !== '\\' ? '\\|' : char;
+    previous = char;
+  }
+  return escaped;
+}
+
+function normalizeCells<T extends string>(cells: T[], width: number, fallback = '' as T): T[] {
+  return Array.from({ length: width }, (_, index) => cells[index] ?? fallback);
+}
+
 function isTableSeparator(line: string): boolean {
-  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
+  if (!hasUnescapedPipe(line)) return false;
+  const cells = splitTableRow(line);
+  return cells.length > 0 && cells.every(isTableSeparatorCell);
 }
 
 function isTableStart(lines: string[], index: number): boolean {
-  return Boolean(lines[index]?.includes('|') && lines[index + 1] && isTableSeparator(lines[index + 1]));
+  const header = lines[index];
+  const separator = lines[index + 1];
+  if (!header || !separator || !hasUnescapedPipe(header) || !isTableSeparator(separator)) return false;
+
+  const headerCells = splitTableRow(header);
+  const separatorCells = splitTableRow(separator);
+  return headerCells.length === separatorCells.length;
+}
+
+function findTableEnd(lines: string[], start: number): number {
+  let index = start + 2;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!line.trim() || !hasUnescapedPipe(line)) break;
+    index += 1;
+  }
+  return index - 1;
+}
+
+export function parseMarkdownTable(markdown: string): MarkdownTableModel | null {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim());
+  if (lines.length < 2 || !isTableStart(lines, 0)) return null;
+
+  const rawHeaders = splitTableRow(lines[0]).map(unescapeTableCell);
+  const rawSeparators = splitTableRow(lines[1]);
+  const width = Math.max(1, rawHeaders.length, rawSeparators.length);
+  const headers = normalizeCells(rawHeaders, width);
+  const alignments = normalizeCells(rawSeparators, width).map(tableAlignmentFromSeparator);
+  const rows = lines.slice(2)
+    .filter(hasUnescapedPipe)
+    .map(line => normalizeCells(splitTableRow(line).map(unescapeTableCell), width));
+
+  return { headers, alignments, rows };
+}
+
+export function serializeMarkdownTable(table: MarkdownTableModel): string {
+  const width = Math.max(1, table.headers.length, table.alignments.length, ...table.rows.map(row => row.length));
+  const headers = normalizeCells(table.headers, width).map(escapeTableCell);
+  const alignments = normalizeCells(table.alignments, width).map((alignment) => (
+    tableSeparatorForAlignment((alignment || 'default') as MarkdownTableAlignment)
+  ));
+  const rows = table.rows.map(row => normalizeCells(row, width).map(escapeTableCell));
+
+  return [
+    `| ${headers.join(' | ')} |`,
+    `| ${alignments.join(' | ')} |`,
+    ...rows.map(row => `| ${row.join(' | ')} |`),
+  ].join('\n');
 }
 
 function isHorizontalRule(line: string): boolean {
@@ -243,6 +379,19 @@ function stripContinuationIndent(line: string, continuationIndent: number): stri
   return line.slice(index);
 }
 
+function indentWidth(indent: string): number {
+  return indent.replace(/\t/g, '    ').length;
+}
+
+function listItemIndent(line: string): string | null {
+  return line.match(/^(\s*)(?:[-*+]\s+\[[ xX]\]\s+|[-*+]\s+|\d+[.)]\s+)/)?.[1] ?? null;
+}
+
+function isNestedListItem(line: string, baseIndent: string): boolean {
+  const indent = listItemIndent(line);
+  return indent != null && indentWidth(indent) > indentWidth(baseIndent);
+}
+
 function collectListContinuation(lines: string[], start: number, firstContent: string, baseIndent: string) {
   const continuationIndent = baseIndent.length + 2;
   const contentLines = [firstContent];
@@ -279,15 +428,18 @@ function collectListContinuation(lines: string[], start: number, firstContent: s
 function collectListAstRange(lines: string[], start: number, end: number, firstContent: string, baseIndent: string) {
   const continuationIndent = baseIndent.length + 2;
   const contentLines = [firstContent];
+  let collectedEnd = start;
 
   for (let index = start + 1; index <= end; index += 1) {
     const line = lines[index] || '';
+    if (isNestedListItem(line, baseIndent)) break;
     contentLines.push(stripContinuationIndent(line, continuationIndent));
+    collectedEnd = index;
   }
 
   return {
     content: contentLines.join('\n').replace(/\n+$/, ''),
-    end,
+    end: collectedEnd,
   };
 }
 
@@ -509,10 +661,13 @@ export function updateBlockAttrs(block: BlockViewModel, attrs: Record<string, un
 
 export function convertBlock(block: BlockViewModel, type: BlockType): BlockViewModel {
   const content = plainTextFromBlock(block);
+  const nextContent = type === 'table' && !parseMarkdownTable(content)
+    ? defaultContentForType('table')
+    : content || defaultContentForType(type);
   const nextBlock: BlockViewModel = {
     ...block,
     type,
-    content: content || defaultContentForType(type),
+    content: nextContent,
     attrs: type === 'todo_item'
       ? { checked: false }
       : type === 'code_block'
@@ -624,9 +779,7 @@ export function parseMarkdownToBlocks(markdown: string): BlockViewModel[] {
       const start = astBlock?.type === 'Table' ? astBlock.startLine : index;
       let end = astBlock?.type === 'Table' ? astBlock.endLine : index + 1;
       if (astBlock?.type !== 'Table') {
-        let nextIndex = index + 2;
-        while (nextIndex < lines.length && lines[nextIndex].includes('|') && lines[nextIndex].trim()) nextIndex += 1;
-        end = nextIndex - 1;
+        end = findTableEnd(lines, index);
       }
       const raw = rawBlock(lines, start, end);
       blocks.push(createParsedBlock(blocks, 'table', raw, raw, start, end, offsets, lines));

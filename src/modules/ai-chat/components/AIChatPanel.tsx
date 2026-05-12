@@ -2,6 +2,7 @@ import { Alert, Button, message, Modal, Tooltip } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
 import { PanelRightOpen } from 'lucide-react';
 import { subscribeEditorSelection } from '../../../components/Editor';
+import { useApp } from '../../../AppContext';
 import { useAiStore } from '../../../store';
 import { findUsableAgent, normalizeAIAgents } from '../services/aiAgentService';
 import { findCommand, getAgentCommands, getAllAICommands } from '../services/aiCommandService';
@@ -56,6 +57,14 @@ function cardText(card: AIResultCard): string {
   return card.diff?.newText || card.markdown || card.content || '';
 }
 
+function resultCardsWithAppliedChange(message: AIMessage, appliedCard: AIResultCard): AIResultCard[] {
+  return (message.resultCards || []).map((card) => (
+    card.id === appliedCard.id
+      ? { ...card, actions: card.actions.filter((item) => item.type !== 'replace_selection') }
+      : card
+  ));
+}
+
 function modelLabel(modelName?: string, providerName?: string): string {
   if (modelName && providerName) return `${providerName} / ${modelName}`;
   if (modelName) return modelName;
@@ -100,6 +109,7 @@ export function AIChatPanel({
   onCreateMarkdownFile,
   onClose,
 }: AIChatPanelProps) {
+  const { state: appState } = useApp();
   const providers = useAiStore((state) => state.providers);
   const models = useAiStore((state) => state.models);
   const customAgents = useAiStore((state) => state.agents);
@@ -139,7 +149,13 @@ export function AIChatPanel({
     setConversationId(conversation.id);
   }, [documentId, documentPath, documentTitle, getOrCreateConversation, loaded]);
 
-  useEffect(() => subscribeEditorSelection(setSelection), []);
+  useEffect(() => {
+    if (appState.viewMode === 'block' || appState.viewMode === 'preview') {
+      setSelection(null);
+      return undefined;
+    }
+    return subscribeEditorSelection(setSelection);
+  }, [appState.viewMode]);
 
   const conversation = useMemo(
     () => conversations.find((item) => item.id === conversationId) || null,
@@ -610,9 +626,12 @@ export function AIChatPanel({
       }
 
       editorBridge.replaceRange(targetRange, text);
+      updateMessage(sourceMessage.conversationId, sourceMessage.id, {
+        resultCards: resultCardsWithAppliedChange(sourceMessage, card),
+      });
       message.success('已应用修改');
     }
-  }, [editorBridge, onCreateMarkdownFile, regenerateFrom]);
+  }, [editorBridge, onCreateMarkdownFile, regenerateFrom, updateMessage]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -695,7 +714,12 @@ export function AIChatPanel({
         onSend={(value) => void sendMessage(value)}
       />
       <SelectionAIPopover
-        visible={Boolean(selection?.text.trim() && selectionCommands.length > 0)}
+        visible={Boolean(
+          appState.viewMode !== 'block'
+          && appState.viewMode !== 'preview'
+          && selection?.text.trim()
+          && selectionCommands.length > 0,
+        )}
         selectionText={selection?.text || ''}
         position={selectionPosition}
         commands={selectionCommands}

@@ -13,7 +13,7 @@ import { BlockEditor } from './modules/block-editor';
 import { useApp } from './AppContext';
 import { writeTextFile } from './utils/fs';
 import { dirname } from './utils/markdownImages';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import './App.css';
 import './styles/preview-themes.css';
@@ -31,10 +31,20 @@ function formatAIDocumentTimestamp(date: Date): string {
   ].join('');
 }
 
+function scrollDocumentSurfacesToTop(): void {
+  document
+    .querySelectorAll<HTMLElement>('.cm-scroller, .preview-panel, .block-document-scroll')
+    .forEach((element) => {
+      element.scrollTop = 0;
+      element.scrollLeft = 0;
+    });
+}
+
 export default function WorkspaceContent() {
   const { state, dispatch } = useApp();
   const navigate = useNavigate();
   const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId);
+  const activeTabId = activeTab?.id;
   const editorBridge = useMemo(() => createCodeMirrorEditorBridge(), []);
 
   const handleCreateMarkdownFile = useCallback(async (content: string) => {
@@ -53,6 +63,22 @@ export default function WorkspaceContent() {
     const id = `draft-ai-${Date.now()}`;
     dispatch({ type: 'OPEN_TAB', payload: { id, name: fileName, path: id, content, isDraft: true } });
   }, [activeTab, dispatch]);
+
+  useEffect(() => {
+    if (!activeTabId) return undefined;
+
+    let firstFrame = 0;
+    let secondFrame = 0;
+    firstFrame = window.requestAnimationFrame(() => {
+      scrollDocumentSurfacesToTop();
+      secondFrame = window.requestAnimationFrame(scrollDocumentSurfacesToTop);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [activeTabId]);
 
   return (
     <>

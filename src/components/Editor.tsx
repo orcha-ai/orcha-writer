@@ -714,6 +714,7 @@ export default function Editor() {
   useEffect(() => {
     const view = viewRef.current;
     if (!view || !activeTab) return;
+    if (state.viewMode === 'block') return;
     const currentContent = view.state.doc.toString();
     if (currentContent === activeTab.content) return;
 
@@ -729,7 +730,7 @@ export default function Editor() {
       changes: { from: 0, to: view.state.doc.length, insert: activeTab.content },
     });
     updateEditorStatus(view, true);
-  }, [activeTab?.content, activeTab?.id, updateEditorStatus]);
+  }, [activeTab?.content, activeTab?.id, state.viewMode, updateEditorStatus]);
 
   // Sync viewMode changes
   useEffect(() => {

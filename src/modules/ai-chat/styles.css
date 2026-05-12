@@ -439,8 +439,8 @@
 }
 
 .ai-diff-card {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 8px;
 }
 
@@ -671,6 +671,25 @@
 
 .ai-selection-input-wrap {
   position: relative;
+}
+
+.ai-selection-input-wrap textarea.ant-input {
+  padding: 8px 38px 8px 9px;
+  resize: none;
+  font-family: var(--editor-font-family, var(--font-sans));
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.ai-selection-send.ant-btn {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .ai-selection-command-popover {

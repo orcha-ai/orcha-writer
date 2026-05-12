@@ -21,6 +21,34 @@ struct PendingOpenFiles(Mutex<Vec<String>>);
 #[derive(Default)]
 struct CancelledAiStreams(Mutex<HashSet<String>>);
 
+fn non_empty_env_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn user_home_dir() -> Result<PathBuf, String> {
+    if let Some(home) = non_empty_env_path("HOME") {
+        return Ok(home);
+    }
+
+    if let Some(profile) = non_empty_env_path("USERPROFILE") {
+        return Ok(profile);
+    }
+
+    let drive = std::env::var_os("HOMEDRIVE").filter(|value| !value.is_empty());
+    let path = std::env::var_os("HOMEPATH").filter(|value| !value.is_empty());
+    if let (Some(drive), Some(path)) = (drive, path) {
+        return Ok(PathBuf::from(format!(
+            "{}{}",
+            drive.to_string_lossy(),
+            path.to_string_lossy()
+        )));
+    }
+
+    Err("无法获取用户主目录（HOME / USERPROFILE 均不可用）".to_string())
+}
+
 // ── OpenedDocument: returned by open_markdown_file command ──
 #[derive(Serialize)]
 struct OpenedDocument {
@@ -329,7 +357,12 @@ fn read_file_content(file_path: String) -> Result<String, String> {
 // ── Command: write file content (bypasses fs plugin scope) ──
 #[command]
 fn write_file_content(file_path: String, content: String) -> Result<(), String> {
-    std::fs::write(&file_path, &content)
+    let path_buf = PathBuf::from(&file_path);
+    if let Some(parent) = path_buf.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+    std::fs::write(&path_buf, &content)
         .map_err(|e| format!("写入文件失败: {}", e))
 }
 
@@ -1445,8 +1478,7 @@ fn ai_cancel_chat_stream(app: AppHandle, stream_id: String) -> Result<(), String
 // ── Command: ensure config directory exists ──
 #[command]
 fn ensure_config_dir() -> Result<String, String> {
-    let home = std::env::var("HOME").map_err(|e| format!("获取HOME失败: {}", e))?;
-    let config_dir = PathBuf::from(&home).join(".orcha-writer").join("config");
+    let config_dir = user_home_dir()?.join(".orcha-writer").join("config");
     std::fs::create_dir_all(&config_dir)
         .map_err(|e| format!("创建配置目录失败: {}", e))?;
     Ok(config_dir.to_string_lossy().to_string())

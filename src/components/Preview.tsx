@@ -424,15 +424,17 @@ export default function Preview() {
   const previewRef = useRef<HTMLDivElement>(null);
   const appLanguage = normalizeAppLanguage(general.language);
   const text = getLocaleText(appLanguage);
+  const isHidden = state.viewMode === 'edit' || state.viewMode === 'block';
 
   const html = useMemo(() => {
-    if (!activeTab) return '';
+    if (!activeTab || isHidden) return '';
     const raw = renderMarkdown(activeTab.content, markdown, preview, security, appLanguage, activeTab.path);
     return highlightSearch(applySecurity(raw, security, appLanguage), state.searchQuery);
-  }, [activeTab, appLanguage, markdown, preview, security, state.searchQuery]);
+  }, [activeTab, appLanguage, isHidden, markdown, preview, security, state.searchQuery]);
 
   // Highlight active match when searchMatchIndex changes
   useEffect(() => {
+    if (isHidden) return;
     if (!previewRef.current || !state.searchQuery) return;
     const marks = previewRef.current.querySelectorAll('mark.search-highlight');
     if (marks.length === 0) return;
@@ -440,9 +442,10 @@ export default function Preview() {
     const idx = ((state.searchMatchIndex % marks.length) + marks.length) % marks.length;
     marks[idx]?.classList.add('active');
     marks[idx]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [state.searchMatchIndex, state.searchQuery]);
+  }, [isHidden, state.searchMatchIndex, state.searchQuery]);
 
   useEffect(() => {
+    if (isHidden) return;
     const root = previewRef.current;
     if (!root) return;
 
@@ -565,9 +568,8 @@ export default function Preview() {
       root.removeEventListener('change', handleChange);
       images.forEach(image => image.removeEventListener('error', handleImageError));
     };
-  }, [activeTab, dispatch, html, markdown.codeHighlight, preview.openExternalLink, security.confirmExternalLinks, text]);
+  }, [activeTab, dispatch, html, isHidden, markdown.codeHighlight, preview.openExternalLink, security.confirmExternalLinks, text]);
 
-  const isHidden = state.viewMode === 'edit' || state.viewMode === 'block';
   const previewThemeClassName = getPreviewThemeClassName(preview.previewTheme);
   const codeThemeClassName = getPreviewCodeThemeClassName(preview.codeTheme);
 

@@ -90,14 +90,18 @@ export default function AgentConfigPage() {
       capabilities,
     };
 
-    if (editing) {
-      updateAgent(editing.id, payload);
-      message.success('智能体已更新');
-    } else {
-      addAgent(payload);
-      message.success('智能体已创建');
+    try {
+      if (editing) {
+        await updateAgent(editing.id, payload);
+        message.success('智能体已更新');
+      } else {
+        await addAgent(payload);
+        message.success('智能体已创建');
+      }
+      setOpen(false);
+    } catch (error) {
+      message.error(`保存失败：${error instanceof Error ? error.message : String(error)}`);
     }
-    setOpen(false);
   };
 
   const handleProviderChange = (nextProviderId: string) => {
