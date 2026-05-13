@@ -420,6 +420,15 @@
   padding: 8px 0;
 }
 
+.workspace-tree {
+  min-height: 100%;
+  padding-bottom: 8px;
+}
+
+.workspace-tree.drop-target {
+  background: color-mix(in srgb, var(--accent-bg) 56%, transparent);
+}
+
 .sidebar-resizer {
   position: absolute;
   top: 0;
@@ -474,6 +483,16 @@ body.sidebar-resizing * {
   background: var(--bg-tree-hover);
 }
 
+.file-tree-item.dragging {
+  opacity: 0.45;
+}
+
+.file-tree-item.drop-target {
+  background: var(--accent-bg);
+  color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .file-tree-item:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
@@ -517,6 +536,16 @@ body.sidebar-resizing * {
   border-top-color: transparent;
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
+}
+
+.file-tree-item.new-folder-row,
+.file-tree-item.new-file-row {
+  cursor: default;
+}
+
+.file-tree-item.new-folder-row:hover,
+.file-tree-item.new-file-row:hover {
+  background: transparent;
 }
 
 @keyframes spin {

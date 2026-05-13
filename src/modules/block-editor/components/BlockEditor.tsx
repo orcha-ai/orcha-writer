@@ -273,6 +273,100 @@ function renderSearchHighlight(value: string, query: string): ReactNode {
   return parts.length > 0 ? parts : text;
 }
 
+function findInlineMarkerEnd(value: string, marker: string, start: number): number {
+  let index = start;
+  while (index < value.length) {
+    if (value[index] === '\\') {
+      index += 2;
+      continue;
+    }
+    if (value.startsWith(marker, index)) return index;
+    index += 1;
+  }
+  return -1;
+}
+
+function renderInlineMarkdown(value: string, keyPrefix = 'inline'): ReactNode {
+  const text = value || '\u200b';
+  const nodes: ReactNode[] = [];
+  let buffer = '';
+  let index = 0;
+
+  const flush = () => {
+    if (!buffer) return;
+    nodes.push(buffer);
+    buffer = '';
+  };
+
+  const pushWrapped = (className: string, marker: string, contentStart: number) => {
+    const end = findInlineMarkerEnd(text, marker, contentStart);
+    if (end < 0 || end === contentStart) return false;
+    flush();
+    nodes.push(
+      <span key={`${keyPrefix}-${nodes.length}-${index}`} className={className}>
+        {renderInlineMarkdown(text.slice(contentStart, end), `${keyPrefix}-${index}`)}
+      </span>,
+    );
+    index = end + marker.length;
+    return true;
+  };
+
+  while (index < text.length) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === '\\' && next) {
+      buffer += next;
+      index += 2;
+      continue;
+    }
+
+    if (char === '`') {
+      const end = findInlineMarkerEnd(text, '`', index + 1);
+      if (end > index + 1) {
+        flush();
+        nodes.push(
+          <code key={`${keyPrefix}-code-${index}`} className="block-inline-code">
+            {text.slice(index + 1, end)}
+          </code>,
+        );
+        index = end + 1;
+        continue;
+      }
+    }
+
+    if (text.startsWith('**', index) && pushWrapped('block-inline-strong', '**', index + 2)) continue;
+    if (text.startsWith('__', index) && pushWrapped('block-inline-strong', '__', index + 2)) continue;
+    if (text.startsWith('~~', index) && pushWrapped('block-inline-strike', '~~', index + 2)) continue;
+
+    if (char === '[') {
+      const labelEnd = findInlineMarkerEnd(text, ']', index + 1);
+      if (labelEnd > index + 1 && text[labelEnd + 1] === '(') {
+        const urlEnd = findInlineMarkerEnd(text, ')', labelEnd + 2);
+        if (urlEnd > labelEnd + 2) {
+          flush();
+          nodes.push(
+            <span key={`${keyPrefix}-link-${index}`} className="block-inline-link">
+              {renderInlineMarkdown(text.slice(index + 1, labelEnd), `${keyPrefix}-link-${index}`)}
+            </span>,
+          );
+          index = urlEnd + 1;
+          continue;
+        }
+      }
+    }
+
+    if (char === '*' && pushWrapped('block-inline-em', '*', index + 1)) continue;
+    if (char === '_' && pushWrapped('block-inline-em', '_', index + 1)) continue;
+
+    buffer += char;
+    index += 1;
+  }
+
+  flush();
+  return nodes.length > 0 ? nodes : text;
+}
+
 function isEditingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(target.closest('textarea, input, select, [contenteditable="true"]'));
@@ -289,6 +383,10 @@ function textareaClassName(block: BlockViewModel): string {
     `block-textarea-${block.type}`,
     ['code_block', 'frontmatter', 'html_block', 'math_block', 'table'].includes(block.type) ? 'is-mono' : '',
   ].filter(Boolean).join(' ');
+}
+
+function supportsInlineMarkdownPreview(block: BlockViewModel): boolean {
+  return !['code_block', 'frontmatter', 'html_block', 'math_block', 'table', 'image', 'horizontal_rule'].includes(block.type);
 }
 
 function resizeTextarea(textarea: HTMLTextAreaElement | null): void {
@@ -1382,6 +1480,7 @@ export default function BlockEditor() {
                 ? ({ '--block-list-indent': `${listIndentPx(block)}px` } as CSSProperties)
                 : undefined;
               const tableModel = block.type === 'table' ? parseMarkdownTable(tableMarkdownFromBlock(block)) : null;
+              const inlineMarkdownPreview = supportsInlineMarkdownPreview(block);
               return (
                 <div
                   key={`block-row-${index}`}
@@ -1603,7 +1702,7 @@ export default function BlockEditor() {
                             />
                           </div>
                         ) : (
-                          <div className="block-textarea-stack">
+                          <div className={`block-textarea-stack ${inlineMarkdownPreview ? 'has-inline-preview' : ''}`}>
                             {blockSearchQuery && (
                               <div
                                 className={[
@@ -1614,6 +1713,17 @@ export default function BlockEditor() {
                                 aria-hidden="true"
                               >
                                 {renderSearchHighlight(textareaValue, blockSearchQuery)}
+                              </div>
+                            )}
+                            {inlineMarkdownPreview && (
+                              <div
+                                className={[
+                                  'block-textarea-inline-preview',
+                                  `block-textarea-inline-preview-${block.type}`,
+                                ].filter(Boolean).join(' ')}
+                                aria-hidden="true"
+                              >
+                                {renderInlineMarkdown(textareaValue, block.id)}
                               </div>
                             )}
                             <textarea
