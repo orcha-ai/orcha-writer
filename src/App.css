@@ -972,6 +972,15 @@ body.sidebar-resizing * {
   color: var(--text-primary);
 }
 
+.md-preview .md-code-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.md-preview .md-code-format,
 .md-preview .md-code-copy {
   height: 24px;
   flex: 0 0 auto;
@@ -986,6 +995,13 @@ body.sidebar-resizing * {
   transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 
+.md-preview .md-code-format:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.md-preview .md-code-format:hover:not(:disabled),
+.md-preview .md-code-format.is-formatted,
 .md-preview .md-code-copy:hover,
 .md-preview .md-code-copy.is-copied {
   border-color: var(--accent-border);

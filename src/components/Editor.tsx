@@ -1,7 +1,8 @@
+/* eslint-disable react-refresh/only-export-components */
 import { useEffect, useRef, useCallback } from 'react';
 import { useApp } from '../AppContext';
 import { useSettingsStore } from '../store';
-import { EditorState, Compartment } from '@codemirror/state';
+import { EditorState, Compartment, type StateEffect } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightActiveLine, drawSelection, highlightSpecialChars, rectangularSelection, crosshairCursor, dropCursor } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
@@ -14,6 +15,7 @@ import type { TabFile } from '../types';
 import { copyFile, ensureDir, readClipboardFileUrls, readClipboardImage, writeBinaryFile } from '../utils/fs';
 import { basename, dirname, formatMarkdownImageUrl, markdownImagePathForDocument, stripExtension } from '../utils/markdownImages';
 import type { EditorSelection } from '../modules/ai-chat/types/editor-bridge';
+import { getDocumentLanguage, translateText } from '../i18n';
 
 export function ScrollSyncProvider({ children }: { children: React.ReactNode }) {
   return children;
@@ -157,7 +159,7 @@ function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error ?? new Error('读取图片失败'));
+    reader.onerror = () => reject(reader.error ?? new Error(translateText(getDocumentLanguage(), '读取图片失败')));
     reader.readAsDataURL(file);
   });
 }
@@ -357,6 +359,7 @@ function countDocumentCharacters(content: string): number {
 export default function Editor() {
   const { state, dispatch } = useApp();
   const editor = useSettingsStore(s => s.editor);
+  const language = useSettingsStore(s => s.general.language);
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const activeTab = state.tabs.find(t => t.id === state.activeTabId);
@@ -438,6 +441,7 @@ export default function Editor() {
 
   const handlePasteImages = useCallback(async (files: File[], view: EditorView) => {
     let warnedFallback = false;
+    const t = (value: string, params?: Record<string, string | number>) => translateText(language, value, params);
 
     for (const file of files) {
       try {
@@ -446,10 +450,10 @@ export default function Editor() {
 
         if (!target) {
           const dataUrl = await fileToDataUrl(file);
-          insertMarkdownImage(view, dataUrl, stripExtension(file.name) || '图片');
+          insertMarkdownImage(view, dataUrl, stripExtension(file.name) || t('图片'));
           if (action !== 'original' && !warnedFallback) {
             warnedFallback = true;
-            message.warning('当前文档还没有可写入的资源目录，已改为插入 Data URL');
+            message.warning(t('当前文档还没有可写入的资源目录，已改为插入 Data URL'));
           }
           continue;
         }
@@ -457,16 +461,17 @@ export default function Editor() {
         const bytes = new Uint8Array(await file.arrayBuffer());
         await ensureDir(target.dir);
         await writeBinaryFile(target.filePath, bytes);
-        insertMarkdownImage(view, target.markdownPath, stripExtension(file.name) || stripExtension(target.fileName) || '图片');
+        insertMarkdownImage(view, target.markdownPath, stripExtension(file.name) || stripExtension(target.fileName) || t('图片'));
       } catch (error) {
         console.error('[Editor] Failed to paste image:', error);
-        message.warning('粘贴图片失败');
+        message.warning(t('粘贴图片失败'));
       }
     }
-  }, []);
+  }, [language]);
 
   const handlePasteImagePaths = useCallback(async (paths: string[], view: EditorView) => {
     let inserted = false;
+    const t = (value: string, params?: Record<string, string | number>) => translateText(language, value, params);
 
     for (const sourcePath of paths) {
       try {
@@ -477,23 +482,23 @@ export default function Editor() {
 
         if (!target) {
           const markdownPath = markdownImagePathForDocument(sourcePath, activeTabRef.current?.path);
-          insertMarkdownImage(view, markdownPath, stripExtension(sourceName) || '图片');
+          insertMarkdownImage(view, markdownPath, stripExtension(sourceName) || t('图片'));
           inserted = true;
           continue;
         }
 
         await ensureDir(target.dir);
         await copyFile(sourcePath, target.filePath);
-        insertMarkdownImage(view, target.markdownPath, stripExtension(sourceName) || stripExtension(target.fileName) || '图片');
+        insertMarkdownImage(view, target.markdownPath, stripExtension(sourceName) || stripExtension(target.fileName) || t('图片'));
         inserted = true;
       } catch (error) {
         console.error('[Editor] Failed to paste image file:', error);
-        message.warning('粘贴图片文件失败');
+        message.warning(t('粘贴图片文件失败'));
       }
     }
 
     return inserted;
-  }, []);
+  }, [language]);
 
   const pasteClipboardImages = useCallback(async () => {
     const view = viewRef.current;
@@ -525,7 +530,7 @@ export default function Editor() {
 
   // Apply settings to an existing view via compartments
   const applySettings = useCallback((view: EditorView, settings: typeof editor) => {
-    const effects: any[] = [];
+    const effects: StateEffect<unknown>[] = [];
 
     // Line numbers
     effects.push(

@@ -1,6 +1,7 @@
 import type { SlashCommand } from '../types/block';
+import { translateText } from '../../../i18n';
 
-export const SLASH_COMMANDS: SlashCommand[] = [
+const SLASH_COMMAND_SOURCES: SlashCommand[] = [
   {
     id: 'heading_1',
     label: '一级标题',
@@ -114,3 +115,13 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     type: 'ai',
   },
 ];
+
+export function getSlashCommands(language: unknown): SlashCommand[] {
+  return SLASH_COMMAND_SOURCES.map(command => ({
+    ...command,
+    label: translateText(language, command.label),
+    description: translateText(language, command.description),
+  }));
+}
+
+export const SLASH_COMMANDS: SlashCommand[] = getSlashCommands('zh-CN');

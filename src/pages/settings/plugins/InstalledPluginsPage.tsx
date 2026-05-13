@@ -1,16 +1,19 @@
 import { List, Tag, Button, Space, Popconfirm, Typography } from 'antd';
 import { DeleteOutlined, PoweroffOutlined, ThunderboltOutlined } from '@ant-design/icons';
-import { usePluginStore } from '../../../store';
+import { usePluginStore, useSettingsStore } from '../../../store';
+import { translateText } from '../../../i18n';
 
 const { Text } = Typography;
 
 export default function InstalledPluginsPage() {
   const { installed, uninstallPlugin, togglePlugin } = usePluginStore();
+  const language = useSettingsStore(s => s.general.language);
+  const t = (value: string) => translateText(language, value);
 
   if (installed.length === 0) {
     return (
       <div>
-        <Text type="secondary">暂无已安装插件，请前往「插件中心」安装</Text>
+        <Text type="secondary">{t('暂无已安装插件，请前往「插件中心」安装')}</Text>
       </div>
     );
   }
@@ -23,16 +26,16 @@ export default function InstalledPluginsPage() {
           actions={[
             plugin.enabled ? (
               <Button size="small" icon={<PoweroffOutlined />} type="text" onClick={() => togglePlugin(plugin.id)}>
-                禁用
+                {t('禁用')}
               </Button>
             ) : (
               <Button size="small" icon={<ThunderboltOutlined />} type="primary" onClick={() => togglePlugin(plugin.id)}>
-                启用
+                {t('启用')}
               </Button>
             ),
-            <Popconfirm title="确认卸载" onConfirm={() => uninstallPlugin(plugin.id)}>
+            <Popconfirm title={t('确认卸载')} onConfirm={() => uninstallPlugin(plugin.id)}>
               <Button size="small" danger icon={<DeleteOutlined />}>
-                卸载
+                {t('卸载')}
               </Button>
             </Popconfirm>,
           ]}
@@ -42,7 +45,7 @@ export default function InstalledPluginsPage() {
               <Space>
                 {plugin.manifest.displayName || plugin.manifest.name}
                 <Tag>v{plugin.version}</Tag>
-                {!plugin.enabled && <Tag color="default">已禁用</Tag>}
+                {!plugin.enabled && <Tag color="default">{t('已禁用')}</Tag>}
               </Space>
             }
             description={

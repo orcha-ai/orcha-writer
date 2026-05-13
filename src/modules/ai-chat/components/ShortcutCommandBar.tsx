@@ -2,6 +2,8 @@ import { Button, Empty } from 'antd';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { AICommandPreset } from '../types';
+import { useSettingsStore } from '../../../store';
+import { translateText } from '../../../i18n';
 
 export interface ShortcutCommandBarProps {
   commands: AICommandPreset[];
@@ -9,13 +11,15 @@ export interface ShortcutCommandBarProps {
 }
 
 export function ShortcutCommandBar({ commands, onRunCommand }: ShortcutCommandBarProps) {
+  const language = useSettingsStore(s => s.general.language);
+  const t = (value: string) => translateText(language, value);
   const [expanded, setExpanded] = useState(false);
   const visibleCommands = useMemo(() => expanded ? commands : commands.slice(0, 3), [commands, expanded]);
 
   return (
     <div className="ai-shortcut-bar">
       <div className="ai-section-row">
-        <span className="ai-section-label">快捷指令</span>
+        <span className="ai-section-label">{t('快捷指令')}</span>
         {commands.length > 3 && (
           <Button
             type="text"
@@ -23,12 +27,12 @@ export function ShortcutCommandBar({ commands, onRunCommand }: ShortcutCommandBa
             icon={expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             onClick={() => setExpanded((value) => !value)}
           >
-            {expanded ? '收起' : '展开'}
+            {expanded ? t('收起') : t('展开')}
           </Button>
         )}
       </div>
       {commands.length === 0 ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前智能体暂无快捷指令" />
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('当前智能体暂无快捷指令')} />
       ) : (
         <div className="ai-command-list">
           {visibleCommands.map((command) => (

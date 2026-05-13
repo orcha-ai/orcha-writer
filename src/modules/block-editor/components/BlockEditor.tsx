@@ -24,8 +24,10 @@ import {
 import { message } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useApp } from '../../../AppContext';
+import { useSettingsStore } from '../../../store';
+import { translateText } from '../../../i18n';
 import { resolveMarkdownImageSource } from '../../../utils/markdownImages';
-import { SLASH_COMMANDS } from '../constants/slashCommands';
+import { getSlashCommands } from '../constants/slashCommands';
 import {
   blockToMarkdown,
   blockTypeLabel,
@@ -405,12 +407,6 @@ function countMarkdownCharacters(markdown: string): number {
   return Array.from(markdown.replace(/\s/g, '')).length;
 }
 
-function markdownSourceSummary(block: BlockViewModel): string {
-  const range = block.sourceRange;
-  if (!range) return '运行时新增块';
-  return `第 ${range.startLine} - ${range.endLine} 行`;
-}
-
 function listIndentPx(block: BlockViewModel): number {
   const indent = typeof block.attrs?.indent === 'string' ? block.attrs.indent : '';
   return Math.min(120, indent.replace(/\t/g, '    ').length * 10);
@@ -509,6 +505,10 @@ function scrollBlockDocumentDuringDrag(clientY: number): void {
 
 export default function BlockEditor() {
   const { state, dispatch } = useApp();
+  const language = useSettingsStore(s => s.general.language);
+  const t = useCallback((value: string, params?: Record<string, string | number>) => (
+    translateText(language, value, params)
+  ), [language]);
   const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
   const [blocks, setBlocks] = useState<BlockViewModel[]>(() => parseMarkdownToBlocks(activeTab?.content || ''));
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
@@ -551,16 +551,17 @@ export default function BlockEditor() {
     });
   }, []);
 
+  const slashCommands = useMemo(() => getSlashCommands(language), [language]);
   const filteredCommands = useMemo(() => {
     const query = slash?.query.trim().toLowerCase() || '';
     const commands = !query
-      ? SLASH_COMMANDS
-      : SLASH_COMMANDS.filter(command => (
+      ? slashCommands
+      : slashCommands.filter(command => (
           command.label.toLowerCase().includes(query)
           || command.keywords.some(keyword => keyword.toLowerCase().includes(query))
         ));
-    return commands.length > 0 ? commands : SLASH_COMMANDS;
-  }, [slash?.query]);
+    return commands.length > 0 ? commands : slashCommands;
+  }, [slash?.query, slashCommands]);
 
   useEffect(() => {
     setSelectedIndex(null);
@@ -680,13 +681,13 @@ export default function BlockEditor() {
         type: 'SET_BLOCK_SELECTION_STATUS',
         payload: {
           id: 'multi-selection',
-          typeLabel: `已选 ${selectedBlocks.length} 个块`,
-          sourceLabel: '多选',
+          typeLabel: t('已选 {count} 个块', { count: selectedBlocks.length }),
+          sourceLabel: t('多选'),
           characterCount: selectedBlocks.reduce(
             (count, block) => count + Array.from(plainTextFromBlock(block).replace(/\s/g, '')).length,
             0,
           ),
-          summary: selectedBlocks.map(block => blockTypeLabel(block.type)).join(' / '),
+          summary: selectedBlocks.map(block => t(blockTypeLabel(block.type))).join(' / '),
         },
       });
       return;
@@ -702,13 +703,15 @@ export default function BlockEditor() {
       type: 'SET_BLOCK_SELECTION_STATUS',
       payload: {
         id: selectedBlock.id,
-        typeLabel: blockTypeLabel(selectedBlock.type),
-        sourceLabel: markdownSourceSummary(selectedBlock),
+        typeLabel: t(blockTypeLabel(selectedBlock.type)),
+        sourceLabel: selectedBlock.sourceRange
+          ? t('第 {start} - {end} 行', { start: selectedBlock.sourceRange.startLine, end: selectedBlock.sourceRange.endLine })
+          : t('运行时新增块'),
         characterCount: Array.from(plainTextFromBlock(selectedBlock).replace(/\s/g, '')).length,
-        summary: summary || '空块',
+        summary: summary || t('空块'),
       },
     });
-  }, [dispatch, selectedBlock, selectedBlocks, state.viewMode]);
+  }, [dispatch, selectedBlock, selectedBlocks, state.viewMode, t]);
 
   const pushHistorySnapshot = useCallback((content: string) => {
     const past = historyPastRef.current;
@@ -1010,16 +1013,16 @@ export default function BlockEditor() {
 
   const copyText = useCallback(async (text: string, successText: string) => {
     if (!text.trim()) {
-      message.warning('没有可复制的内容');
+      message.warning(t('没有可复制的内容'));
       return;
     }
     try {
       await navigator.clipboard.writeText(text);
       message.success(successText);
     } catch {
-      message.error('复制失败，请检查剪贴板权限');
+      message.error(t('复制失败，请检查剪贴板权限'));
     }
-  }, []);
+  }, [t]);
 
   const buildBlockAISelection = useCallback((blockIndex: number): BlockAISelectionPayload | null => {
     const targets = getSelectionForBlock(blockIndex);
@@ -1028,7 +1031,7 @@ export default function BlockEditor() {
       .filter((block): block is BlockViewModel => Boolean(block));
     if (targetBlocks.length === 0) return null;
     if (targetBlocks.length > 1 && !isContiguousIndices(targets)) {
-      message.warning('AI 多块处理暂只支持连续选择，请用 Shift 点击选择范围');
+      message.warning(t('AI 多块处理暂只支持连续选择，请用 Shift 点击选择范围'));
       return null;
     }
 
@@ -1036,7 +1039,7 @@ export default function BlockEditor() {
     const firstRange = sourceBlocks[targets[0]]?.sourceRange;
     const lastRange = sourceBlocks[targets[targets.length - 1]]?.sourceRange;
     if (firstRange?.startOffset == null || lastRange?.endOffset == null) {
-      message.warning('选中的块还没有源码映射，请先保存一次块内容');
+      message.warning(t('选中的块还没有源码映射，请先保存一次块内容'));
       return null;
     }
 
@@ -1047,7 +1050,7 @@ export default function BlockEditor() {
         range: { from: firstRange.startOffset, to: lastRange.endOffset },
       },
     };
-  }, [blocks, getSelectionForBlock]);
+  }, [blocks, getSelectionForBlock, t]);
 
   const runAIAction = useCallback((action: BlockAIAction, blockIndex: number) => {
     const payload = buildBlockAISelection(blockIndex);
@@ -1056,16 +1059,16 @@ export default function BlockEditor() {
     window.dispatchEvent(new CustomEvent('orcha-block-ai', {
       detail: {
         prompt: payload.targetBlocks.length > 1
-          ? `${BLOCK_AI_PROMPTS[action]}（共 ${payload.targetBlocks.length} 个块）`
-          : BLOCK_AI_PROMPTS[action],
+          ? t('{prompt}（共 {count} 个块）', { prompt: t(BLOCK_AI_PROMPTS[action]), count: payload.targetBlocks.length })
+          : t(BLOCK_AI_PROMPTS[action]),
         commandId: BLOCK_AI_COMMAND_IDS[action],
         selection: payload.selection,
       },
     }));
     setBlockAI(null);
     setBlockAIPrompt('');
-    message.success('已发送到右侧 AI 写作面板');
-  }, [buildBlockAISelection]);
+    message.success(t('已发送到右侧 AI 写作面板'));
+  }, [buildBlockAISelection, t]);
 
   const runCustomBlockAI = useCallback((prompt: string, blockIndex: number) => {
     const value = prompt.trim();
@@ -1082,8 +1085,8 @@ export default function BlockEditor() {
     }));
     setBlockAI(null);
     setBlockAIPrompt('');
-    message.success('已发送到右侧 AI 写作面板');
-  }, [buildBlockAISelection]);
+    message.success(t('已发送到右侧 AI 写作面板'));
+  }, [buildBlockAISelection, t]);
 
   const openBlockAIPopover = useCallback((event: MouseEvent<HTMLButtonElement>, blockIndex: number) => {
     event.preventDefault();
@@ -1175,12 +1178,12 @@ export default function BlockEditor() {
 
   const addTableColumn = useCallback((blockIndex: number) => {
     updateTableBlock(blockIndex, (table) => {
-      table.headers.push(`列 ${table.headers.length + 1}`);
+      table.headers.push(t('列 {count}', { count: table.headers.length + 1 }));
       table.alignments.push('default');
       table.rows = table.rows.map(row => [...row, '']);
       return table;
     });
-  }, [updateTableBlock]);
+  }, [t, updateTableBlock]);
 
   const removeTableRow = useCallback((blockIndex: number, rowIndex: number) => {
     updateTableBlock(blockIndex, (table) => {
@@ -1281,7 +1284,9 @@ export default function BlockEditor() {
 
   const contextSelection = blockMenu ? getSelectionForBlock(blockMenu.blockIndex) : [];
   const blockAISelection = blockAI ? getSelectionForBlock(blockAI.blockIndex) : [];
-  const blockAIScopeLabel = blockAISelection.length > 1 ? `${blockAISelection.length} 个块` : '当前块';
+  const blockAIScopeLabel = blockAISelection.length > 1
+    ? t('{count} 个块', { count: blockAISelection.length })
+    : t('当前块');
 
   const runContextAction = useCallback((action: () => void) => {
     action();
@@ -1445,7 +1450,7 @@ export default function BlockEditor() {
         onContextMenu={handleShellContextMenu}
       >
         <div className="empty-state">
-          <p>打开或新建一个 Markdown 文件后，可以使用块编辑模式。</p>
+          <p>{t('打开或新建一个 Markdown 文件后，可以使用块编辑模式。')}</p>
         </div>
       </section>
     );
@@ -1505,8 +1510,8 @@ export default function BlockEditor() {
                     <button
                       type="button"
                       className="block-mini-btn block-insert-btn"
-                      aria-label="插入块"
-                      data-tooltip="插入块"
+                      aria-label={t('插入块')}
+                      data-tooltip={t('插入块')}
                       onPointerDown={(event) => event.stopPropagation()}
                       onClick={(event) => handlePlusClick(event, index)}
                     >
@@ -1515,8 +1520,8 @@ export default function BlockEditor() {
                     <button
                       type="button"
                       className="block-mini-btn block-drag-handle"
-                      aria-label="拖拽移动块"
-                      data-tooltip="拖拽"
+                      aria-label={t('拖拽移动块')}
+                      data-tooltip={t('拖拽')}
                       onClick={(event) => event.stopPropagation()}
                     >
                       <GripVertical size={14} />
@@ -1555,7 +1560,7 @@ export default function BlockEditor() {
                         )}
                         {block.type === 'code_block' && (
                           <div className="block-code-head">
-                            <span>语言</span>
+                            <span>{t('语言')}</span>
                             <input
                               value={String(block.attrs?.language || '')}
                               placeholder="shell"
@@ -1576,20 +1581,20 @@ export default function BlockEditor() {
                               <div className="block-image-preview">
                                 <img
                                   src={resolvedImage.src}
-                                  alt={String(block.attrs?.alt || block.content || '图片')}
+                                  alt={String(block.attrs?.alt || block.content || t('图片'))}
                                   onLoad={(event) => event.currentTarget.closest('.block-image-preview')?.classList.remove('is-error')}
                                   onError={(event) => event.currentTarget.closest('.block-image-preview')?.classList.add('is-error')}
                                 />
                                 <div className="block-image-error">
-                                  图片加载失败
+                                  {t('图片加载失败')}
                                   <span>{resolvedImage.originalSrc}</span>
                                 </div>
                               </div>
                             ) : (
-                              <div className="block-image-empty">未设置图片路径</div>
+                              <div className="block-image-empty">{t('未设置图片路径')}</div>
                             )}
                             <label className="block-image-field">
-                              <span>路径</span>
+                              <span>{t('路径')}</span>
                               <input
                                 value={imagePath}
                                 placeholder="images/example.png"
@@ -1621,7 +1626,7 @@ export default function BlockEditor() {
                                           )}
                                           <input
                                             value={cell}
-                                            aria-label={`表头 ${columnIndex + 1}`}
+                                            aria-label={t('表头 {count}', { count: columnIndex + 1 })}
                                             onFocus={() => {
                                               setSelectedIndex(index);
                                               setSelectedIndices([index]);
@@ -1631,7 +1636,7 @@ export default function BlockEditor() {
                                           <button
                                             type="button"
                                             className="block-table-cell-action"
-                                            aria-label="删除列"
+                                            aria-label={t('删除列')}
                                             disabled={tableModel.headers.length <= 1}
                                             onClick={() => removeTableColumn(index, columnIndex)}
                                           >
@@ -1656,7 +1661,7 @@ export default function BlockEditor() {
                                             )}
                                             <input
                                               value={row[columnIndex] ?? ''}
-                                              aria-label={`第 ${rowIndex + 1} 行第 ${columnIndex + 1} 列`}
+                                              aria-label={t('第 {row} 行第 {column} 列', { row: rowIndex + 1, column: columnIndex + 1 })}
                                               onFocus={() => {
                                                 setSelectedIndex(index);
                                                 setSelectedIndices([index]);
@@ -1669,7 +1674,7 @@ export default function BlockEditor() {
                                       <td className="block-table-row-tools">
                                         <button
                                           type="button"
-                                          aria-label="删除行"
+                                          aria-label={t('删除行')}
                                           disabled={tableModel.rows.length <= 1}
                                           onClick={() => removeTableRow(index, rowIndex)}
                                         >
@@ -1684,11 +1689,11 @@ export default function BlockEditor() {
                             <div className="block-table-actions">
                               <button type="button" onClick={() => addTableRow(index)}>
                                 <Plus size={13} />
-                                <span>行</span>
+                                <span>{t('行')}</span>
                               </button>
                               <button type="button" onClick={() => addTableColumn(index)}>
                                 <Plus size={13} />
-                                <span>列</span>
+                                <span>{t('列')}</span>
                               </button>
                             </div>
                             <textarea
@@ -1736,7 +1741,7 @@ export default function BlockEditor() {
                               className={textareaClassName(block)}
                               rows={1}
                               value={textareaValue}
-                              placeholder={block.type === 'empty' ? '输入 / 添加块，或直接开始写作' : block.type === 'image' ? '图片描述' : '输入内容'}
+                              placeholder={block.type === 'empty' ? t('输入 / 添加块，或直接开始写作') : block.type === 'image' ? t('图片描述') : t('输入内容')}
                               spellCheck
                               onChange={(event) => handleTextChange(index, event.target.value)}
                               onInput={(event) => resizeTextarea(event.currentTarget)}
@@ -1754,24 +1759,24 @@ export default function BlockEditor() {
 
                     {isPrimarySelected && (
                       <div className="block-toolbar" onClick={(event) => event.stopPropagation()}>
-                        <button type="button" onClick={(event) => openBlockAIPopover(event, index)} title="AI 处理">
+                        <button type="button" onClick={(event) => openBlockAIPopover(event, index)} title={t('AI 处理')}>
                           <Sparkles size={14} />
                           <span>AI</span>
                         </button>
                         <select
                           value={block.type}
                           onChange={(event) => convertSelectedBlock(index, event.target.value as BlockType)}
-                          aria-label="转换块格式"
+                          aria-label={t('转换块格式')}
                         >
                           {CONVERT_OPTIONS.map(option => (
-                            <option key={option.type} value={option.type}>{option.label}</option>
+                            <option key={option.type} value={option.type}>{t(option.label)}</option>
                           ))}
                         </select>
                         <button
                           type="button"
                           onClick={() => moveSelectedBlocksBy(-1)}
                           disabled={selectionForThisBlock[0] === 0}
-                          title="上移"
+                          title={t('上移')}
                         >
                           <ChevronUp size={14} />
                         </button>
@@ -1779,14 +1784,14 @@ export default function BlockEditor() {
                           type="button"
                           onClick={() => moveSelectedBlocksBy(1)}
                           disabled={selectionForThisBlock[selectionForThisBlock.length - 1] === blocks.length - 1}
-                          title="下移"
+                          title={t('下移')}
                         >
                           <ChevronDown size={14} />
                         </button>
-                        <button type="button" onClick={() => duplicateBlocksAt(selectionForThisBlock)} title="复制块">
+                        <button type="button" onClick={() => duplicateBlocksAt(selectionForThisBlock)} title={t('复制块')}>
                           <Copy size={14} />
                         </button>
-                        <button type="button" className="is-danger" onClick={() => deleteBlocksAt(selectionForThisBlock)} title="删除块">
+                        <button type="button" className="is-danger" onClick={() => deleteBlocksAt(selectionForThisBlock)} title={t('删除块')}>
                           <Trash2 size={14} />
                         </button>
                       </div>
@@ -1831,13 +1836,13 @@ export default function BlockEditor() {
           <div className="block-ai-head">
             <div className="block-ai-title">
               <Sparkles size={15} />
-              <span>AI 处理</span>
+              <span>{t('AI 处理')}</span>
             </div>
             <span className="block-ai-scope">{blockAIScopeLabel}</span>
             <button
               type="button"
               className="block-ai-icon-button"
-              aria-label="关闭"
+              aria-label={t('关闭')}
               onClick={() => setBlockAI(null)}
             >
               <X size={14} />
@@ -1850,7 +1855,7 @@ export default function BlockEditor() {
                 type="button"
                 onClick={() => runAIAction(option.action, blockAI.blockIndex)}
               >
-                {option.label}
+                {t(option.label)}
               </button>
             ))}
           </div>
@@ -1859,7 +1864,7 @@ export default function BlockEditor() {
               ref={blockAIPromptRef}
               className="block-ai-prompt"
               value={blockAIPrompt}
-              placeholder="输入自定义要求"
+              placeholder={t('输入自定义要求')}
               spellCheck
               onChange={(event) => {
                 setBlockAIPrompt(event.target.value);
@@ -1881,7 +1886,7 @@ export default function BlockEditor() {
             <button
               type="button"
               className="block-ai-send"
-              aria-label="发送"
+              aria-label={t('发送')}
               disabled={!blockAIPrompt.trim()}
               onClick={() => runCustomBlockAI(blockAIPrompt, blockAI.blockIndex)}
             >
@@ -1901,34 +1906,34 @@ export default function BlockEditor() {
           onContextMenu={(event) => event.preventDefault()}
         >
           <button type="button" onClick={() => runContextAction(() => duplicateBlocksAt(contextSelection))}>
-            复制块
+            {t('复制块')}
           </button>
-          <button type="button" onClick={() => runContextAction(() => copyText(selectedMarkdown(contextSelection), '已复制为 Markdown'))}>
-            复制为 Markdown
+          <button type="button" onClick={() => runContextAction(() => copyText(selectedMarkdown(contextSelection), t('已复制为 Markdown')))}>
+            {t('复制为 Markdown')}
           </button>
-          <button type="button" onClick={() => runContextAction(() => copyText(selectedPlainText(contextSelection), '已复制为纯文本'))}>
-            复制为纯文本
+          <button type="button" onClick={() => runContextAction(() => copyText(selectedPlainText(contextSelection), t('已复制为纯文本')))}>
+            {t('复制为纯文本')}
           </button>
           <span className="block-context-menu-separator" />
           <button type="button" onClick={() => runContextAction(() => insertBlockBefore(blockMenu.blockIndex))}>
-            在上方插入块
+            {t('在上方插入块')}
           </button>
           <button type="button" onClick={() => runContextAction(() => insertBlockAfter(blockMenu.blockIndex))}>
-            在下方插入块
+            {t('在下方插入块')}
           </button>
           <span className="block-context-menu-separator" />
           <button type="button" onClick={() => runContextAction(() => convertBlocksAt(contextSelection, 'blockquote'))}>
-            转换为引用
+            {t('转换为引用')}
           </button>
           <button type="button" onClick={() => runContextAction(() => convertBlocksAt(contextSelection, 'callout'))}>
-            转换为 Callout
+            {t('转换为 Callout')}
           </button>
           <button type="button" onClick={() => runContextAction(() => convertBlocksAt(contextSelection, 'bulleted_list_item'))}>
-            转换为列表
+            {t('转换为列表')}
           </button>
           <span className="block-context-menu-separator" />
           <button type="button" className="is-danger" onClick={() => runContextAction(() => deleteBlocksAt(contextSelection))}>
-            删除块
+            {t('删除块')}
           </button>
         </div>
       )}

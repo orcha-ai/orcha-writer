@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Button, Card, Drawer, Form, Input, InputNumber, List, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ExperimentOutlined } from '@ant-design/icons';
-import { useAiStore } from '../../../store';
+import { useAiStore, useSettingsStore } from '../../../store';
 import type { AiModelConfig, AiProviderConfig } from '../../../types';
+import { translateText } from '../../../i18n';
 
 const { Text } = Typography;
 
@@ -67,6 +68,7 @@ export default function AiModelConfigPage() {
     removeModel,
     toggleModel,
   } = useAiStore();
+  const language = useSettingsStore(s => s.general.language);
   const [providerForm] = Form.useForm<ProviderFormValues>();
   const [modelForm] = Form.useForm<ModelFormValues>();
   const [providerModalOpen, setProviderModalOpen] = useState(false);
@@ -78,6 +80,7 @@ export default function AiModelConfigPage() {
   const thinkingSupported = Form.useWatch('thinkingSupported', modelForm);
   const providerType = Form.useWatch('type', providerForm) || editingProvider?.type || 'openai-compatible';
   const endpointHint = PROVIDER_ENDPOINT_HINTS[providerType];
+  const t = (value: string, params?: Record<string, string | number>) => translateText(language, value, params);
 
   useEffect(() => {
     if (!providerModalOpen) return;
@@ -117,14 +120,14 @@ export default function AiModelConfigPage() {
     try {
       if (editingProvider) {
         await updateProvider(editingProvider.id, values);
-        message.success('供应商已更新');
+        message.success(t('供应商已更新'));
       } else {
         await addProvider(values);
-        message.success('供应商已添加');
+        message.success(t('供应商已添加'));
       }
       setProviderModalOpen(false);
     } catch (error) {
-      message.error(`保存失败：${error instanceof Error ? error.message : String(error)}`);
+      message.error(t('保存失败：{error}', { error: error instanceof Error ? error.message : String(error) }));
     }
   };
 
@@ -138,14 +141,14 @@ export default function AiModelConfigPage() {
     try {
       if (editingModel) {
         await updateModel(editingModel.id, modelValues);
-        message.success('模型配置已更新');
+        message.success(t('模型配置已更新'));
       } else {
         await addModel(modelValues);
-        message.success('模型配置已添加');
+        message.success(t('模型配置已添加'));
       }
       setModelModalOpen(false);
     } catch (error) {
-      message.error(`保存失败：${error instanceof Error ? error.message : String(error)}`);
+      message.error(t('保存失败：{error}', { error: error instanceof Error ? error.message : String(error) }));
     }
   };
 
@@ -157,8 +160,8 @@ export default function AiModelConfigPage() {
         credentialRef: provider.credentialRef?.trim() || undefined,
         model: model.model,
         messages: [
-          { role: 'system', content: '你是 Orcha Writer 的模型连接测试。只回复 OK。' },
-          { role: 'user', content: '回复 OK' },
+          { role: 'system', content: translateText(language, '你是 Orcha Writer 的模型连接测试。只回复 OK。') },
+          { role: 'user', content: translateText(language, '回复 OK') },
         ],
         temperature: 0,
         topP: 1,
@@ -171,15 +174,15 @@ export default function AiModelConfigPage() {
 
   const validateProviderForTest = (provider: AiProviderConfig): boolean => {
     if (!provider.baseUrl.trim()) {
-      message.warning('请先配置请求地址');
+      message.warning(t('请先配置请求地址'));
       return false;
     }
     if (!isTauriRuntime()) {
-      message.warning('当前不是 Tauri 运行环境，无法发起真实连接测试');
+      message.warning(t('当前不是 Tauri 运行环境，无法发起真实连接测试'));
       return false;
     }
     if (requiresCredential(provider.type) && !provider.credentialRef?.trim()) {
-      message.warning('模型凭据未配置，请先填写凭据引用或 API Key');
+      message.warning(t('模型凭据未配置，请先填写凭据引用或 API Key'));
       return false;
     }
     return true;
@@ -191,14 +194,14 @@ export default function AiModelConfigPage() {
     const model = models.find((item) => item.providerId === provider.id && item.enabled) ||
       models.find((item) => item.providerId === provider.id);
     if (!model) {
-      message.warning('请先为该供应商添加模型配置，再执行真实连接测试');
+      message.warning(t('请先为该供应商添加模型配置，再执行真实连接测试'));
       return;
     }
 
     setTestingProviderId(provider.id);
     try {
       const response = await testModelConnection(provider, model);
-      message.success(`${provider.name} 真实连接成功，使用模型：${response.model || model.model}`);
+      message.success(t('{name} 真实连接成功，使用模型：{model}', { name: provider.name, model: response.model || model.model }));
     } catch (error) {
       message.error(error instanceof Error ? error.message : String(error));
     } finally {
@@ -209,7 +212,7 @@ export default function AiModelConfigPage() {
   const handleTestModel = async (model: AiModelConfig) => {
     const provider = providers.find((item) => item.id === model.providerId);
     if (!provider) {
-      message.warning('模型对应的供应商不存在，请重新选择供应商');
+      message.warning(t('模型对应的供应商不存在，请重新选择供应商'));
       return;
     }
     if (!validateProviderForTest(provider)) return;
@@ -217,7 +220,7 @@ export default function AiModelConfigPage() {
     setTestingModelId(model.id);
     try {
       const response = await testModelConnection(provider, model);
-      message.success(`${model.name} 真实连接成功，模型：${response.model || model.model}`);
+      message.success(t('{name} 真实连接成功，模型：{model}', { name: model.name, model: response.model || model.model }));
     } catch (error) {
       message.error(error instanceof Error ? error.message : String(error));
     } finally {
@@ -226,11 +229,11 @@ export default function AiModelConfigPage() {
   };
 
   const providerColumns = [
-    { title: '名称', dataIndex: 'name', key: 'name', width: 140 },
-    { title: '类型', dataIndex: 'type', key: 'type', width: 160, render: (type: AiProviderConfig['type']) => <Tag>{PROVIDER_TYPE_LABELS[type] || type}</Tag> },
-    { title: '请求地址', dataIndex: 'baseUrl', key: 'baseUrl', ellipsis: true, width: 320 },
+    { title: t('名称'), dataIndex: 'name', key: 'name', width: 140 },
+    { title: t('类型'), dataIndex: 'type', key: 'type', width: 160, render: (type: AiProviderConfig['type']) => <Tag>{PROVIDER_TYPE_LABELS[type] || type}</Tag> },
+    { title: t('请求地址'), dataIndex: 'baseUrl', key: 'baseUrl', ellipsis: true, width: 320 },
     {
-      title: '状态',
+      title: t('状态'),
       dataIndex: 'enabled',
       key: 'enabled',
       width: 100,
@@ -239,7 +242,7 @@ export default function AiModelConfigPage() {
       ),
     },
     {
-      title: '操作',
+      title: t('操作'),
       key: 'actions',
       width: 220,
       fixed: 'right' as const,
@@ -254,10 +257,10 @@ export default function AiModelConfigPage() {
               setProviderModalOpen(true);
             }}
           >
-            编辑
+            {t('编辑')}
           </Button>
-          <Popconfirm title="确认删除？相关模型和智能体也会移除。" onConfirm={() => removeProvider(record.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} type="text">删除</Button>
+          <Popconfirm title={t('确认删除？相关模型和智能体也会移除。')} onConfirm={() => removeProvider(record.id)}>
+            <Button size="small" danger icon={<DeleteOutlined />} type="text">{t('删除')}</Button>
           </Popconfirm>
           <Button
             size="small"
@@ -267,7 +270,7 @@ export default function AiModelConfigPage() {
             disabled={Boolean(testingProviderId && testingProviderId !== record.id)}
             onClick={() => handleTestProvider(record)}
           >
-            测试
+            {t('测试')}
           </Button>
         </Space>
       ),
@@ -277,7 +280,7 @@ export default function AiModelConfigPage() {
   return (
     <div>
       <Card
-        title="模型供应商"
+        title={t('模型供应商')}
         extra={
           <Button
             type="primary"
@@ -287,7 +290,7 @@ export default function AiModelConfigPage() {
               setProviderModalOpen(true);
             }}
           >
-            添加供应商
+            {t('添加供应商')}
           </Button>
         }
       >
@@ -302,7 +305,7 @@ export default function AiModelConfigPage() {
       </Card>
 
       <Card
-        title="模型配置"
+        title={t('模型配置')}
         style={{ marginTop: 16 }}
         extra={
           <Button
@@ -314,12 +317,12 @@ export default function AiModelConfigPage() {
               setModelModalOpen(true);
             }}
           >
-            添加模型
+            {t('添加模型')}
           </Button>
         }
       >
         {models.length === 0 ? (
-          <Text type="secondary">暂无模型配置，请先添加供应商</Text>
+          <Text type="secondary">{t('暂无模型配置，请先添加供应商')}</Text>
         ) : (
           <List
             dataSource={models}
@@ -335,7 +338,7 @@ export default function AiModelConfigPage() {
                     disabled={Boolean(testingProviderId || (testingModelId && testingModelId !== model.id))}
                     onClick={() => handleTestModel(model)}
                   >
-                    测试
+                    {t('测试')}
                   </Button>,
                   <Button
                     size="small"
@@ -346,10 +349,10 @@ export default function AiModelConfigPage() {
                       setModelModalOpen(true);
                     }}
                   >
-                    编辑
+                    {t('编辑')}
                   </Button>,
-                  <Popconfirm title="确认删除模型配置？" onConfirm={() => removeModel(model.id)}>
-                    <Button size="small" danger icon={<DeleteOutlined />} type="text">删除</Button>
+                  <Popconfirm title={t('确认删除模型配置？')} onConfirm={() => removeModel(model.id)}>
+                    <Button size="small" danger icon={<DeleteOutlined />} type="text">{t('删除')}</Button>
                   </Popconfirm>,
                 ]}
               >
@@ -360,13 +363,13 @@ export default function AiModelConfigPage() {
                       <Tag>{model.model}</Tag>
                       {model.thinkingSupported && (
                         <Tag color={model.thinkingEnabled ? 'blue' : 'default'}>
-                          {model.thinkingEnabled ? '默认深度思考' : '支持深度思考'}
+                          {model.thinkingEnabled ? t('默认深度思考') : t('支持深度思考')}
                         </Tag>
                       )}
-                      {!model.enabled && <Tag color="default">已禁用</Tag>}
+                      {!model.enabled && <Tag color="default">{t('已禁用')}</Tag>}
                     </Space>
                   }
-                  description={`供应商: ${providers.find((p) => p.id === model.providerId)?.name || model.providerId}`}
+                  description={t('供应商: {provider}', { provider: providers.find((p) => p.id === model.providerId)?.name || model.providerId })}
                 />
               </List.Item>
             )}
@@ -375,18 +378,18 @@ export default function AiModelConfigPage() {
       </Card>
 
       <Modal
-        title={editingProvider ? '编辑供应商' : '添加供应商'}
+        title={editingProvider ? t('编辑供应商') : t('添加供应商')}
         open={providerModalOpen}
         onOk={handleProviderSubmit}
         onCancel={() => setProviderModalOpen(false)}
-        okText="保存"
-        cancelText="取消"
+        okText={t('保存')}
+        cancelText={t('取消')}
       >
         <Form form={providerForm} layout="vertical">
-          <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入供应商名称' }]}>
+          <Form.Item label={t('名称')} name="name" rules={[{ required: true, message: t('请输入供应商名称') }]}>
             <Input placeholder="OpenAI" />
           </Form.Item>
-          <Form.Item label="类型" name="type" rules={[{ required: true }]}>
+          <Form.Item label={t('类型')} name="type" rules={[{ required: true }]}>
             <Select>
               {Object.entries(PROVIDER_TYPE_LABELS).map(([value, label]) => (
                 <Select.Option key={value} value={value}>{label}</Select.Option>
@@ -394,45 +397,45 @@ export default function AiModelConfigPage() {
             </Select>
           </Form.Item>
           <Form.Item
-            label="请求地址"
+            label={t('请求地址')}
             name="baseUrl"
-            rules={[{ required: true, message: '请输入请求地址' }]}
+            rules={[{ required: true, message: t('请输入请求地址') }]}
             extra={
-              <Text type="secondary">{endpointHint.extra}</Text>
+              <Text type="secondary">{t(endpointHint.extra)}</Text>
             }
           >
             <Input placeholder={endpointHint.placeholder} />
           </Form.Item>
           <Form.Item
-            label="凭据引用"
+            label={t('凭据引用')}
             name="credentialRef"
-            extra="支持 env:环境变量名 或临时填入 API Key；Ollama / Custom 可留空。"
+            extra={t('支持 env:环境变量名 或临时填入 API Key；Ollama / Custom 可留空。')}
           >
-            <Input placeholder="如 env:DASHSCOPE_API_KEY，或临时填入 API Key" />
+            <Input placeholder={t('如 env:DASHSCOPE_API_KEY，或临时填入 API Key')} />
           </Form.Item>
-          <Form.Item label="启用" name="enabled" valuePropName="checked">
+          <Form.Item label={t('启用')} name="enabled" valuePropName="checked">
             <Switch />
           </Form.Item>
         </Form>
       </Modal>
 
       <Drawer
-        title={editingModel ? '编辑模型配置' : '添加模型配置'}
+        title={editingModel ? t('编辑模型配置') : t('添加模型配置')}
         open={modelModalOpen}
         onClose={() => setModelModalOpen(false)}
         width={520}
         extra={
           <Space>
-            <Button onClick={() => setModelModalOpen(false)}>取消</Button>
-            <Button type="primary" onClick={handleModelSubmit}>保存</Button>
+            <Button onClick={() => setModelModalOpen(false)}>{t('取消')}</Button>
+            <Button type="primary" onClick={handleModelSubmit}>{t('保存')}</Button>
           </Space>
         }
       >
         <Form form={modelForm} layout="vertical">
-          <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入配置名称' }]}>
-            <Input placeholder="GPT 写作助手" />
+          <Form.Item label={t('名称')} name="name" rules={[{ required: true, message: t('请输入配置名称') }]}>
+            <Input placeholder={t('GPT 写作助手')} />
           </Form.Item>
-          <Form.Item label="供应商" name="providerId" rules={[{ required: true, message: '请选择供应商' }]}>
+          <Form.Item label={t('供应商')} name="providerId" rules={[{ required: true, message: t('请选择供应商') }]}>
             <Select>
               {providers.map((provider) => (
                 <Select.Option key={provider.id} value={provider.id}>
@@ -441,7 +444,7 @@ export default function AiModelConfigPage() {
               ))}
             </Select>
           </Form.Item>
-          <Form.Item label="模型 ID" name="model" rules={[{ required: true, message: '请输入模型 ID' }]}>
+          <Form.Item label={t('模型 ID')} name="model" rules={[{ required: true, message: t('请输入模型 ID') }]}>
             <Input placeholder="gpt-5.2" />
           </Form.Item>
           <Form.Item label="Temperature" name="temperature">
@@ -450,24 +453,24 @@ export default function AiModelConfigPage() {
           <Form.Item label="Top P" name="topP">
             <InputNumber min={0} max={1} step={0.05} style={{ width: 140 }} />
           </Form.Item>
-          <Form.Item label="最大 Tokens" name="maxTokens">
+          <Form.Item label={t('最大 Tokens')} name="maxTokens">
             <InputNumber min={256} max={200000} step={256} style={{ width: 160 }} />
           </Form.Item>
-          <Form.Item label="支持深度思考" name="thinkingSupported" valuePropName="checked">
+          <Form.Item label={t('支持深度思考')} name="thinkingSupported" valuePropName="checked">
             <Switch />
           </Form.Item>
           <Form.Item
-            label="默认开启深度思考"
+            label={t('默认开启深度思考')}
             name="thinkingEnabled"
             valuePropName="checked"
-            tooltip="打开后，输入框里的深度思考开关会随该模型默认开启。"
+            tooltip={t('打开后，输入框里的深度思考开关会随该模型默认开启。')}
           >
             <Switch disabled={!thinkingSupported} />
           </Form.Item>
           <Form.Item
-            label="思考预算 Tokens"
+            label={t('思考预算 Tokens')}
             name="thinkingBudget"
-            tooltip="可选。留空表示使用模型默认思考预算。DashScope 兼容接口会发送 thinking_budget。"
+            tooltip={t('可选。留空表示使用模型默认思考预算。DashScope 兼容接口会发送 thinking_budget。')}
           >
             <InputNumber
               min={256}
@@ -475,10 +478,10 @@ export default function AiModelConfigPage() {
               step={256}
               style={{ width: 160 }}
               disabled={!thinkingSupported}
-              placeholder="模型默认"
+              placeholder={t('模型默认')}
             />
           </Form.Item>
-          <Form.Item label="启用" name="enabled" valuePropName="checked">
+          <Form.Item label={t('启用')} name="enabled" valuePropName="checked">
             <Switch />
           </Form.Item>
         </Form>

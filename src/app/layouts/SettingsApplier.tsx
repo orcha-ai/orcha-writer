@@ -10,7 +10,7 @@ import { readTextFile } from '../../utils/fs';
 import { installAvailableUpdate, relaunchApplication } from '../../utils/update';
 import { findFirstMdFile, readFirstLevel } from '../../utils/workspace';
 import type { FileSettings, GeneralSettings, TabFile } from '../../types';
-import { normalizeAppLanguage } from '../../i18n';
+import { normalizeAppLanguage, translateText } from '../../i18n';
 
 function normalizeThemeColor(color: string | undefined): string {
   const value = color?.trim();
@@ -42,30 +42,36 @@ function getUnsavedTabs(tabs: TabFile[]): TabFile[] {
   return tabs.filter(tab => tab.isDraft || !tab.saved);
 }
 
-function formatUnsavedTabsMessage(tabs: TabFile[]): string {
+function formatUnsavedTabsMessage(tabs: TabFile[], language: unknown): string {
+  const t = (value: string, params?: Record<string, string | number>) => translateText(language, value, params);
   if (tabs.length === 1) {
-    return `「${tabs[0].name}」尚未保存。退出后未保存的修改会丢失。`;
+    return t('「{name}」尚未保存。退出后未保存的修改会丢失。', { name: tabs[0].name });
   }
 
   const visibleNames = tabs.slice(0, 3).map(tab => `「${tab.name}」`).join('、');
-  const moreText = tabs.length > 3 ? ' 等' : '';
-  return `有 ${tabs.length} 个文档尚未保存：${visibleNames}${moreText}。退出后未保存的修改会丢失。`;
+  const moreText = tabs.length > 3 ? t(' 等') : '';
+  return t('有 {count} 个文档尚未保存：{names}{moreText}。退出后未保存的修改会丢失。', {
+    count: tabs.length,
+    names: visibleNames,
+    moreText,
+  });
 }
 
-function confirmUnsavedExit(tabs: TabFile[]): Promise<boolean> {
-  const content = formatUnsavedTabsMessage(tabs);
+function confirmUnsavedExit(tabs: TabFile[], language: unknown): Promise<boolean> {
+  const content = formatUnsavedTabsMessage(tabs, language);
+  const t = (value: string) => translateText(language, value);
   return confirmDialog(content, {
-    title: '有未保存的文档',
+    title: t('有未保存的文档'),
     kind: 'warning',
-    okLabel: '仍然退出',
-    cancelLabel: '取消',
+    okLabel: t('仍然退出'),
+    cancelLabel: t('取消'),
   }).catch(() => new Promise((resolve) => {
     Modal.confirm({
-      title: '有未保存的文档',
+      title: t('有未保存的文档'),
       content,
-      okText: '仍然退出',
+      okText: t('仍然退出'),
       okButtonProps: { danger: true },
-      cancelText: '取消',
+      cancelText: t('取消'),
       onOk: () => resolve(true),
       onCancel: () => resolve(false),
     });
@@ -146,19 +152,20 @@ export function SettingsApplier() {
       void loadAi();
       const settings = useSettingsStore.getState();
       if (settings.general.autoUpdate) {
+        const t = (value: string, params?: Record<string, string | number>) => translateText(settings.general.language, value, params);
         void installAvailableUpdate()
           .then(result => {
             if (cancelled) return;
             if (result.status === 'installed') {
               Modal.confirm({
-                title: `新版本 ${result.latestVersion} 已安装`,
-                content: '重启应用后即可使用新版本。',
-                okText: '立即重启',
-                cancelText: '稍后',
+                title: t('新版本 {version} 已安装', { version: result.latestVersion }),
+                content: t('重启应用后即可使用新版本。'),
+                okText: t('立即重启'),
+                cancelText: t('稍后'),
                 onOk: () => relaunchApplication(),
               });
             } else if (result.status === 'manual') {
-              message.info(`发现新版本 ${result.latestVersion}，自动安装暂不可用，可在关于页面手动下载`);
+              message.info(t('发现新版本 {version}，自动安装暂不可用，可在关于页面手动下载', { version: result.latestVersion }));
             }
           })
           .catch(error => console.warn('[SettingsApplier] Auto update failed:', error));
@@ -183,6 +190,9 @@ export function SettingsApplier() {
     const language = normalizeAppLanguage(general.language);
     document.documentElement.lang = language;
     document.documentElement.setAttribute('data-locale', language);
+    void invoke('set_app_menu_language', { language }).catch(() => {
+      // Browser/dev mode has no native menu.
+    });
 
     dispatch({
       type: 'UPDATE_SETTINGS',
@@ -216,7 +226,7 @@ export function SettingsApplier() {
       if (exitPromptOpenRef.current) return;
       exitPromptOpenRef.current = true;
 
-      void confirmUnsavedExit(unsavedTabs).then(shouldExit => {
+      void confirmUnsavedExit(unsavedTabs, useSettingsStore.getState().general.language).then(shouldExit => {
         exitPromptOpenRef.current = false;
         if (shouldExit) void invoke('exit_app');
       });

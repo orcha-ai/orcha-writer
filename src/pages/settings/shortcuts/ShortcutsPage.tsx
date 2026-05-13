@@ -1,8 +1,9 @@
 import { Table, Tag, Switch, Input, Button, Space, Typography } from 'antd';
 import { SearchOutlined, UndoOutlined } from '@ant-design/icons';
-import { useShortcutStore } from '../../../store';
+import { useSettingsStore, useShortcutStore } from '../../../store';
 import type { ShortcutConfig } from '../../../types';
 import { useState } from 'react';
+import { translateText } from '../../../i18n';
 
 const { Text } = Typography;
 
@@ -19,8 +20,10 @@ const categoryMap: Record<string, string> = {
 
 export default function ShortcutsPage() {
   const { shortcuts, toggleShortcut, updateShortcut, resetAll, resetShortcut } = useShortcutStore();
+  const language = useSettingsStore(s => s.general.language);
   const [search, setSearch] = useState('');
   const [recordingId, setRecordingId] = useState<string | null>(null);
+  const t = (value: string) => translateText(language, value);
 
   const filtered = shortcuts.filter((s) =>
     !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.id.toLowerCase().includes(search.toLowerCase())
@@ -47,16 +50,16 @@ export default function ShortcutsPage() {
   };
 
   const columns = [
-    { title: '名称', dataIndex: 'name', key: 'name', width: 200 },
+    { title: t('名称'), dataIndex: 'name', key: 'name', width: 200, render: (name: string) => t(name) },
     {
-      title: '分类',
+      title: t('分类'),
       dataIndex: 'category',
       key: 'category',
       width: 100,
-      render: (c: string) => <Tag>{categoryMap[c] || c}</Tag>,
+      render: (c: string) => <Tag>{t(categoryMap[c] || c)}</Tag>,
     },
     {
-      title: '快捷键',
+      title: t('快捷键'),
       dataIndex: 'keys',
       key: 'keys',
       width: 180,
@@ -68,7 +71,7 @@ export default function ShortcutsPage() {
             onBlur={() => setRecordingId(null)}
             className="shortcut-key recording"
           >
-            按下组合键...
+            {t('按下组合键...')}
           </kbd>
         ) : (
           <span
@@ -81,14 +84,14 @@ export default function ShortcutsPage() {
       ),
     },
     {
-      title: '来源',
+      title: t('来源'),
       dataIndex: 'source',
       key: 'source',
       width: 80,
-      render: (s: string) => s === 'core' ? <Tag color="blue">核心</Tag> : <Tag>插件</Tag>,
+      render: (s: string) => s === 'core' ? <Tag color="blue">{t('核心')}</Tag> : <Tag>{t('插件')}</Tag>,
     },
     {
-      title: '状态',
+      title: t('状态'),
       dataIndex: 'enabled',
       key: 'enabled',
       width: 80,
@@ -97,7 +100,7 @@ export default function ShortcutsPage() {
       ),
     },
     {
-      title: '操作',
+      title: t('操作'),
       key: 'actions',
       width: 100,
       render: (_: unknown, record: ShortcutConfig) => (
@@ -108,7 +111,7 @@ export default function ShortcutsPage() {
           disabled={!record.defaultKeys || record.keys === record.defaultKeys}
           onClick={() => resetShortcut(record.id)}
         >
-          恢复
+          {t('恢复')}
         </Button>
       ),
     },
@@ -118,7 +121,7 @@ export default function ShortcutsPage() {
     <div>
       <Space style={{ marginBottom: 16 }}>
         <Input
-          placeholder="搜索快捷键"
+          placeholder={t('搜索快捷键')}
           prefix={<SearchOutlined />}
           style={{ width: 240 }}
           value={search}
@@ -126,12 +129,12 @@ export default function ShortcutsPage() {
           allowClear
         />
         <Button icon={<UndoOutlined />} onClick={resetAll}>
-          恢复所有默认
+          {t('恢复所有默认')}
         </Button>
       </Space>
 
       <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-        点击快捷键单元格可重新设置快捷键。点击后按下组合键即可。
+        {t('点击快捷键单元格可重新设置快捷键。点击后按下组合键即可。')}
       </Text>
 
       <Table

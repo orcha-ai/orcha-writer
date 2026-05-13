@@ -206,6 +206,7 @@
 }
 
 .md-preview[class*="code-theme-"] .md-code-language-select,
+.md-preview[class*="code-theme-"] .md-code-format,
 .md-preview[class*="code-theme-"] .md-code-copy {
   border-color: var(--code-theme-border);
 }

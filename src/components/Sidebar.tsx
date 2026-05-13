@@ -6,6 +6,7 @@ import type { CSSProperties, DragEvent, KeyboardEvent, MouseEvent } from 'react'
 import { message } from 'antd';
 import { ensureDir, pathExists, readTextFile, rename, remove, writeTextFile } from '../utils/fs';
 import { buildHidePatterns, readFirstLevel } from '../utils/workspace';
+import { isMarkdownFileName, isOpenableTextFileName } from '../utils/savePaths';
 import type { FileNode, RecentFile } from '../types';
 import { getLocaleText, normalizeAppLanguage } from '../i18n';
 
@@ -125,6 +126,10 @@ function withNameIndex(name: string, index: number): string {
   const dotIndex = name.lastIndexOf('.');
   if (dotIndex <= 0) return `${name} ${index}`;
   return `${name.slice(0, dotIndex)} ${index}${name.slice(dotIndex)}`;
+}
+
+function initialContentForFile(fileName: string): string {
+  return isMarkdownFileName(fileName) ? `# ${fileName.replace(/\.\w+$/, '')}\n\n` : '';
 }
 
 function rebasePath(path: string, oldPath: string, newPath: string): string {
@@ -340,9 +345,8 @@ export default function Sidebar() {
     if (node.type !== 'file') return;
     const id = node.path;
     const ext = node.name.split('.').pop()?.toLowerCase() || '';
-    const supportedExts = ['md', 'markdown', 'mdown', 'mkd', 'txt', 'text'];
 
-    if (!supportedExts.includes(ext)) {
+    if (!isOpenableTextFileName(node.name)) {
       dispatch({ type: 'OPEN_TAB', payload: { id, name: node.name, path: node.path, content: `# ${node.name}\n\n${text.sidebar.unsupportedFile(ext)}\n` } });
       return;
     }
@@ -352,7 +356,7 @@ export default function Sidebar() {
       dispatch({ type: 'OPEN_TAB', payload: { id, name: node.name, path: node.path, content } });
       dispatch({ type: 'ADD_RECENT_FILE', payload: { path: node.path, name: node.name, lastOpened: Date.now() } });
     } catch {
-      dispatch({ type: 'OPEN_TAB', payload: { id, name: node.name, path: node.path, content: `# ${node.name.replace(/\.\w+$/, '')}\n\n` } });
+      dispatch({ type: 'OPEN_TAB', payload: { id, name: node.name, path: node.path, content: initialContentForFile(node.name) } });
     }
   }, [dispatch, text.sidebar]);
 
@@ -620,14 +624,15 @@ export default function Sidebar() {
         return;
       }
 
-      await writeTextFile(filePath, `# ${fileName.replace(/\.\w+$/, '')}\n\n`);
+      const initialContent = initialContentForFile(fileName);
+      await writeTextFile(filePath, initialContent);
       const nextExpanded = new Set(expandedRef.current);
       if (creatingFile.parentPath) nextExpanded.add(creatingFile.parentPath);
       setCreatingFile(null);
       await refreshWorkspaceTree(nextExpanded);
       dispatch({
         type: 'OPEN_TAB',
-        payload: { id: filePath, name: fileName, path: filePath, content: `# ${fileName.replace(/\.\w+$/, '')}\n\n` },
+        payload: { id: filePath, name: fileName, path: filePath, content: initialContent },
       });
       dispatch({ type: 'ADD_RECENT_FILE', payload: { path: filePath, name: fileName, lastOpened: Date.now() } });
       message.success(text.sidebar.fileCreated(fileName));
@@ -728,6 +733,7 @@ export default function Sidebar() {
     const revealActiveFile = async () => {
       const workspacePath = workspacePathRef.current;
       if (!workspacePath || !isPathWithinWorkspace(activeWorkspaceFilePath, workspacePath)) return;
+      if (state.sidebarActiveTab !== 'workspace') return;
 
       const nextExpanded = new Set(expandedRef.current);
       let expandedChanged = false;
@@ -739,9 +745,6 @@ export default function Sidebar() {
       }
 
       pendingRevealPathRef.current = activeWorkspaceFilePath;
-      if (state.sidebarActiveTab !== 'workspace') {
-        dispatch({ type: 'SET_SIDEBAR_TAB', payload: 'workspace' });
-      }
 
       if (expandedChanged || !findNode(treeRef.current, activeWorkspaceFilePath)) {
         setExpandedFolders(nextExpanded);
@@ -759,7 +762,7 @@ export default function Sidebar() {
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceFilePath, dispatch, refreshWorkspaceTree, scrollActiveTreeItemIntoView, state.sidebarActiveTab]);
+  }, [activeWorkspaceFilePath, refreshWorkspaceTree, scrollActiveTreeItemIntoView, state.sidebarActiveTab]);
 
   useEffect(() => {
     const pendingPath = pendingRevealPathRef.current;
@@ -857,7 +860,7 @@ export default function Sidebar() {
               try {
                 content = await readTextFile(rf.path);
               } catch {
-                content = `# ${rf.name.replace('.md', '')}\n\n`;
+                content = initialContentForFile(rf.name);
               }
               dispatch({
                 type: 'OPEN_TAB',

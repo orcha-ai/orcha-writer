@@ -3,10 +3,13 @@ import { SaveOutlined } from '@ant-design/icons';
 import { useSettingsStore } from '../../../store';
 import type { MarkdownSettings } from '../../../types';
 import { useEffect } from 'react';
+import { translateText } from '../../../i18n';
 
 export default function MarkdownPage() {
   const { markdown, updateMarkdown, saveAll } = useSettingsStore();
+  const language = useSettingsStore(s => s.general.language);
   const [form] = Form.useForm();
+  const t = (value: string) => translateText(language, value);
 
   useEffect(() => {
     form.setFieldsValue(markdown);
@@ -16,7 +19,7 @@ export default function MarkdownPage() {
     const values = await form.validateFields() as Partial<MarkdownSettings>;
     updateMarkdown(values);
     await saveAll();
-    message.success('设置已保存');
+    message.success(t('设置已保存'));
   };
 
   return (
@@ -29,7 +32,7 @@ export default function MarkdownPage() {
           wrapperCol={{ span: 12 }}
           initialValues={markdown}
         >
-          <Form.Item label="Markdown 方言" name="dialect">
+          <Form.Item label={t('Markdown 方言')} name="dialect">
             <Radio.Group>
               <Radio.Button value="commonmark">CommonMark</Radio.Button>
               <Radio.Button value="gfm">GitHub Flavored Markdown</Radio.Button>
@@ -40,19 +43,19 @@ export default function MarkdownPage() {
             <Switch />
           </Form.Item>
 
-          <Form.Item label="表格增强" name="tableEnhanced" valuePropName="checked">
+          <Form.Item label={t('表格增强')} name="tableEnhanced" valuePropName="checked">
             <Switch />
           </Form.Item>
 
-          <Form.Item label="Callout 块" name="callout" valuePropName="checked">
+          <Form.Item label={t('Callout 块')} name="callout" valuePropName="checked">
             <Switch />
           </Form.Item>
 
-          <Form.Item label="代码高亮" name="codeHighlight" valuePropName="checked">
+          <Form.Item label={t('代码高亮')} name="codeHighlight" valuePropName="checked">
             <Switch />
           </Form.Item>
 
-          <Form.Item label="目录生成" name="toc" valuePropName="checked">
+          <Form.Item label={t('目录生成')} name="toc" valuePropName="checked">
             <Switch />
           </Form.Item>
         </Form>
@@ -60,7 +63,7 @@ export default function MarkdownPage() {
 
       <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
         <Button type="primary" icon={<SaveOutlined />} onClick={handleSave}>
-          保存设置
+          {t('保存设置')}
         </Button>
       </div>
     </div>

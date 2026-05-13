@@ -3,6 +3,7 @@ import { useApp } from '../AppContext';
 import { useSettingsStore } from '../store';
 import { X } from 'lucide-react';
 import { rename } from '../utils/fs';
+import { translateText } from '../i18n';
 
 function renamedPath(path: string, nextName: string): string {
   const separatorIndex = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
@@ -12,6 +13,8 @@ function renamedPath(path: string, nextName: string): string {
 export default function TabBar() {
   const { state, dispatch } = useApp();
   const appearance = useSettingsStore(s => s.appearance);
+  const language = useSettingsStore(s => s.general.language);
+  const t = (value: string) => translateText(language, value);
   const tabBarRef = useRef<HTMLDivElement | null>(null);
   const activeTabRef = useRef<HTMLDivElement | null>(null);
   const renameInFlightRef = useRef(false);
@@ -143,7 +146,7 @@ export default function TabBar() {
           <button
             className="tab-close"
             onClick={(e) => { e.stopPropagation(); dispatch({ type: 'CLOSE_TAB', payload: tab.id }); }}
-            title="关闭标签"
+            title={t('关闭标签')}
           >
             <X size={12} />
           </button>

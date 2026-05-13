@@ -4,13 +4,16 @@ import { useSettingsStore } from '../../../store';
 import type { FileSettings } from '../../../types';
 import { useEffect, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
+import { translateText } from '../../../i18n';
 
 const CONTROL_WIDTH = 480;
 
 export default function FilesPage() {
   const { files, updateFiles, saveAll } = useSettingsStore();
+  const language = useSettingsStore(s => s.general.language);
   const [form] = Form.useForm();
   const [hidePatterns, setHidePatterns] = useState(files.hidePatterns || []);
+  const t = (value: string) => translateText(language, value);
 
   useEffect(() => {
     form.setFieldsValue(files);
@@ -37,7 +40,7 @@ export default function FilesPage() {
     const values = await form.validateFields() as Partial<FileSettings>;
     updateFiles({ ...values, hidePatterns: hidePatterns.map((item) => item.trim()).filter(Boolean) });
     await saveAll();
-    message.success('设置已保存');
+    message.success(t('设置已保存'));
   };
 
   const handleSelectWorkspace = async () => {
@@ -45,12 +48,12 @@ export default function FilesPage() {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: '选择默认工作区',
+        title: t('选择默认工作区'),
       });
       if (!selected) return;
       form.setFieldValue('defaultWorkspace', Array.isArray(selected) ? selected[0] : selected);
     } catch {
-      message.warning('当前环境无法打开目录选择器');
+      message.warning(t('当前环境无法打开目录选择器'));
     }
   };
 
@@ -64,18 +67,18 @@ export default function FilesPage() {
           wrapperCol={{ span: 12 }}
           initialValues={files}
         >
-          <Form.Item label="默认工作区">
+          <Form.Item label={t('默认工作区')}>
             <Space.Compact style={{ width: CONTROL_WIDTH, maxWidth: '100%' }}>
               <Form.Item name="defaultWorkspace" noStyle>
                 <Input />
               </Form.Item>
               <Button icon={<FolderOpenOutlined />} onClick={handleSelectWorkspace}>
-                选择目录
+                {t('选择目录')}
               </Button>
             </Space.Compact>
           </Form.Item>
 
-          <Form.Item label="隐藏目录规则">
+          <Form.Item label={t('隐藏目录规则')}>
             <Space direction="vertical" style={{ width: '100%' }}>
               <List
                 size="small"
@@ -84,7 +87,7 @@ export default function FilesPage() {
                   <List.Item
                     actions={[
                       <Button type="text" size="small" danger onClick={() => removeHidePattern(index)}>
-                        删除
+                        {t('删除')}
                       </Button>,
                     ]}
                   >
@@ -92,13 +95,13 @@ export default function FilesPage() {
                       value={item}
                       onChange={(e) => updateHidePattern(index, e.target.value)}
                       style={{ width: 240 }}
-                      placeholder="如 node_modules"
+                      placeholder={t('如 node_modules')}
                     />
                   </List.Item>
                 )}
               />
               <Button type="dashed" icon={<PlusOutlined />} onClick={addHidePattern}>
-                添加隐藏规则
+                {t('添加隐藏规则')}
               </Button>
             </Space>
           </Form.Item>
@@ -107,7 +110,7 @@ export default function FilesPage() {
 
       <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
         <Button type="primary" icon={<SaveOutlined />} onClick={handleSave}>
-          保存设置
+          {t('保存设置')}
         </Button>
       </div>
     </div>

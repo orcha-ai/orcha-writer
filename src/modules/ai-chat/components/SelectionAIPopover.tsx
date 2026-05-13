@@ -2,6 +2,8 @@ import { Button, Input } from 'antd';
 import { Send, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { AICommandPreset } from '../types';
+import { useSettingsStore } from '../../../store';
+import { translateText } from '../../../i18n';
 
 export interface SelectionAIPopoverProps {
   visible: boolean;
@@ -30,6 +32,8 @@ export function SelectionAIPopover({
   onRunCommand,
   onSubmitCustomPrompt,
 }: SelectionAIPopoverProps) {
+  const language = useSettingsStore(s => s.general.language);
+  const t = (value: string, params?: Record<string, string | number>) => translateText(language, value, params);
   const [customPrompt, setCustomPrompt] = useState('');
   const [highlightedCommandId, setHighlightedCommandId] = useState<string | null>(null);
   const query = slashQuery(customPrompt);
@@ -77,12 +81,12 @@ export function SelectionAIPopover({
     >
       <div className="ai-selection-head">
         <Sparkles size={14} />
-        <span>{selectionText.length} 字</span>
+        <span>{t('{count} 字', { count: selectionText.length })}</span>
       </div>
       <div className="ai-selection-input-wrap">
         <Input.TextArea
           value={customPrompt}
-          placeholder="输入 / 调用快捷指令，或写自定义要求"
+          placeholder={t('输入 / 调用快捷指令，或写自定义要求')}
           autoSize={{ minRows: 2, maxRows: 6 }}
           onChange={(event) => setCustomPrompt(event.target.value)}
           onKeyDown={(event) => {
@@ -128,7 +132,7 @@ export function SelectionAIPopover({
         {commandMenuOpen && (
           <div className="ai-slash-command-popover ai-selection-command-popover">
             {filteredCommands.length === 0 ? (
-              <div className="ai-slash-command-empty">没有匹配的指令</div>
+              <div className="ai-slash-command-empty">{t('没有匹配的指令')}</div>
             ) : filteredCommands.map((command) => (
               <button
                 key={command.id}

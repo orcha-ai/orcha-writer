@@ -3,6 +3,8 @@ import { useApp } from '../AppContext';
 import { Search, X, ChevronUp, ChevronDown } from 'lucide-react';
 import { setSearchQuery, SearchQuery, getSearchQuery } from '@codemirror/search';
 import { getActiveEditorView } from './Editor';
+import { useSettingsStore } from '../store';
+import { translateText } from '../i18n';
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -162,6 +164,8 @@ function setTextareaValue(textarea: HTMLTextAreaElement, value: string): void {
 
 export default function SearchPanel() {
   const { state, dispatch } = useApp();
+  const language = useSettingsStore(s => s.general.language);
+  const t = (value: string) => translateText(language, value);
   const [query, setQuery] = useState('');
   const [replaceText, setReplaceText] = useState('');
   const [matchCount, setMatchCount] = useState(0);
@@ -482,25 +486,25 @@ export default function SearchPanel() {
         <input
           ref={inputRef}
           className="search-input"
-          placeholder="搜索..."
+          placeholder={t('搜索...')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
         <span className="search-count">
           {matchCount > 0 ? `${state.searchMatchIndex + 1} / ${matchCount}` : '0 / 0'}
         </span>
-        <button className="toolbar-btn" onClick={handlePrev} title="上一个" disabled={matchCount === 0}>
+        <button className="toolbar-btn" onClick={handlePrev} title={t('上一个')} disabled={matchCount === 0}>
           <ChevronUp size={14} />
         </button>
-        <button className="toolbar-btn" onClick={handleNext} title="下一个" disabled={matchCount === 0}>
+        <button className="toolbar-btn" onClick={handleNext} title={t('下一个')} disabled={matchCount === 0}>
           <ChevronDown size={14} />
         </button>
         <button
           className={`search-mode-btn ${state.replaceOpen ? 'active' : ''}`}
           onClick={() => dispatch({ type: 'TOGGLE_REPLACE' })}
-          title="切换替换"
+          title={t('切换替换')}
         >
-          替换
+          {t('替换')}
         </button>
         <button
           className="search-close"
@@ -509,7 +513,7 @@ export default function SearchPanel() {
             setQuery('');
             dispatch({ type: 'SET_SEARCH_QUERY', payload: '' });
           }}
-          title="关闭"
+          title={t('关闭')}
         >
           <X size={14} />
         </button>
@@ -519,15 +523,15 @@ export default function SearchPanel() {
           <span className="search-row-spacer" />
           <input
             className="search-input"
-            placeholder="替换为..."
+            placeholder={t('替换为...')}
             value={replaceText}
             onChange={(e) => setReplaceText(e.target.value)}
           />
           <button className="search-action-btn" onClick={handleReplaceCurrent} disabled={!query || matchCount === 0}>
-            替换
+            {t('替换')}
           </button>
           <button className="search-action-btn" onClick={handleReplaceAll} disabled={!query || matchCount === 0}>
-            全部
+            {t('全部')}
           </button>
         </div>
       )}

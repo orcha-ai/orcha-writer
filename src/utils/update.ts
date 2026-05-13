@@ -2,6 +2,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import { check as checkNativeUpdate, type DownloadEvent } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { getDocumentLanguage, translateText } from '../i18n';
 
 export interface UpdateCheckResult {
   currentVersion: string;
@@ -25,6 +26,10 @@ export interface UpdateInstallResult extends UpdateCheckResult {
 const FALLBACK_CURRENT_VERSION = __APP_VERSION__;
 const LATEST_RELEASE_API = 'https://api.github.com/repos/orcha-ai/orcha-writer/releases/latest';
 const RELEASES_URL = 'https://github.com/orcha-ai/orcha-writer/releases';
+
+function t(value: string, params?: Record<string, string | number>): string {
+  return translateText(getDocumentLanguage(), value, params);
+}
 
 function normalizeVersion(version: string): string {
   return version.trim().replace(/^v/i, '');
@@ -62,7 +67,7 @@ async function checkGithubRelease(currentVersion: string, manualReason?: string)
   });
 
   if (!response.ok) {
-    throw new Error(`检查更新失败：HTTP ${response.status}`);
+    throw new Error(t('检查更新失败：HTTP {status}', { status: response.status }));
   }
 
   const release = await response.json() as {
@@ -86,12 +91,12 @@ async function checkGithubRelease(currentVersion: string, manualReason?: string)
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
-  return typeof error === 'string' ? error : '自动更新失败';
+  return typeof error === 'string' ? error : t('自动更新失败');
 }
 
 export async function checkForUpdates(): Promise<UpdateCheckResult> {
   const currentVersion = await getCurrentVersion();
-  let manualReason: string | undefined = isTauri() ? undefined : '当前环境不支持自动安装。';
+  let manualReason: string | undefined = isTauri() ? undefined : t('当前环境不支持自动安装。');
 
   if (isTauri()) {
     try {
@@ -105,9 +110,9 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
           installMode: 'native',
         };
       }
-      manualReason = '自动安装通道没有返回可安装更新。';
+      manualReason = t('自动安装通道没有返回可安装更新。');
     } catch (error) {
-      manualReason = `自动安装通道不可用：${errorMessage(error)}`;
+      manualReason = t('自动安装通道不可用：{error}', { error: errorMessage(error) });
     }
   }
 
@@ -117,7 +122,7 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
 export async function installAvailableUpdate(
   onProgress?: (progress: UpdateInstallProgress) => void,
 ): Promise<UpdateInstallResult> {
-  let manualReason: string | undefined = isTauri() ? undefined : '当前环境不支持自动安装。';
+  let manualReason: string | undefined = isTauri() ? undefined : t('当前环境不支持自动安装。');
   let githubResult: UpdateCheckResult;
 
   if (isTauri()) {
@@ -151,9 +156,9 @@ export async function installAvailableUpdate(
           status: 'installed',
         };
       }
-      manualReason = '自动安装通道没有返回可安装更新。';
+      manualReason = t('自动安装通道没有返回可安装更新。');
     } catch (error) {
-      manualReason = `自动安装通道不可用：${errorMessage(error)}`;
+      manualReason = t('自动安装通道不可用：{error}', { error: errorMessage(error) });
     }
   }
 
@@ -161,7 +166,7 @@ export async function installAvailableUpdate(
     githubResult = await checkGithubRelease(await getCurrentVersion(), manualReason);
   } catch (error) {
     if (manualReason) {
-      throw new Error(`${manualReason}；GitHub Releases 检查也失败：${errorMessage(error)}`, { cause: error });
+      throw new Error(t('{reason}；GitHub Releases 检查也失败：{error}', { reason: manualReason, error: errorMessage(error) }), { cause: error });
     }
     throw error;
   }
@@ -178,7 +183,7 @@ export async function installAvailableUpdate(
     ...githubResult,
     installMode: 'manual',
     status: 'manual',
-    message: manualReason || '当前环境不支持自动安装，可打开发布页手动下载。',
+    message: manualReason || t('当前环境不支持自动安装，可打开发布页手动下载。'),
   };
 }
 

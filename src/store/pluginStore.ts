@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { PluginSource, PluginManifest, PluginInstalled } from '../types';
 import { readConfig, writeConfig } from '../config';
+import { getDocumentLanguage, translateText } from '../i18n';
 
 interface PluginState {
   sources: PluginSource[];
@@ -31,7 +32,7 @@ interface PluginState {
 
 export const usePluginStore = create<PluginState>((set, get) => ({
   sources: [
-    { id: 'official', name: '官方插件源', type: 'official-registry', url: 'https://raw.githubusercontent.com/orcha-writer/plugin-registry/main/registry.json', enabled: true, official: true },
+    { id: 'official', name: translateText(getDocumentLanguage(), '官方插件源'), type: 'official-registry', url: 'https://raw.githubusercontent.com/orcha-writer/plugin-registry/main/registry.json', enabled: true, official: true },
   ],
   installed: [],
   registry: [],
@@ -86,7 +87,7 @@ export const usePluginStore = create<PluginState>((set, get) => ({
         await get().save();
       }
     } catch (e) {
-      const error = `同步失败: ${(e as Error).message}`;
+      const error = translateText(getDocumentLanguage(), '同步失败: {error}', { error: (e as Error).message });
       set({ error });
       throw new Error(error, { cause: e });
     } finally {
@@ -155,7 +156,7 @@ export const usePluginStore = create<PluginState>((set, get) => ({
 
   load: async () => {
     const sources = await readConfig<PluginSource[]>('plugin-sources', [
-      { id: 'official', name: '官方插件源', type: 'official-registry', url: 'https://raw.githubusercontent.com/orcha-writer/plugin-registry/main/registry.json', enabled: true, official: true },
+      { id: 'official', name: translateText(getDocumentLanguage(), '官方插件源'), type: 'official-registry', url: 'https://raw.githubusercontent.com/orcha-writer/plugin-registry/main/registry.json', enabled: true, official: true },
     ]);
     const installed = await readConfig<PluginInstalled[]>('plugin-installed', []);
     set({ sources, installed });

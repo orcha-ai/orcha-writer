@@ -4,12 +4,16 @@ import { useEffect, useState } from 'react';
 import aboutLogo from '../../../assets/brand/orcha-writer-about-logo.png';
 import { getCurrentVersion } from '../../../utils/update';
 import { runUpdateCheckFlow } from '../../../utils/updateUi';
+import { useSettingsStore } from '../../../store';
+import { translateText } from '../../../i18n';
 
 const { Paragraph, Text } = Typography;
 
 export default function AboutPage() {
+  const language = useSettingsStore(s => s.general.language);
   const [checking, setChecking] = useState(false);
   const [currentVersion, setCurrentVersion] = useState(__APP_VERSION__);
+  const t = (value: string, params?: Record<string, string | number>) => translateText(language, value, params);
 
   useEffect(() => {
     let mounted = true;
@@ -53,35 +57,35 @@ export default function AboutPage() {
         >
           <img
             src={aboutLogo}
-            alt="Orcha 写作"
+            alt="Orcha Writer"
             style={{ width: '100%', height: 'auto', display: 'block' }}
           />
         </div>
-        <Text type="secondary">版本 {currentVersion}</Text>
+        <Text type="secondary">{t('版本 {version}', { version: currentVersion })}</Text>
 
         <Space style={{ marginTop: 16 }}>
           <Button icon={<SyncOutlined />} type="primary" loading={checking} onClick={handleCheckUpdates}>
-            检查更新
+            {t('检查更新')}
           </Button>
           <Button icon={<GithubOutlined />} href="https://github.com/orcha-ai/orcha-writer" target="_blank">
             GitHub
           </Button>
           <Button icon={<BugOutlined />} href="https://github.com/orcha-ai/orcha-writer/issues" target="_blank">
-            问题反馈
+            {t('问题反馈')}
           </Button>
         </Space>
       </Card>
 
       {/* License */}
-      <Card title="开源协议">
+      <Card title={t('开源协议')}>
         <Paragraph>
-          本项目采用 MIT 开源协议。
+          {t('本项目采用 MIT 开源协议。')}
         </Paragraph>
         <Paragraph>
-          第三方依赖许可证信息请参阅项目依赖列表。
+          {t('第三方依赖许可证信息请参阅项目依赖列表。')}
         </Paragraph>
         <Paragraph>
-          版权与贡献：Orcha AI 团队出品
+          {t('版权与贡献：Orcha AI 团队出品')}
         </Paragraph>
       </Card>
     </div>

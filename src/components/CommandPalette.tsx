@@ -1,17 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { APP_COMMANDS, filterCommands } from '../commands';
+import { filterCommands, getAppCommands } from '../commands';
 import { useApp } from '../AppContext';
+import { useSettingsStore } from '../store';
+import { translateText } from '../i18n';
 
 export default function CommandPalette() {
   const { state, dispatch } = useApp();
+  const language = useSettingsStore(s => s.general.language);
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const t = (value: string) => translateText(language, value);
 
   const commands = useMemo(() => {
-    const availableCommands = APP_COMMANDS.filter(command => !command.requiresDocument || Boolean(state.activeTabId));
+    const availableCommands = getAppCommands(language).filter(command => !command.requiresDocument || Boolean(state.activeTabId));
     return filterCommands(availableCommands, query);
-  }, [query, state.activeTabId]);
+  }, [language, query, state.activeTabId]);
 
   useEffect(() => {
     if (!state.commandPaletteOpen) return;
@@ -67,14 +71,14 @@ export default function CommandPalette() {
         <input
           ref={inputRef}
           className="command-palette-input"
-          placeholder="输入命令..."
+          placeholder={t('输入命令...')}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={handleKeyDown}
         />
         <div className="command-palette-list">
           {commands.length === 0 ? (
-            <div className="command-empty">没有匹配的命令</div>
+            <div className="command-empty">{t('没有匹配的命令')}</div>
           ) : commands.map((command, index) => (
             <button
               key={command.id}

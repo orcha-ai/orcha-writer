@@ -1,3 +1,5 @@
+import { isEnglishLanguage, translateText } from './i18n';
+
 export interface CommandDefinition {
   id: string;
   title: string;
@@ -6,9 +8,10 @@ export interface CommandDefinition {
   requiresDocument?: boolean;
 }
 
-export const APP_COMMANDS: CommandDefinition[] = [
+const APP_COMMAND_SOURCES: CommandDefinition[] = [
   { id: 'file.new', title: '新建文件', category: '文件', keywords: ['new', 'draft'] },
-  { id: 'file.open', title: '打开文件', category: '文件', keywords: ['open', 'markdown'] },
+  { id: 'file.newText', title: '新建纯文本', category: '文件', keywords: ['new', 'txt', 'plain text'] },
+  { id: 'file.open', title: '打开文件', category: '文件', keywords: ['open', 'markdown', 'txt', 'code'] },
   { id: 'file.openFolder', title: '打开文件夹', category: '文件', keywords: ['workspace', 'folder'] },
   { id: 'file.save', title: '保存', category: '文件', keywords: ['save'], requiresDocument: true },
   { id: 'edit.find', title: '查找', category: '编辑', keywords: ['search', 'find'] },
@@ -35,6 +38,18 @@ export const APP_COMMANDS: CommandDefinition[] = [
   { id: 'app.checkUpdate', title: '检查更新', category: '系统', keywords: ['update'] },
   { id: 'app.about', title: '关于 Orcha Writer', category: '系统', keywords: ['about'] },
 ];
+
+export function getAppCommands(language: unknown): CommandDefinition[] {
+  return APP_COMMAND_SOURCES.map(command => ({
+    ...command,
+    title: translateText(language, command.title),
+    category: command.category === '编辑' && isEnglishLanguage(language)
+      ? translateText(language, '编辑菜单')
+      : translateText(language, command.category),
+  }));
+}
+
+export const APP_COMMANDS: CommandDefinition[] = getAppCommands('zh-CN');
 
 export function filterCommands(commands: CommandDefinition[], query: string): CommandDefinition[] {
   const keyword = query.trim().toLowerCase();

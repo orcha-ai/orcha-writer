@@ -3,6 +3,8 @@ import type { MenuProps } from 'antd';
 import { Bot, Brain, ChevronDown, FileText, Paperclip, Send, Settings, Square, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { AIAgentConfig, AICommandPreset } from '../types';
+import { useSettingsStore } from '../../../store';
+import { translateText } from '../../../i18n';
 
 export interface AIInputAttachment {
   name: string;
@@ -60,6 +62,8 @@ export function AIInputBox({
   thinkingBudget,
   onChangeThinking,
 }: AIInputBoxProps) {
+  const language = useSettingsStore(s => s.general.language);
+  const t = (value: string, params?: Record<string, string | number>) => translateText(language, value, params);
   const [value, setValue] = useState('');
   const [highlightedCommandId, setHighlightedCommandId] = useState<string | null>(null);
   const query = slashQuery(value);
@@ -113,7 +117,7 @@ export function AIInputBox({
       label: (
         <span className="ai-agent-manage-item">
           <Settings size={14} />
-          管理智能体
+          {t('管理智能体')}
         </span>
       ),
     },
@@ -144,13 +148,13 @@ export function AIInputBox({
             disabled={disabled || sending}
             onClick={onConvertAttachment}
           >
-            转换
+            {t('转换')}
           </button>
           <button
             type="button"
             className="ai-input-attachment-remove"
             disabled={disabled || sending}
-            aria-label="移除附件"
+            aria-label={t('移除附件')}
             onClick={onRemoveAttachment}
           >
             <X size={14} />
@@ -159,7 +163,7 @@ export function AIInputBox({
       )}
       <Input.TextArea
         value={value}
-        placeholder="问 AI，输入 / 调用快捷指令..."
+        placeholder={t('问 AI，输入 / 调用快捷指令...')}
         autoSize={{ minRows: 2, maxRows: 5 }}
         disabled={disabled || sending}
         onChange={(event) => setValue(event.target.value)}
@@ -198,7 +202,7 @@ export function AIInputBox({
       {commandMenuOpen && (
         <div className="ai-slash-command-popover">
           {filteredCommands.length === 0 ? (
-            <div className="ai-slash-command-empty">没有匹配的指令</div>
+            <div className="ai-slash-command-empty">{t('没有匹配的指令')}</div>
           ) : filteredCommands.map((command) => (
             <button
               key={command.id}
@@ -228,20 +232,20 @@ export function AIInputBox({
               <ChevronDown size={13} />
             </Button>
           </Dropdown>
-          <span className="ai-input-model-caption">{modelLabel || '模型未配置'}</span>
+          <span className="ai-input-model-caption">{modelLabel || t('模型未配置')}</span>
         </div>
         <Tooltip
           title={
             thinkingAvailable
               ? thinkingBudget
-                ? `开启后，本次请求会启用深度思考，预算 ${thinkingBudget} tokens`
-                : '开启后，本次请求会启用深度思考'
-              : '当前模型配置未启用深度思考支持'
+                ? t('开启后，本次请求会启用深度思考，预算 {budget} tokens', { budget: thinkingBudget })
+                : t('开启后，本次请求会启用深度思考')
+              : t('当前模型配置未启用深度思考支持')
           }
         >
           <span className={`ai-thinking-toggle${thinkingEnabled ? ' active' : ''}${thinkingAvailable ? '' : ' disabled'}`}>
             <Brain size={13} />
-            深度思考
+            {t('深度思考')}
             <Switch
               size="small"
               checked={Boolean(thinkingEnabled)}
@@ -251,23 +255,23 @@ export function AIInputBox({
           </span>
         </Tooltip>
         <div className="ai-input-actions">
-          <Tooltip title="上传文件转 Markdown">
+          <Tooltip title={t('上传文件转 Markdown')}>
             <button
               type="button"
               className="ai-input-action-button"
               disabled={disabled || sending || !onAttachFile}
-              aria-label="上传文件转 Markdown"
+              aria-label={t('上传文件转 Markdown')}
               onClick={onAttachFile}
             >
               <Paperclip size={15} />
             </button>
           </Tooltip>
-          <Tooltip title={sending ? '取消' : '发送'}>
+          <Tooltip title={sending ? t('取消') : t('发送')}>
             <button
               type="button"
               className={`ai-input-action-button ai-input-send-button${sending ? ' danger' : ''}`}
               disabled={disabled}
-              aria-label={sending ? '取消' : '发送'}
+              aria-label={sending ? t('取消') : t('发送')}
               onClick={sending ? onCancel : submit}
             >
               {sending ? <Square size={13} /> : <Send size={15} />}

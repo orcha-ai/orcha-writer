@@ -215,14 +215,39 @@ struct OllamaMessage {
     thinking: Option<String>,
 }
 
-// ── Utility: check if a path is a markdown file ──
-fn is_markdown_file(path: &std::path::Path) -> bool {
+// ── Utility: check if a path is a supported text/code file ──
+fn is_openable_text_file(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| {
             matches!(
                 ext.to_lowercase().as_str(),
-                "md" | "markdown" | "mdown" | "mkd"
+                "md"
+                    | "markdown"
+                    | "mdown"
+                    | "mkd"
+                    | "txt"
+                    | "text"
+                    | "yaml"
+                    | "yml"
+                    | "xml"
+                    | "sql"
+                    | "py"
+                    | "json"
+                    | "js"
+                    | "jsx"
+                    | "ts"
+                    | "tsx"
+                    | "css"
+                    | "scss"
+                    | "html"
+                    | "htm"
+                    | "csv"
+                    | "log"
+                    | "sh"
+                    | "toml"
+                    | "ini"
+                    | "env"
             )
         })
         .unwrap_or(false)
@@ -286,8 +311,8 @@ fn pdf_text_to_markdown(path: &Path, text: &str) -> String {
     markdown.trim_end().to_string()
 }
 
-// ── Collect markdown file paths from CLI arguments ──
-fn collect_markdown_paths(args: Vec<String>, cwd: Option<PathBuf>) -> Vec<String> {
+// ── Collect openable text/code file paths from CLI arguments ──
+fn collect_openable_text_paths(args: Vec<String>, cwd: Option<PathBuf>) -> Vec<String> {
     args.into_iter()
         .skip(1)
         .filter_map(|arg| {
@@ -299,7 +324,7 @@ fn collect_markdown_paths(args: Vec<String>, cwd: Option<PathBuf>) -> Vec<String
             } else {
                 raw_path
             };
-            if path.exists() && path.is_file() && is_markdown_file(&path) {
+            if path.exists() && path.is_file() && is_openable_text_file(&path) {
                 Some(path.to_string_lossy().to_string())
             } else {
                 None
@@ -335,7 +360,7 @@ fn exit_app(app: AppHandle) {
     app.exit(0);
 }
 
-// ── Command: Rust securely reads a markdown file ──
+// ── Command: Rust securely reads a supported text/code file ──
 #[command]
 fn open_markdown_file(path: String) -> Result<OpenedDocument, String> {
     let path_buf = PathBuf::from(&path);
@@ -345,13 +370,13 @@ fn open_markdown_file(path: String) -> Result<OpenedDocument, String> {
     if !path_buf.is_file() {
         return Err("目标路径不是文件".to_string());
     }
-    if !is_markdown_file(&path_buf) {
+    if !is_openable_text_file(&path_buf) {
         return Err("不支持的文件类型".to_string());
     }
     let metadata = std::fs::metadata(&path_buf).map_err(|e| e.to_string())?;
     const MAX_FILE_SIZE: u64 = 20 * 1024 * 1024; // 20MB
     if metadata.len() > MAX_FILE_SIZE {
-        return Err("文件过大，暂不支持打开超过 20MB 的 Markdown 文件".to_string());
+        return Err("文件过大，暂不支持打开超过 20MB 的文本文件".to_string());
     }
     let content = std::fs::read_to_string(&path_buf).map_err(|e| e.to_string())?;
     let file_name = path_buf
@@ -1796,9 +1821,119 @@ fn export_pdf_system_print(app: tauri::AppHandle) {
     }
 }
 
+fn set_native_menu(handle: &AppHandle, language: &str) -> tauri::Result<()> {
+    let english = language == "en-US";
+    let t = |zh: &'static str, en: &'static str| if english { en } else { zh };
+
+    let file_menu = SubmenuBuilder::new(handle, t("文件", "File"))
+        .item(&MenuItemBuilder::new(t("新建文件", "New File")).id("new_file").build(handle)?)
+        .item(&MenuItemBuilder::new(t("新建纯文本", "New Plain Text")).id("new_text_file").build(handle)?)
+        .separator()
+        .item(&MenuItemBuilder::new(t("打开文件", "Open File")).id("open_file").build(handle)?)
+        .item(&MenuItemBuilder::new(t("打开文件夹", "Open Folder")).id("open_folder").build(handle)?)
+        .separator()
+        .item(&MenuItemBuilder::new(t("保存", "Save")).id("save").build(handle)?)
+        .item(&MenuItemBuilder::new(t("另存为", "Save As")).id("save_as").build(handle)?)
+        .separator()
+        .item(&MenuItemBuilder::new(t("关闭文件", "Close File")).id("close_file").build(handle)?)
+        .item(&MenuItemBuilder::new(t("最近打开", "Recent Files")).id("recent_files").build(handle)?)
+        .separator()
+        .item(&MenuItemBuilder::new(t("退出", "Quit")).id("quit").accelerator("CmdOrCtrl+Q").build(handle)?)
+        .build()?;
+
+    let edit_menu = SubmenuBuilder::new(handle, t("编辑", "Edit"))
+        .undo_with_text(t("撤销", "Undo"))
+        .redo_with_text(t("重做", "Redo"))
+        .separator()
+        .cut_with_text(t("剪切", "Cut"))
+        .copy_with_text(t("复制", "Copy"))
+        .paste_with_text(t("粘贴", "Paste"))
+        .select_all_with_text(t("全选", "Select All"))
+        .separator()
+        .item(&MenuItemBuilder::new(t("查找", "Find")).id("find").accelerator("CmdOrCtrl+F").build(handle)?)
+        .item(&MenuItemBuilder::new(t("替换", "Replace")).id("replace").accelerator("CmdOrCtrl+H").build(handle)?)
+        .item(&MenuItemBuilder::new(t("命令面板", "Command Palette")).id("command_palette").accelerator("CmdOrCtrl+Shift+P").build(handle)?)
+        .build()?;
+
+    let view_menu = SubmenuBuilder::new(handle, t("视图", "View"))
+        .item(&MenuItemBuilder::new(t("编辑模式", "Edit Mode")).id("view_edit").build(handle)?)
+        .item(&MenuItemBuilder::new(t("预览模式", "Preview Mode")).id("view_preview").build(handle)?)
+        .item(&MenuItemBuilder::new(t("双栏模式", "Split Mode")).id("view_split").build(handle)?)
+        .separator()
+        .item(&MenuItemBuilder::new(t("显示 / 隐藏侧边栏", "Show / Hide Sidebar")).id("toggle_sidebar").build(handle)?)
+        .item(&MenuItemBuilder::new(t("显示 / 隐藏大纲", "Show / Hide Outline")).id("toggle_outline").build(handle)?)
+        .separator()
+        .item(&MenuItemBuilder::new(t("放大", "Zoom In")).id("zoom_in").build(handle)?)
+        .item(&MenuItemBuilder::new(t("缩小", "Zoom Out")).id("zoom_out").build(handle)?)
+        .item(&MenuItemBuilder::new(t("重置缩放", "Reset Zoom")).id("reset_zoom").build(handle)?)
+        .separator()
+        .item(&MenuItemBuilder::new(t("浅色主题", "Light Theme")).id("theme_light").build(handle)?)
+        .item(&MenuItemBuilder::new(t("深色主题", "Dark Theme")).id("theme_dark").build(handle)?)
+        .item(&MenuItemBuilder::new(t("跟随系统", "Follow System")).id("theme_system").build(handle)?)
+        .build()?;
+
+    let insert_menu = SubmenuBuilder::new(handle, t("插入", "Insert"))
+        .item(&MenuItemBuilder::new(t("插入图片", "Insert Image")).id("insert_image").build(handle)?)
+        .item(&MenuItemBuilder::new(t("插入链接", "Insert Link")).id("insert_link").build(handle)?)
+        .item(&MenuItemBuilder::new(t("插入表格", "Insert Table")).id("insert_table").build(handle)?)
+        .item(&MenuItemBuilder::new(t("插入代码块", "Insert Code Block")).id("insert_code").build(handle)?)
+        .item(&MenuItemBuilder::new(t("插入分割线", "Insert Divider")).id("insert_hr").build(handle)?)
+        .item(&MenuItemBuilder::new(t("插入任务列表", "Insert Task List")).id("insert_task").build(handle)?)
+        .separator()
+        .item(&MenuItemBuilder::new(t("插入当前日期", "Insert Current Date")).id("insert_date").build(handle)?)
+        .build()?;
+
+    let export_menu = SubmenuBuilder::new(handle, t("导出", "Export"))
+        .item(&MenuItemBuilder::new(t("导出为 PDF", "Export as PDF")).id("export_pdf").build(handle)?)
+        .item(&MenuItemBuilder::new(t("导出为 HTML", "Export as HTML")).id("export_html").build(handle)?)
+        .separator()
+        .item(&MenuItemBuilder::new(t("导出设置", "Export Settings")).id("export_settings").build(handle)?)
+        .build()?;
+
+    let window_menu = SubmenuBuilder::new(handle, t("窗口", "Window"))
+        .item(&MenuItemBuilder::new(t("最小化", "Minimize")).id("minimize").build(handle)?)
+        .item(&MenuItemBuilder::new(t("最大化", "Maximize")).id("maximize").build(handle)?)
+        .item(&MenuItemBuilder::new(t("关闭窗口", "Close Window")).id("close_window").build(handle)?)
+        .separator()
+        .item(&MenuItemBuilder::new(t("切换上一个标签", "Previous Tab")).id("prev_tab").build(handle)?)
+        .item(&MenuItemBuilder::new(t("切换下一个标签", "Next Tab")).id("next_tab").build(handle)?)
+        .build()?;
+
+    let system_menu = SubmenuBuilder::new(handle, t("系统", "System"))
+        .item(&MenuItemBuilder::new(t("调试模式", "Debug Mode")).id("toggle_debug_mode").accelerator("CmdOrCtrl+Alt+I").build(handle)?)
+        .build()?;
+
+    let help_menu = SubmenuBuilder::new(handle, t("帮助", "Help"))
+        .item(&MenuItemBuilder::new(t("Markdown 语法帮助", "Markdown Syntax Help")).id("markdown_help").build(handle)?)
+        .item(&MenuItemBuilder::new(t("快捷键说明", "Keyboard Shortcuts")).id("shortcut_help").build(handle)?)
+        .separator()
+        .item(&MenuItemBuilder::new(t("检查更新", "Check for Updates")).id("check_update").build(handle)?)
+        .separator()
+        .item(&MenuItemBuilder::new(t("关于 Orcha Writer", "About Orcha Writer")).id("about").build(handle)?)
+        .build()?;
+
+    let menu = MenuBuilder::new(handle)
+        .item(&file_menu)
+        .item(&edit_menu)
+        .item(&view_menu)
+        .item(&insert_menu)
+        .item(&export_menu)
+        .item(&window_menu)
+        .item(&system_menu)
+        .item(&help_menu)
+        .build()?;
+
+    handle.set_menu(menu).map(|_| ())
+}
+
+#[command]
+fn set_app_menu_language(app: AppHandle, language: String) -> Result<(), String> {
+    set_native_menu(&app, &language).map_err(|e| e.to_string())
+}
+
 fn main() {
-    // Collect markdown files from CLI arguments (cold start)
-    let initial_paths = collect_markdown_paths(
+    // Collect text/code files from CLI arguments (cold start)
+    let initial_paths = collect_openable_text_paths(
         std::env::args().collect(),
         std::env::current_dir().ok(),
     );
@@ -1812,7 +1947,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            let paths = collect_markdown_paths(args, None);
+            let paths = collect_openable_text_paths(args, None);
             push_and_emit_open_files(app, paths);
         }))
         .invoke_handler(tauri::generate_handler![
@@ -1839,122 +1974,25 @@ fn main() {
             detect_pdf_engines,
             export_pdf_chrome,
             export_pdf_system_print,
+            set_app_menu_language,
         ])
         .setup(|app| {
             let handle = app.handle();
 
-            // Build native menu
-            let file_menu = SubmenuBuilder::new(handle, "文件")
-                .item(&MenuItemBuilder::new("新建文件").id("new_file").build(handle)?)
-                .separator()
-                .item(&MenuItemBuilder::new("打开文件").id("open_file").build(handle)?)
-                .item(&MenuItemBuilder::new("打开文件夹").id("open_folder").build(handle)?)
-                .separator()
-                .item(&MenuItemBuilder::new("保存").id("save").build(handle)?)
-                .item(&MenuItemBuilder::new("另存为").id("save_as").build(handle)?)
-                .separator()
-                .item(&MenuItemBuilder::new("关闭文件").id("close_file").build(handle)?)
-                .item(&MenuItemBuilder::new("最近打开").id("recent_files").build(handle)?)
-                .separator()
-                .item(&MenuItemBuilder::new("退出").id("quit").accelerator("CmdOrCtrl+Q").build(handle)?)
-                .build()?;
-
-            let edit_menu = SubmenuBuilder::new(handle, "编辑")
-                .undo_with_text("撤销")
-                .redo_with_text("重做")
-                .separator()
-                .cut_with_text("剪切")
-                .copy_with_text("复制")
-                .paste_with_text("粘贴")
-                .select_all_with_text("全选")
-                .separator()
-                .item(&MenuItemBuilder::new("查找").id("find").accelerator("CmdOrCtrl+F").build(handle)?)
-                .item(&MenuItemBuilder::new("替换").id("replace").accelerator("CmdOrCtrl+H").build(handle)?)
-                .item(&MenuItemBuilder::new("命令面板").id("command_palette").accelerator("CmdOrCtrl+Shift+P").build(handle)?)
-                .build()?;
-
-            let view_menu = SubmenuBuilder::new(handle, "视图")
-                .item(&MenuItemBuilder::new("编辑模式").id("view_edit").build(handle)?)
-                .item(&MenuItemBuilder::new("预览模式").id("view_preview").build(handle)?)
-                .item(&MenuItemBuilder::new("双栏模式").id("view_split").build(handle)?)
-                .separator()
-                .item(&MenuItemBuilder::new("显示 / 隐藏侧边栏").id("toggle_sidebar").build(handle)?)
-                .item(&MenuItemBuilder::new("显示 / 隐藏大纲").id("toggle_outline").build(handle)?)
-                .separator()
-                .item(&MenuItemBuilder::new("放大").id("zoom_in").build(handle)?)
-                .item(&MenuItemBuilder::new("缩小").id("zoom_out").build(handle)?)
-                .item(&MenuItemBuilder::new("重置缩放").id("reset_zoom").build(handle)?)
-                .separator()
-                .item(&MenuItemBuilder::new("浅色主题").id("theme_light").build(handle)?)
-                .item(&MenuItemBuilder::new("深色主题").id("theme_dark").build(handle)?)
-                .item(&MenuItemBuilder::new("跟随系统").id("theme_system").build(handle)?)
-                .build()?;
-
-            let insert_menu = SubmenuBuilder::new(handle, "插入")
-                .item(&MenuItemBuilder::new("插入图片").id("insert_image").build(handle)?)
-                .item(&MenuItemBuilder::new("插入链接").id("insert_link").build(handle)?)
-                .item(&MenuItemBuilder::new("插入表格").id("insert_table").build(handle)?)
-                .item(&MenuItemBuilder::new("插入代码块").id("insert_code").build(handle)?)
-                .item(&MenuItemBuilder::new("插入分割线").id("insert_hr").build(handle)?)
-                .item(&MenuItemBuilder::new("插入任务列表").id("insert_task").build(handle)?)
-                .separator()
-                .item(&MenuItemBuilder::new("插入当前日期").id("insert_date").build(handle)?)
-                .build()?;
-
-            let export_menu = SubmenuBuilder::new(handle, "导出")
-                .item(&MenuItemBuilder::new("导出为 PDF").id("export_pdf").build(handle)?)
-                .item(&MenuItemBuilder::new("导出为 HTML").id("export_html").build(handle)?)
-                .separator()
-                .item(&MenuItemBuilder::new("导出设置").id("export_settings").build(handle)?)
-                .build()?;
-
-            let window_menu = SubmenuBuilder::new(handle, "窗口")
-                .item(&MenuItemBuilder::new("最小化").id("minimize").build(handle)?)
-                .item(&MenuItemBuilder::new("最大化").id("maximize").build(handle)?)
-                .item(&MenuItemBuilder::new("关闭窗口").id("close_window").build(handle)?)
-                .separator()
-                .item(&MenuItemBuilder::new("切换上一个标签").id("prev_tab").build(handle)?)
-                .item(&MenuItemBuilder::new("切换下一个标签").id("next_tab").build(handle)?)
-                .build()?;
-
-            let system_menu = SubmenuBuilder::new(handle, "系统")
-                .item(&MenuItemBuilder::new("调试模式").id("toggle_debug_mode").accelerator("CmdOrCtrl+Alt+I").build(handle)?)
-                .build()?;
-
-            let help_menu = SubmenuBuilder::new(handle, "帮助")
-                .item(&MenuItemBuilder::new("Markdown 语法帮助").id("markdown_help").build(handle)?)
-                .item(&MenuItemBuilder::new("快捷键说明").id("shortcut_help").build(handle)?)
-                .separator()
-                .item(&MenuItemBuilder::new("检查更新").id("check_update").build(handle)?)
-                .separator()
-                .item(&MenuItemBuilder::new("关于 Orcha Writer").id("about").build(handle)?)
-                .build()?;
-
-            let menu = MenuBuilder::new(handle)
-                .item(&file_menu)
-                .item(&edit_menu)
-                .item(&view_menu)
-                .item(&insert_menu)
-                .item(&export_menu)
-                .item(&window_menu)
-                .item(&system_menu)
-                .item(&help_menu)
-                .build()?;
-
-            app.set_menu(menu)?;
+            set_native_menu(handle, "zh-CN")?;
 
             // Window-level file drop handler
             let window = app.get_webview_window("main").unwrap();
             let window_clone = window.clone();
             window.on_webview_event(move |event| {
                 if let WebviewEvent::DragDrop(DragDropEvent::Drop { paths, position: _ }) = event {
-                    let md_paths: Vec<String> = paths
+                    let text_paths: Vec<String> = paths
                         .iter()
-                        .filter(|p| p.extension().map(|e| e == "md").unwrap_or(false))
+                        .filter(|p| is_openable_text_file(p))
                         .map(|p| p.to_string_lossy().to_string())
                         .collect();
-                    if !md_paths.is_empty() {
-                        window_clone.emit("files-dropped", md_paths).ok();
+                    if !text_paths.is_empty() {
+                        window_clone.emit("files-dropped", text_paths).ok();
                     }
                 }
             });
@@ -1967,6 +2005,7 @@ fn main() {
 
             match id {
                 "new_file" => { window.emit("menu-action", "new_file").ok(); }
+                "new_text_file" => { window.emit("menu-action", "new_text_file").ok(); }
                 "open_file" => { window.emit("menu-action", "open_file").ok(); }
                 "open_folder" => { window.emit("menu-action", "open_folder").ok(); }
                 "save" => { window.emit("menu-action", "save").ok(); }
@@ -2033,7 +2072,7 @@ fn main() {
                     let paths: Vec<String> = urls
                         .iter()
                         .filter_map(|url| url.to_file_path().ok())
-                        .filter(|path| path.exists() && path.is_file() && is_markdown_file(path))
+                        .filter(|path| path.exists() && path.is_file() && is_openable_text_file(path))
                         .map(|path| path.to_string_lossy().to_string())
                         .collect();
                     push_and_emit_open_files(_app_handle, paths);

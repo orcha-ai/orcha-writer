@@ -15,6 +15,8 @@ import { writeTextFile } from './utils/fs';
 import { dirname } from './utils/markdownImages';
 import { useCallback, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSettingsStore } from './store';
+import { translateText } from './i18n';
 import './App.css';
 import './styles/preview-themes.css';
 import './styles/code-themes.css';
@@ -43,12 +45,14 @@ function scrollDocumentSurfacesToTop(): void {
 export default function WorkspaceContent() {
   const { state, dispatch } = useApp();
   const navigate = useNavigate();
+  const language = useSettingsStore(s => s.general.language);
+  const t = useCallback((value: string) => translateText(language, value), [language]);
   const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId);
   const activeTabId = activeTab?.id;
   const editorBridge = useMemo(() => createCodeMirrorEditorBridge(), []);
 
   const handleCreateMarkdownFile = useCallback(async (content: string) => {
-    const fileName = `AI生成文档-${formatAIDocumentTimestamp(new Date())}.md`;
+    const fileName = `${t('AI生成文档')}-${formatAIDocumentTimestamp(new Date())}.md`;
     const activeDir = activeTab && !activeTab.isDraft && /[/\\]/.test(activeTab.path)
       ? dirname(activeTab.path)
       : '';
@@ -62,7 +66,7 @@ export default function WorkspaceContent() {
 
     const id = `draft-ai-${Date.now()}`;
     dispatch({ type: 'OPEN_TAB', payload: { id, name: fileName, path: id, content, isDraft: true } });
-  }, [activeTab, dispatch]);
+  }, [activeTab, dispatch, t]);
 
   useEffect(() => {
     if (!activeTabId) return undefined;
@@ -101,7 +105,7 @@ export default function WorkspaceContent() {
         <AIChatPanel
           documentId={activeTab?.id || 'empty-document'}
           documentPath={activeTab?.isDraft ? undefined : activeTab?.path}
-          documentTitle={activeTab?.name || '未命名.md'}
+          documentTitle={activeTab?.name || t('未命名.md')}
           editorBridge={editorBridge}
           onOpenSettings={() => navigate('/settings/ai/models')}
           onOpenAgentManager={() => navigate('/settings/ai/agents')}

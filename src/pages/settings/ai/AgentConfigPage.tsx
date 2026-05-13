@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Card, List, Button, Space, Switch, Popconfirm, Tag, Typography, Drawer, Form, Input, Select, Checkbox, message } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
-import { useAiStore } from '../../../store';
+import { useAiStore, useSettingsStore } from '../../../store';
 import type { AgentCapability, AgentConfig, AiModelConfig, AiProviderConfig } from '../../../types';
+import { translateText } from '../../../i18n';
 
 const { Text } = Typography;
 
@@ -55,10 +56,12 @@ function toFormValues(agent: AgentConfig | null, fallbackModelId: string, models
 
 export default function AgentConfigPage() {
   const { agents, providers, models, addAgent, updateAgent, toggleAgent, removeAgent } = useAiStore();
+  const language = useSettingsStore(s => s.general.language);
   const [form] = Form.useForm<AgentFormValues>();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<AgentConfig | null>(null);
   const providerId = Form.useWatch('providerId', form);
+  const t = (value: string, params?: Record<string, string | number>) => translateText(language, value, params);
 
   const providerById = useMemo(() => new Map(providers.map((provider) => [provider.id, provider])), [providers]);
   const modelById = useMemo(() => new Map(models.map((model) => [model.id, model])), [models]);
@@ -93,14 +96,14 @@ export default function AgentConfigPage() {
     try {
       if (editing) {
         await updateAgent(editing.id, payload);
-        message.success('智能体已更新');
+        message.success(t('智能体已更新'));
       } else {
         await addAgent(payload);
-        message.success('智能体已创建');
+        message.success(t('智能体已创建'));
       }
       setOpen(false);
     } catch (error) {
-      message.error(`保存失败：${error instanceof Error ? error.message : String(error)}`);
+      message.error(t('保存失败：{error}', { error: error instanceof Error ? error.message : String(error) }));
     }
   };
 
@@ -113,7 +116,7 @@ export default function AgentConfigPage() {
   return (
     <div>
       <Card
-        title="智能体列表"
+        title={t('智能体列表')}
         extra={
           <Button
             type="primary"
@@ -123,12 +126,12 @@ export default function AgentConfigPage() {
               setOpen(true);
             }}
           >
-            新建智能体
+            {t('新建智能体')}
           </Button>
         }
       >
         {agents.length === 0 ? (
-          <Text type="secondary">暂无智能体配置</Text>
+          <Text type="secondary">{t('暂无智能体配置')}</Text>
         ) : (
           <List
             dataSource={agents}
@@ -145,10 +148,10 @@ export default function AgentConfigPage() {
                       setOpen(true);
                     }}
                   >
-                    编辑
+                    {t('编辑')}
                   </Button>,
-                  <Popconfirm title="确认删除？" onConfirm={() => removeAgent(agent.id)}>
-                    <Button size="small" danger icon={<DeleteOutlined />} type="text">删除</Button>
+                  <Popconfirm title={t('确认删除？')} onConfirm={() => removeAgent(agent.id)}>
+                    <Button size="small" danger icon={<DeleteOutlined />} type="text">{t('删除')}</Button>
                   </Popconfirm>,
                 ]}
               >
@@ -156,21 +159,21 @@ export default function AgentConfigPage() {
                   title={
                     <Space>
                       {agent.icon}
-                      {agent.name}
+                      {t(agent.name)}
                       <Tag>{agent.accessScope}</Tag>
                       {agent.modelConfigId && (() => {
                         const model = modelById.get(agent.modelConfigId);
                         const provider = model ? providerById.get(model.providerId) : undefined;
                         return (
                           <Tag>
-                            {model ? `${provider?.name || '厂商已删除'} / ${modelDisplayName(model)}` : '模型已删除'}
+                            {model ? `${provider?.name || t('厂商已删除')} / ${modelDisplayName(model)}` : t('模型已删除')}
                           </Tag>
                         );
                       })()}
-                      {!agent.enabled && <Tag color="default">已禁用</Tag>}
+                      {!agent.enabled && <Tag color="default">{t('已禁用')}</Tag>}
                     </Space>
                   }
-                  description={agent.description || `${agent.systemPrompt.substring(0, 100)}...`}
+                  description={agent.description ? t(agent.description) : `${t(agent.systemPrompt.substring(0, 100))}...`}
                 />
               </List.Item>
             )}
@@ -179,37 +182,37 @@ export default function AgentConfigPage() {
       </Card>
 
       <Drawer
-        title={editing ? '编辑智能体' : '新建智能体'}
+        title={editing ? t('编辑智能体') : t('新建智能体')}
         open={open}
         onClose={() => setOpen(false)}
         width={560}
         extra={
           <Space>
-            <Button onClick={() => setOpen(false)}>取消</Button>
-            <Button type="primary" onClick={handleSubmit}>保存</Button>
+            <Button onClick={() => setOpen(false)}>{t('取消')}</Button>
+            <Button type="primary" onClick={handleSubmit}>{t('保存')}</Button>
           </Space>
         }
       >
         <Form form={form} layout="vertical">
-          <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入智能体名称' }]}>
-            <Input placeholder="写作助手" />
+          <Form.Item label={t('名称')} name="name" rules={[{ required: true, message: t('请输入智能体名称') }]}>
+            <Input placeholder={t('写作助手')} />
           </Form.Item>
-          <Form.Item label="图标" name="icon">
-            <Input placeholder="如 W / AI / ✦" />
+          <Form.Item label={t('图标')} name="icon">
+            <Input placeholder={t('如 W / AI / ✦')} />
           </Form.Item>
-          <Form.Item label="描述" name="description">
-            <Input placeholder="用于说明该智能体的主要用途" />
+          <Form.Item label={t('描述')} name="description">
+            <Input placeholder={t('用于说明该智能体的主要用途')} />
           </Form.Item>
           <Form.Item
-            label="大模型厂商"
+            label={t('大模型厂商')}
             name="providerId"
-            rules={[{ required: true, message: '请选择大模型厂商' }]}
-            extra="先选择厂商，再从该厂商下选择具体模型配置。"
+            rules={[{ required: true, message: t('请选择大模型厂商') }]}
+            extra={t('先选择厂商，再从该厂商下选择具体模型配置。')}
           >
             <Select
               showSearch
               disabled={providers.length === 0}
-              placeholder={providers.length === 0 ? '暂无大模型厂商，请先到 AI 模型页添加供应商' : '请选择大模型厂商'}
+              placeholder={providers.length === 0 ? t('暂无大模型厂商，请先到 AI 模型页添加供应商') : t('请选择大模型厂商')}
               optionFilterProp="label"
               onChange={handleProviderChange}
             >
@@ -218,26 +221,26 @@ export default function AgentConfigPage() {
                   <Space>
                     <span>{provider.name}</span>
                     <Tag>{providerTypeLabel(provider.type)}</Tag>
-                    {!provider.enabled && <Tag color="default">已禁用</Tag>}
+                    {!provider.enabled && <Tag color="default">{t('已禁用')}</Tag>}
                   </Space>
                 </Select.Option>
               ))}
             </Select>
           </Form.Item>
           <Form.Item
-            label="模型"
+            label={t('模型')}
             name="modelConfigId"
-            rules={[{ required: true, message: '请选择模型' }]}
+            rules={[{ required: true, message: t('请选择模型') }]}
           >
             <Select
               showSearch
               disabled={!providerId || modelsForSelectedProvider.length === 0}
               placeholder={
                 !providerId
-                  ? '请先选择大模型厂商'
+                  ? t('请先选择大模型厂商')
                   : modelsForSelectedProvider.length === 0
-                    ? '该厂商暂无模型配置'
-                    : '请选择模型'
+                    ? t('该厂商暂无模型配置')
+                    : t('请选择模型')
               }
               optionFilterProp="label"
             >
@@ -245,32 +248,32 @@ export default function AgentConfigPage() {
                 <Select.Option key={model.id} value={model.id} label={`${model.name} ${model.model}`}>
                   <Space>
                     <span>{modelDisplayName(model)}</span>
-                    {model.thinkingSupported && <Tag color="blue">深度思考</Tag>}
-                    {!model.enabled && <Tag color="default">已禁用</Tag>}
+                    {model.thinkingSupported && <Tag color="blue">{t('深度思考')}</Tag>}
+                    {!model.enabled && <Tag color="default">{t('已禁用')}</Tag>}
                   </Space>
                 </Select.Option>
               ))}
             </Select>
           </Form.Item>
-          <Form.Item label="访问范围" name="accessScope">
+          <Form.Item label={t('访问范围')} name="accessScope">
             <Select>
-              <Select.Option value="selection">当前选区</Select.Option>
-              <Select.Option value="current-document">当前文档</Select.Option>
-              <Select.Option value="workspace">整个工作区</Select.Option>
+              <Select.Option value="selection">{t('当前选区')}</Select.Option>
+              <Select.Option value="current-document">{t('当前文档')}</Select.Option>
+              <Select.Option value="workspace">{t('整个工作区')}</Select.Option>
             </Select>
           </Form.Item>
-          <Form.Item label="系统提示词" name="systemPrompt" rules={[{ required: true, message: '请输入系统提示词' }]}>
-            <Input.TextArea rows={6} placeholder="定义智能体的角色、语气和行为边界" />
+          <Form.Item label={t('系统提示词')} name="systemPrompt" rules={[{ required: true, message: t('请输入系统提示词') }]}>
+            <Input.TextArea rows={6} placeholder={t('定义智能体的角色、语气和行为边界')} />
           </Form.Item>
-          <Form.Item label="能力" name="capabilityCodes">
+          <Form.Item label={t('能力')} name="capabilityCodes">
             <Checkbox.Group
               options={CAPABILITIES.map((capability) => ({
-                label: capability.name,
+                label: t(capability.name),
                 value: capability.code,
               }))}
             />
           </Form.Item>
-          <Form.Item label="启用" name="enabled" valuePropName="checked">
+          <Form.Item label={t('启用')} name="enabled" valuePropName="checked">
             <Switch />
           </Form.Item>
         </Form>

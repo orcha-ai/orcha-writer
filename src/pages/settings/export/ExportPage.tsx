@@ -13,6 +13,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useSettingsStore } from '../../../store';
 import type { PdfExportEngine, PdfEngineStatus, ExportSettings } from '../../../types';
+import { translateText } from '../../../i18n';
 
 type VisiblePdfEngine = Extract<PdfExportEngine, 'auto' | 'system_print' | 'system_chrome'>;
 
@@ -43,6 +44,7 @@ function fallbackStatuses(): PdfEngineStatus[] {
 
 export default function ExportPage() {
   const { export: exportSettings, updateExport, saveAll } = useSettingsStore();
+  const language = useSettingsStore(s => s.general.language);
   const [form] = Form.useForm<ExportSettings>();
   const [engineStatuses, setEngineStatuses] = useState<PdfEngineStatus[]>([]);
   const [detecting, setDetecting] = useState(false);
@@ -53,6 +55,8 @@ export default function ExportPage() {
   const currentStatus = engineStatuses.find(
     (s) => s.engine === (currentEngine === 'auto' ? 'system_print' : currentEngine),
   );
+  const t = (value: string, params?: Record<string, string | number>) => translateText(language, value, params);
+  const engineLabel = (engine: VisiblePdfEngine) => t(ENGINE_LABELS[engine]);
 
   useEffect(() => {
     form.setFieldsValue({
@@ -98,7 +102,7 @@ export default function ExportPage() {
       }
     } catch {
       setEngineStatuses(fallbackStatuses());
-      message.warning('检测失败，已使用本地兜底状态');
+      message.warning(t('检测失败，已使用本地兜底状态'));
     } finally {
       setDetecting(false);
     }
@@ -110,10 +114,10 @@ export default function ExportPage() {
       const engine = normalizePdfEngine((form.getFieldValue('defaultPdfEngine') ?? 'auto') as PdfExportEngine);
       const status = engineStatuses.find((item) => item.engine === (engine === 'auto' ? 'system_print' : engine));
       if (status && !status.available) {
-        message.warning(`当前引擎不可用：${status.reason || '未知原因'}`);
+        message.warning(t('当前引擎不可用：{reason}', { reason: status.reason || t('未知') }));
         return;
       }
-      message.success(`引擎「${ENGINE_LABELS[engine]}」可用于当前配置`);
+      message.success(t('引擎「{engine}」可用于当前配置', { engine: engineLabel(engine) }));
     } finally {
       setTesting(false);
     }
@@ -124,7 +128,7 @@ export default function ExportPage() {
     values.defaultPdfEngine = normalizePdfEngine(values.defaultPdfEngine);
     updateExport(values);
     await saveAll();
-    message.success('设置已保存');
+    message.success(t('设置已保存'));
   };
 
   const handleSelectExportDir = async () => {
@@ -132,12 +136,12 @@ export default function ExportPage() {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: '选择默认导出目录',
+        title: t('选择默认导出目录'),
       });
       if (!selected) return;
       form.setFieldValue('defaultExportDir', Array.isArray(selected) ? selected[0] : selected);
     } catch {
-      message.warning('当前环境无法打开目录选择器');
+      message.warning(t('当前环境无法打开目录选择器'));
     }
   };
 
@@ -157,49 +161,48 @@ export default function ExportPage() {
         wrapperCol={{ span: 16 }}
         initialValues={exportSettings}
       >
-        <Card title="PDF 导出" style={{ marginBottom: 16 }}>
+        <Card title={t('PDF 导出')} style={{ marginBottom: 16 }}>
           <Divider orientation="horizontal" plain>
             <ThunderboltOutlined style={{ marginRight: 4 }} />
-            PDF 导出引擎
+            {t('PDF 导出引擎')}
           </Divider>
 
           <Form.Item
-            label="默认引擎"
+            label={t('默认引擎')}
             name="defaultPdfEngine"
-            tooltip="选择 PDF 导出时使用的引擎，推荐自动选择"
+            tooltip={t('选择 PDF 导出时使用的引擎，推荐自动选择')}
           >
             <Select style={{ width: CONTROL_WIDTH, maxWidth: '100%' }}>
-              <Select.Option value="auto">自动选择，推荐</Select.Option>
-              <Select.Option value="system_print">系统打印，最轻量</Select.Option>
+              <Select.Option value="auto">{engineLabel('auto')}</Select.Option>
+              <Select.Option value="system_print">{engineLabel('system_print')}</Select.Option>
               <Select.Option value="system_chrome" disabled={isEngineDisabled('system_chrome')}>
-                系统 Chrome，使用本机 Chrome / Edge
-                {isEngineDisabled('system_chrome') && '，未安装'}
+                {isEngineDisabled('system_chrome') ? t('系统 Chrome，使用本机 Chrome / Edge，未安装') : engineLabel('system_chrome')}
               </Select.Option>
             </Select>
           </Form.Item>
 
           {currentEngine && currentEngine !== 'auto' && (
-            <Form.Item label="当前引擎">
+            <Form.Item label={t('当前引擎')}>
               <Space direction="vertical" size={2} style={{ maxWidth: '100%' }}>
                 <Space>
-                  <Typography.Text strong>{ENGINE_LABELS[currentEngine]}</Typography.Text>
+                  <Typography.Text strong>{engineLabel(currentEngine)}</Typography.Text>
                   {currentStatus ? (
-                    currentStatus.available ? <Tag color="success">可用</Tag> : <Tag color="error">不可用</Tag>
+                    currentStatus.available ? <Tag color="success">{t('可用')}</Tag> : <Tag color="error">{t('不可用')}</Tag>
                   ) : null}
                 </Space>
                 {currentStatus?.path && (
                   <Typography.Text type="secondary" style={{ display: 'block', maxWidth: '100%', fontSize: 12, wordBreak: 'break-all' }}>
-                    路径：{currentStatus.path}
+                    {t('路径：{path}', { path: currentStatus.path })}
                   </Typography.Text>
                 )}
                 {currentStatus?.version && (
                   <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    版本：{currentStatus.version}
+                    {t('版本：{version}', { version: currentStatus.version })}
                   </Typography.Text>
                 )}
                 {currentStatus && !currentStatus.available && currentStatus.reason && (
                   <Typography.Text type="danger" style={{ fontSize: 12 }}>
-                    原因：{currentStatus.reason}
+                    {t('原因：{reason}', { reason: currentStatus.reason })}
                   </Typography.Text>
                 )}
               </Space>
@@ -207,25 +210,25 @@ export default function ExportPage() {
           )}
 
           {currentEngine === 'auto' && (
-            <Form.Item label="自动选择策略">
+            <Form.Item label={t('自动选择策略')}>
               <Typography.Text type="secondary" style={{ display: 'block', maxWidth: '100%', fontSize: 12, wordBreak: 'break-word' }}>
-                {'优先级：系统 Chrome -> 系统打印'}
+                {t('优先级：系统 Chrome -> 系统打印')}
               </Typography.Text>
             </Form.Item>
           )}
 
           {(currentEngine === 'system_chrome' || currentEngine === 'auto') && (
             <>
-              <Divider orientation="horizontal" plain>系统 Chrome 配置</Divider>
-              <Form.Item label="检测模式" name={['systemChrome', 'detectMode']}>
+              <Divider orientation="horizontal" plain>{t('系统 Chrome 配置')}</Divider>
+              <Form.Item label={t('检测模式')} name={['systemChrome', 'detectMode']}>
                 <Select style={{ width: SHORT_CONTROL_WIDTH }}>
-                  <Select.Option value="auto">自动检测</Select.Option>
-                  <Select.Option value="custom">手动选择</Select.Option>
+                  <Select.Option value="auto">{t('自动检测')}</Select.Option>
+                  <Select.Option value="custom">{t('手动选择')}</Select.Option>
                 </Select>
               </Form.Item>
 
               {detectMode === 'custom' && (
-                <Form.Item label="Chrome 路径" name={['systemChrome', 'customPath']}>
+                <Form.Item label={t('Chrome 路径')} name={['systemChrome', 'customPath']}>
                   <Input
                     style={{ width: CONTROL_WIDTH, maxWidth: '100%' }}
                     placeholder="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -234,14 +237,14 @@ export default function ExportPage() {
               )}
 
               {(form.getFieldValue(['systemChrome', 'lastDetectedPath']) || exportSettings.systemChrome?.lastDetectedPath) && (
-                <Form.Item label="上次检测">
+                <Form.Item label={t('上次检测')}>
                   <Space direction="vertical" size={2} style={{ maxWidth: '100%' }}>
                     <Typography.Text type="secondary" style={{ display: 'block', maxWidth: '100%', fontSize: 12, wordBreak: 'break-all' }}>
-                      路径：{form.getFieldValue(['systemChrome', 'lastDetectedPath']) || exportSettings.systemChrome.lastDetectedPath}
+                      {t('路径：{path}', { path: form.getFieldValue(['systemChrome', 'lastDetectedPath']) || exportSettings.systemChrome.lastDetectedPath })}
                     </Typography.Text>
                     {(form.getFieldValue(['systemChrome', 'lastDetectedVersion']) || exportSettings.systemChrome.lastDetectedVersion) && (
                       <Typography.Text type="secondary" style={{ display: 'block', maxWidth: '100%', fontSize: 12, wordBreak: 'break-word' }}>
-                        版本：{form.getFieldValue(['systemChrome', 'lastDetectedVersion']) || exportSettings.systemChrome.lastDetectedVersion}
+                        {t('版本：{version}', { version: form.getFieldValue(['systemChrome', 'lastDetectedVersion']) || exportSettings.systemChrome.lastDetectedVersion })}
                       </Typography.Text>
                     )}
                   </Space>
@@ -250,56 +253,56 @@ export default function ExportPage() {
             </>
           )}
 
-          <Divider orientation="horizontal" plain>页面设置</Divider>
+          <Divider orientation="horizontal" plain>{t('页面设置')}</Divider>
 
-          <Form.Item label="页面尺寸" name={['page', 'format']}>
+          <Form.Item label={t('页面尺寸')} name={['page', 'format']}>
             <Select style={{ width: SHORT_CONTROL_WIDTH }}>
               <Select.Option value="A4">A4</Select.Option>
               <Select.Option value="A5">A5</Select.Option>
               <Select.Option value="Letter">Letter</Select.Option>
               <Select.Option value="Legal">Legal</Select.Option>
-              <Select.Option value="custom">自定义</Select.Option>
+              <Select.Option value="custom">{t('自定义')}</Select.Option>
             </Select>
           </Form.Item>
 
-          <Form.Item label="页面方向" name={['page', 'orientation']}>
+          <Form.Item label={t('页面方向')} name={['page', 'orientation']}>
             <Select style={{ width: SHORT_CONTROL_WIDTH }}>
-              <Select.Option value="portrait">纵向</Select.Option>
-              <Select.Option value="landscape">横向</Select.Option>
+              <Select.Option value="portrait">{t('纵向')}</Select.Option>
+              <Select.Option value="landscape">{t('横向')}</Select.Option>
             </Select>
           </Form.Item>
 
-          <Form.Item label="上边距" name={['page', 'margin', 'top']}>
+          <Form.Item label={t('上边距')} name={['page', 'margin', 'top']}>
             <Input style={{ width: SHORT_CONTROL_WIDTH }} placeholder="20mm" />
           </Form.Item>
 
-          <Form.Item label="下边距" name={['page', 'margin', 'bottom']}>
+          <Form.Item label={t('下边距')} name={['page', 'margin', 'bottom']}>
             <Input style={{ width: SHORT_CONTROL_WIDTH }} placeholder="20mm" />
           </Form.Item>
 
-          <Form.Item label="左边距" name={['page', 'margin', 'left']}>
+          <Form.Item label={t('左边距')} name={['page', 'margin', 'left']}>
             <Input style={{ width: SHORT_CONTROL_WIDTH }} placeholder="18mm" />
           </Form.Item>
 
-          <Form.Item label="右边距" name={['page', 'margin', 'right']}>
+          <Form.Item label={t('右边距')} name={['page', 'margin', 'right']}>
             <Input style={{ width: SHORT_CONTROL_WIDTH }} placeholder="18mm" />
           </Form.Item>
 
-          <Form.Item label="打印背景" name={['page', 'printBackground']} valuePropName="checked">
+          <Form.Item label={t('打印背景')} name={['page', 'printBackground']} valuePropName="checked">
             <Switch />
           </Form.Item>
 
-          <Divider orientation="horizontal" plain>页眉页脚</Divider>
+          <Divider orientation="horizontal" plain>{t('页眉页脚')}</Divider>
 
-          <Form.Item label="启用页眉页脚" name={['headerFooter', 'enabled']} valuePropName="checked">
+          <Form.Item label={t('启用页眉页脚')} name={['headerFooter', 'enabled']} valuePropName="checked">
             <Switch />
           </Form.Item>
 
-          <Form.Item label="显示页码" name={['headerFooter', 'showPageNumber']} valuePropName="checked">
+          <Form.Item label={t('显示页码')} name={['headerFooter', 'showPageNumber']} valuePropName="checked">
             <Switch />
           </Form.Item>
 
-          <Form.Item label="显示文档标题" name={['headerFooter', 'showDocumentTitle']} valuePropName="checked">
+          <Form.Item label={t('显示文档标题')} name={['headerFooter', 'showDocumentTitle']} valuePropName="checked">
             <Switch />
           </Form.Item>
 
@@ -308,32 +311,32 @@ export default function ExportPage() {
           <Form.Item wrapperCol={{ offset: 4, span: 16 }}>
             <Space>
               <Button icon={<ReloadOutlined />} onClick={handleDetect} loading={detecting}>
-                重新检测
+                {t('重新检测')}
               </Button>
               <Button icon={<ExperimentOutlined />} onClick={handleTest} loading={testing} type="primary" ghost>
-                测试导出
+                {t('测试导出')}
               </Button>
             </Space>
           </Form.Item>
         </Card>
 
-        <Card title="导出设置">
-          <Form.Item label="默认导出目录">
+        <Card title={t('导出设置')}>
+          <Form.Item label={t('默认导出目录')}>
             <Space.Compact style={{ width: CONTROL_WIDTH, maxWidth: '100%' }}>
               <Form.Item name="defaultExportDir" noStyle>
                 <Input />
               </Form.Item>
               <Button icon={<FolderOpenOutlined />} onClick={handleSelectExportDir}>
-                选择目录
+                {t('选择目录')}
               </Button>
             </Space.Compact>
           </Form.Item>
 
-          <Form.Item label="覆盖已有文件" name="overwriteExisting" valuePropName="checked">
+          <Form.Item label={t('覆盖已有文件')} name="overwriteExisting" valuePropName="checked">
             <Switch />
           </Form.Item>
 
-          <Form.Item label="导出后打开" name="openAfterExport" valuePropName="checked">
+          <Form.Item label={t('导出后打开')} name="openAfterExport" valuePropName="checked">
             <Switch />
           </Form.Item>
         </Card>
@@ -342,11 +345,11 @@ export default function ExportPage() {
       {currentEngine && currentEngine !== 'auto' && currentStatus && !currentStatus.available && (
         <Alert
           style={{ marginTop: 16 }}
-          message={`当前配置的 PDF 导出引擎不可用：${currentStatus.reason || '未知'}`}
+          message={t('当前配置的 PDF 导出引擎不可用：{reason}', { reason: currentStatus.reason || t('未知') })}
           description={
             <Space direction="vertical">
               {currentEngine === 'system_chrome' && (
-                <span>请安装 Chrome / Edge，或在设置中切换为「系统打印」。</span>
+                <span>{t('请安装 Chrome / Edge，或在设置中切换为「系统打印」。')}</span>
               )}
             </Space>
           }
@@ -357,7 +360,7 @@ export default function ExportPage() {
 
       <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
         <Button type="primary" icon={<SaveOutlined />} onClick={handleSave}>
-          保存设置
+          {t('保存设置')}
         </Button>
       </div>
     </div>

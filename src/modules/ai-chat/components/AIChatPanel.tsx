@@ -5,7 +5,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 
 import { PanelRightOpen } from 'lucide-react';
 import { subscribeEditorSelection } from '../../../components/Editor';
 import { useApp } from '../../../AppContext';
-import { useAiStore } from '../../../store';
+import { useAiStore, useSettingsStore } from '../../../store';
+import { getDocumentLanguage, translateText } from '../../../i18n';
 import { findUsableAgent, normalizeAIAgents } from '../services/aiAgentService';
 import { findCommand, getAgentCommands, getAllAICommands } from '../services/aiCommandService';
 import { buildAIContext } from '../services/aiContextBuilder';
@@ -49,20 +50,22 @@ interface ConfirmActionOptions {
 }
 
 async function confirmAction(title: string, content: string, options?: ConfirmActionOptions): Promise<boolean> {
+  const fallbackOkText = translateText(getDocumentLanguage(), '继续');
+  const fallbackCancelText = translateText(getDocumentLanguage(), '取消');
   try {
     return await confirmDialog(content, {
       title,
       kind: options?.kind || 'warning',
-      okLabel: options?.okText || '继续',
-      cancelLabel: options?.cancelText || '取消',
+      okLabel: options?.okText || fallbackOkText,
+      cancelLabel: options?.cancelText || fallbackCancelText,
     });
   } catch {
     return new Promise((resolve) => {
       Modal.confirm({
         title,
         content,
-        okText: options?.okText || '继续',
-        cancelText: options?.cancelText || '取消',
+        okText: options?.okText || fallbackOkText,
+        cancelText: options?.cancelText || fallbackCancelText,
         onOk: () => resolve(true),
         onCancel: () => resolve(false),
       });
@@ -82,24 +85,24 @@ function resultCardsWithAppliedChange(message: AIMessage, appliedCard: AIResultC
   ));
 }
 
-function modelLabel(modelName?: string, providerName?: string): string {
+function modelLabel(modelName: string | undefined, providerName: string | undefined, language: unknown): string {
   if (modelName && providerName) return `${providerName} / ${modelName}`;
   if (modelName) return modelName;
-  return '本地草稿模式';
+  return translateText(language, '本地草稿模式');
 }
 
-function getErrorMessage(error: unknown): string {
+function getErrorMessage(error: unknown, language: unknown): string {
   if (typeof error === 'string' && error.trim()) return error;
   if (error instanceof Error && error.message.trim()) return error.message;
   if (error && typeof error === 'object' && 'message' in error) {
     const message = String((error as { message?: unknown }).message || '').trim();
     if (message) return message;
   }
-  return 'AI 请求失败';
+  return translateText(language, 'AI 请求失败');
 }
 
-function fileNameFromPath(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop() || '未命名.pdf';
+function fileNameFromPath(path: string, language: unknown): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() || translateText(language, '未命名.pdf');
 }
 
 const EMPTY_MESSAGES: AIMessage[] = [];
@@ -140,6 +143,10 @@ export function AIChatPanel({
   const providers = useAiStore((state) => state.providers);
   const models = useAiStore((state) => state.models);
   const customAgents = useAiStore((state) => state.agents);
+  const language = useSettingsStore(s => s.general.language);
+  const t = useCallback((value: string, params?: Record<string, string | number>) => (
+    translateText(language, value, params)
+  ), [language]);
 
   const conversations = useAIChatStore((state) => state.conversations);
   const loaded = useAIChatStore((state) => state.loaded);
@@ -192,8 +199,18 @@ export function AIChatPanel({
   );
   const messages = conversation?.messages ?? EMPTY_MESSAGES;
 
-  const agents = useMemo(() => normalizeAIAgents(customAgents), [customAgents]);
-  const allCommands = useMemo(() => getAllAICommands(), []);
+  const agents = useMemo(() => normalizeAIAgents(customAgents).map(agent => ({
+    ...agent,
+    name: translateText(language, agent.name),
+    description: agent.description ? translateText(language, agent.description) : agent.description,
+    systemPrompt: translateText(language, agent.systemPrompt),
+  })), [customAgents, language]);
+  const allCommands = useMemo(() => getAllAICommands().map(command => ({
+    ...command,
+    name: translateText(language, command.name),
+    description: command.description ? translateText(language, command.description) : command.description,
+    userPromptTemplate: translateText(language, command.userPromptTemplate),
+  })), [language]);
   const currentAgent = useMemo(
     () => findUsableAgent(agents, conversation?.currentAgentId),
     [agents, conversation?.currentAgentId],
@@ -213,9 +230,9 @@ export function AIChatPanel({
     if (!pendingImportFile) return null;
     return {
       name: pendingImportFile.name,
-      description: 'PDF · 文字版提取 · 本地处理',
+      description: t('PDF · 文字版提取 · 本地处理'),
     };
-  }, [pendingImportFile]);
+  }, [pendingImportFile, t]);
 
   useEffect(() => {
     setDeepThinkingEnabled(Boolean(model?.thinkingSupported && model.thinkingEnabled));
@@ -297,7 +314,7 @@ export function AIChatPanel({
       id: createAIId('msg'),
       conversationId: conversation.id,
       role: 'assistant',
-      content: thinking.enabled ? '正在深度思考...' : '正在生成...',
+      content: thinking.enabled ? t('正在深度思考...') : t('正在生成...'),
       agentId: currentAgent.id,
       agentName: currentAgent.name,
       modelConfigId: model?.id,
@@ -339,7 +356,7 @@ export function AIChatPanel({
       streamFlushTimer = null;
       if (!latestStreamUpdate) return;
       updateMessage(conversation.id, assistantMessage.id, {
-        content: latestStreamUpdate.content || (thinking.enabled ? '' : '正在生成...'),
+        content: latestStreamUpdate.content || (thinking.enabled ? '' : t('正在生成...')),
         reasoningContent: latestStreamUpdate.reasoningContent,
         status: 'streaming',
       });
@@ -400,7 +417,7 @@ export function AIChatPanel({
         updateMessage(conversation.id, assistantMessage.id, {
           status: 'cancelled',
           errorCode: 'cancelled',
-          errorMessage: '已取消生成',
+          errorMessage: t('已取消生成'),
           resultCards: undefined,
         });
         appendRequestLog({
@@ -418,13 +435,13 @@ export function AIChatPanel({
           thinkingBudget: thinking.budget,
           status: 'cancelled',
           errorCode: 'cancelled',
-          errorMessage: '已取消生成',
+          errorMessage: t('已取消生成'),
           startedAt,
           endedAt: nowIso(),
         });
         return;
       }
-      const errorMessage = getErrorMessage(error);
+      const errorMessage = getErrorMessage(error, language);
       updateMessage(conversation.id, assistantMessage.id, {
         content: '',
         status: 'failed',
@@ -434,9 +451,9 @@ export function AIChatPanel({
           {
             id: createAIId('card'),
             type: 'error',
-            title: '请求失败',
+            title: t('请求失败'),
             content: errorMessage,
-            actions: [{ type: 'regenerate', label: '重新生成', primary: true }],
+            actions: [{ type: 'regenerate', label: t('重新生成'), primary: true }],
           },
         ],
       });
@@ -468,7 +485,7 @@ export function AIChatPanel({
         setSending(false);
       }
     }
-  }, [addMessage, appendRequestLog, conversation, currentAgent, model, provider, updateMessage]);
+  }, [addMessage, appendRequestLog, conversation, currentAgent, language, model, provider, t, updateMessage]);
 
   const cancelCurrentRequest = useCallback(() => {
     const activeRequest = activeRequestRef.current;
@@ -477,12 +494,12 @@ export function AIChatPanel({
     updateMessage(activeRequest.conversationId, activeRequest.assistantMessageId, {
       status: 'cancelled',
       errorCode: 'cancelled',
-      errorMessage: '已取消生成',
+      errorMessage: t('已取消生成'),
       resultCards: undefined,
     });
     activeRequestRef.current = null;
     setSending(false);
-  }, [updateMessage]);
+  }, [t, updateMessage]);
 
   const sendMessage = useCallback(async (
     userInput: string,
@@ -515,7 +532,7 @@ export function AIChatPanel({
     });
 
     if ((strategy === 'selection_only' || strategy === 'selection_with_cursor') && !context.selectedText) {
-      message.warning('请先选中要处理的文本');
+      message.warning(t('请先选中要处理的文本'));
       return;
     }
 
@@ -534,6 +551,7 @@ export function AIChatPanel({
     model?.thinkingBudget,
     model?.thinkingSupported,
     sendWithContext,
+    t,
   ]);
 
   useEffect(() => {
@@ -564,13 +582,13 @@ export function AIChatPanel({
       .reverse()
       .find((item) => item.role === 'user');
     if (!previousUserMessage) {
-      message.warning('没有可重新生成的上一条请求');
+      message.warning(t('没有可重新生成的上一条请求'));
       return;
     }
     void sendMessage(previousUserMessage.content, previousUserMessage.commandId, {
       deepThinkingEnabled: previousUserMessage.deepThinkingEnabled,
     });
-  }, [conversation, sendMessage]);
+  }, [conversation, sendMessage, t]);
 
   const handleRunCommand = useCallback((commandId: string) => {
     const command = findCommand(commandId, allCommands);
@@ -588,26 +606,26 @@ export function AIChatPanel({
     try {
       const selected = await open({
         multiple: false,
-        title: '上传文件转 Markdown',
-        filters: [{ name: '文字版 PDF', extensions: ['pdf'] }],
+        title: t('上传文件转 Markdown'),
+        filters: [{ name: t('文字版 PDF'), extensions: ['pdf'] }],
       });
       if (!selected) return;
       const path = Array.isArray(selected) ? selected[0] : selected;
       if (!path) return;
-      setPendingImportFile({ path, name: fileNameFromPath(path) });
-      message.success('已添加 PDF');
+      setPendingImportFile({ path, name: fileNameFromPath(path, language) });
+      message.success(t('已添加 PDF'));
     } catch (error) {
       console.error('Failed to attach import file:', error);
-      message.error('选择文件失败');
+      message.error(t('选择文件失败'));
     }
-  }, []);
+  }, [language, t]);
 
   const handleConvertAttachment = useCallback(async () => {
     if (!conversation || !pendingImportFile || convertingImport) return;
     const confirmed = await confirmAction(
-      '转换为 Markdown？',
-      '将从 PDF 文本层提取内容，不会上传到云端。扫描件或图片型 PDF 暂时无法识别。',
-      { okText: '开始转换' },
+      t('转换为 Markdown？'),
+      t('将从 PDF 文本层提取内容，不会上传到云端。扫描件或图片型 PDF 暂时无法识别。'),
+      { okText: t('开始转换'), cancelText: t('取消') },
     );
     if (!confirmed) return;
 
@@ -616,7 +634,7 @@ export function AIChatPanel({
       id: createAIId('msg'),
       conversationId: conversation.id,
       role: 'user',
-      content: `转换 PDF：${pendingImportFile.name}`,
+      content: t('转换 PDF：{name}', { name: pendingImportFile.name }),
       status: 'success',
       createdAt: now,
       updatedAt: now,
@@ -625,7 +643,7 @@ export function AIChatPanel({
       id: createAIId('msg'),
       conversationId: conversation.id,
       role: 'assistant',
-      content: `正在从 ${pendingImportFile.name} 提取 PDF 文本...`,
+      content: t('正在从 {name} 提取 PDF 文本...', { name: pendingImportFile.name }),
       status: 'pending',
       createdAt: now,
       updatedAt: now,
@@ -638,7 +656,7 @@ export function AIChatPanel({
     try {
       const result = await invoke<ImportedMarkdown>('import_pdf_text_as_markdown', { path: pendingImportFile.path });
       updateMessage(conversation.id, assistantMessage.id, {
-        content: `已从 ${pendingImportFile.name} 提取 Markdown`,
+        content: t('已从 {name} 提取 Markdown', { name: pendingImportFile.name }),
         status: 'success',
         resultCards: [
           {
@@ -647,16 +665,16 @@ export function AIChatPanel({
             title: result.fileName,
             markdown: result.content,
             actions: [
-              { type: 'create_markdown_file', label: '新建文档', primary: true },
-              { type: 'insert_at_cursor', label: '插入光标处' },
-              { type: 'copy', label: '复制' },
+              { type: 'create_markdown_file', label: t('新建文档'), primary: true },
+              { type: 'insert_at_cursor', label: t('插入光标处') },
+              { type: 'copy', label: t('复制') },
             ],
           },
         ],
       });
       setPendingImportFile(null);
     } catch (error) {
-      const errorMessage = getErrorMessage(error);
+      const errorMessage = getErrorMessage(error, language);
       updateMessage(conversation.id, assistantMessage.id, {
         content: '',
         status: 'failed',
@@ -666,16 +684,16 @@ export function AIChatPanel({
           {
             id: createAIId('card'),
             type: 'error',
-            title: 'PDF 转换失败',
+            title: t('PDF 转换失败'),
             content: errorMessage,
-            actions: [{ type: 'copy', label: '复制错误信息' }],
+            actions: [{ type: 'copy', label: t('复制错误信息') }],
           },
         ],
       });
     } finally {
       setConvertingImport(false);
     }
-  }, [addMessage, conversation, convertingImport, pendingImportFile, updateMessage]);
+  }, [addMessage, conversation, convertingImport, language, pendingImportFile, t, updateMessage]);
 
   const handleResultAction = useCallback(async (action: AIResultAction, card: AIResultCard, sourceMessage: AIMessage) => {
     const text = cardText(card);
@@ -685,35 +703,35 @@ export function AIChatPanel({
     }
 
     if (!text.trim()) {
-      message.warning('结果为空，无法执行操作');
+      message.warning(t('结果为空，无法执行操作'));
       return;
     }
 
     if (action.type === 'copy') {
       await navigator.clipboard.writeText(text);
-      message.success('已复制');
+      message.success(t('已复制'));
       return;
     }
 
     if (action.type === 'insert_at_cursor') {
       editorBridge.insertAtCursor(text);
-      message.success('已插入光标处');
+      message.success(t('已插入光标处'));
       return;
     }
 
     if (action.type === 'append_to_document') {
       editorBridge.appendToDocument(text);
-      message.success('已追加到文末');
+      message.success(t('已追加到文末'));
       return;
     }
 
     if (action.type === 'create_markdown_file') {
       if (onCreateMarkdownFile) {
         await onCreateMarkdownFile(text);
-        message.success('已新建文档');
+        message.success(t('已新建文档'));
       } else {
         await navigator.clipboard.writeText(text);
-        message.success('已复制，可新建文档后粘贴');
+        message.success(t('已复制，可新建文档后粘贴'));
       }
       return;
     }
@@ -725,7 +743,7 @@ export function AIChatPanel({
       let targetRange = hasCurrentSelection ? currentSelection?.range : expectedRange;
 
       if (!targetRange) {
-        message.warning('当前没有可替换的选区');
+        message.warning(t('当前没有可替换的选区'));
         return;
       }
 
@@ -734,7 +752,7 @@ export function AIChatPanel({
         expectedRange.to !== currentSelection.range.to
       );
       if (changedRange) {
-        const confirmed = await confirmAction('选区已变化', '当前选区与生成结果时的选区不同，继续会替换现在选中的文本。');
+        const confirmed = await confirmAction(t('选区已变化'), t('当前选区与生成结果时的选区不同，继续会替换现在选中的文本。'), { cancelText: t('取消'), okText: t('继续') });
         if (!confirmed) return;
         targetRange = currentSelection.range;
       }
@@ -743,14 +761,14 @@ export function AIChatPanel({
         const originalText = card.diff?.originalText || '';
         const currentText = editorBridge.getTextInRange(expectedRange);
         if (originalText && currentText !== originalText) {
-          const confirmed = await confirmAction('原选区内容已变化', '生成结果对应的原文区域已有变化，继续会按原范围替换当前内容。');
+          const confirmed = await confirmAction(t('原选区内容已变化'), t('生成结果对应的原文区域已有变化，继续会按原范围替换当前内容。'), { cancelText: t('取消'), okText: t('继续') });
           if (!confirmed) return;
         }
         editorBridge.restoreSelection(expectedRange);
       }
 
       if (text.length >= DEFAULT_AI_SETTINGS.largeReplaceConfirmThreshold) {
-        const confirmed = await confirmAction('确认替换大段内容？', `即将替换 ${text.length} 个字符，请确认当前选区无误。`);
+        const confirmed = await confirmAction(t('确认替换大段内容？'), t('即将替换 {count} 个字符，请确认当前选区无误。', { count: text.length }), { cancelText: t('取消'), okText: t('继续') });
         if (!confirmed) return;
       }
 
@@ -758,9 +776,9 @@ export function AIChatPanel({
       updateMessage(sourceMessage.conversationId, sourceMessage.id, {
         resultCards: resultCardsWithAppliedChange(sourceMessage, card),
       });
-      message.success('已应用修改');
+      message.success(t('已应用修改'));
     }
-  }, [editorBridge, onCreateMarkdownFile, regenerateFrom, updateMessage]);
+  }, [editorBridge, onCreateMarkdownFile, regenerateFrom, t, updateMessage]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -791,7 +809,7 @@ export function AIChatPanel({
   if (collapsed) {
     return (
       <aside className="ai-chat-panel is-collapsed">
-        <Tooltip title="展开 AI 写作" placement="left">
+        <Tooltip title={t('展开 AI 写作')} placement="left">
           <Button
             type="text"
             size="small"
@@ -817,8 +835,8 @@ export function AIChatPanel({
           className="ai-model-alert"
           type="info"
           showIcon
-          message="当前使用本地草稿模式"
-          description="添加模型配置后，可把请求服务接入真实模型。"
+          message={t('当前使用本地草稿模式')}
+          description={t('添加模型配置后，可把请求服务接入真实模型。')}
         />
       )}
       <ContextBox context={latestContext} />
@@ -828,7 +846,7 @@ export function AIChatPanel({
       <AIInputBox
         sending={sending}
         disabled={!conversation || convertingImport}
-        modelLabel={modelLabel(model?.model, provider?.name)}
+        modelLabel={modelLabel(model?.model, provider?.name, language)}
         agents={agents}
         currentAgent={currentAgent}
         onChangeAgent={(agentId) => conversation && setConversationAgent(conversation.id, agentId)}

@@ -1,5 +1,6 @@
 import { GFM, parser as lezerMarkdownParser } from '@lezer/markdown';
 import type { BlockType, BlockViewModel } from '../types/block';
+import { getDocumentLanguage, translateText } from '../../../i18n';
 
 const markdownAstParser = lezerMarkdownParser.configure([GFM]);
 
@@ -495,37 +496,39 @@ export function blockTypeLabel(type: BlockType): string {
     horizontal_rule: '分割线',
     empty: '空块',
   };
-  return labels[type];
+  return translateText(getDocumentLanguage(), labels[type]);
 }
 
 export function defaultContentForType(type: BlockType): string {
+  const language = getDocumentLanguage();
+  const t = (value: string) => translateText(language, value);
   switch (type) {
     case 'heading_1':
     case 'heading_2':
     case 'heading_3':
-      return '标题';
+      return t('标题');
     case 'bulleted_list_item':
-      return '列表项';
+      return t('列表项');
     case 'ordered_list_item':
-      return '列表项';
+      return t('列表项');
     case 'todo_item':
-      return '任务';
+      return t('任务');
     case 'blockquote':
-      return '引用内容';
+      return t('引用内容');
     case 'callout':
-      return '提示内容';
+      return t('提示内容');
     case 'code_block':
-      return '# 在这里输入代码';
+      return `# ${t('在这里输入代码')}`;
     case 'frontmatter':
       return 'title: Untitled';
     case 'html_block':
-      return '<div>\n  内容\n</div>';
+      return `<div>\n  ${t('内容')}\n</div>`;
     case 'math_block':
       return 'E = mc^2';
     case 'table':
-      return '| 列 A | 列 B |\n| --- | --- |\n| 内容 | 内容 |';
+      return `| ${t('列')} A | ${t('列')} B |\n| --- | --- |\n| ${t('内容')} | ${t('内容')} |`;
     case 'image':
-      return '图片描述';
+      return t('图片描述');
     case 'horizontal_rule':
     case 'empty':
       return '';
@@ -548,7 +551,7 @@ export function createBlock(type: BlockType = 'paragraph', content = defaultCont
         : type === 'callout'
           ? { calloutType: 'NOTE' }
           : type === 'image'
-            ? { alt: content || '图片描述', src: 'path/to/image.png' }
+            ? { alt: content || translateText(getDocumentLanguage(), '图片描述'), src: 'path/to/image.png' }
             : undefined,
   };
   return { ...block, markdown: blockToMarkdown(block) };
@@ -572,10 +575,11 @@ function prefixLines(prefix: string, content: string, fallback: string): string 
 }
 
 function headingMarkdown(block: BlockViewModel, fallbackLevel: number): string {
+  const language = getDocumentLanguage();
   const level = typeof block.attrs?.level === 'number'
     ? Math.max(1, Math.min(6, block.attrs.level))
     : fallbackLevel;
-  return `${'#'.repeat(level)} ${singleLine(block.content || '', '标题')}`;
+  return `${'#'.repeat(level)} ${singleLine(block.content || '', translateText(language, '标题'))}`;
 }
 
 function serializeListItem(prefix: string, content: string, fallback: string, continuationIndent: string): string {
@@ -599,19 +603,19 @@ export function blockToMarkdown(block: BlockViewModel): string {
     case 'heading_3':
       return headingMarkdown(block, 3);
     case 'bulleted_list_item':
-      return serializeListItem(`${indent}${String(block.attrs?.marker || '-')} `, content, '列表项', `${indent}  `);
+      return serializeListItem(`${indent}${String(block.attrs?.marker || '-')} `, content, translateText(getDocumentLanguage(), '列表项'), `${indent}  `);
     case 'ordered_list_item': {
       const start = typeof block.attrs?.start === 'number' ? block.attrs.start : 1;
       const delimiter = String(block.attrs?.delimiter || '.');
-      return serializeListItem(`${indent}${start}${delimiter} `, content, '列表项', `${indent}${' '.repeat(String(start).length + 2)}`);
+      return serializeListItem(`${indent}${start}${delimiter} `, content, translateText(getDocumentLanguage(), '列表项'), `${indent}${' '.repeat(String(start).length + 2)}`);
     }
     case 'todo_item': {
       const checked = Boolean(block.attrs?.checked);
       const marker = String(block.attrs?.marker || '-');
-      return serializeListItem(`${indent}${marker} [${checked ? 'x' : ' '}] `, content, '任务', `${indent}  `);
+      return serializeListItem(`${indent}${marker} [${checked ? 'x' : ' '}] `, content, translateText(getDocumentLanguage(), '任务'), `${indent}  `);
     }
     case 'blockquote':
-      return prefixLines('> ', content, '引用内容');
+      return prefixLines('> ', content, translateText(getDocumentLanguage(), '引用内容'));
     case 'callout': {
       const calloutType = String(block.attrs?.calloutType || 'NOTE').toUpperCase();
       const body = content.trimEnd()
@@ -632,7 +636,7 @@ export function blockToMarkdown(block: BlockViewModel): string {
     case 'table':
       return content.trim() || defaultContentForType('table');
     case 'image': {
-      const alt = String(block.attrs?.alt || content || '图片描述');
+      const alt = String(block.attrs?.alt || content || translateText(getDocumentLanguage(), '图片描述'));
       const src = String(block.attrs?.src || 'path/to/image.png');
       return `![${alt}](${formatImageDestination(src)})`;
     }
@@ -648,7 +652,7 @@ export function blockToMarkdown(block: BlockViewModel): string {
 
 export function updateBlockContent(block: BlockViewModel, content: string): BlockViewModel {
   const nextAttrs = block.type === 'image'
-    ? { ...block.attrs, alt: content || '图片描述' }
+    ? { ...block.attrs, alt: content || translateText(getDocumentLanguage(), '图片描述') }
     : block.attrs;
   const nextBlock = { ...block, content, attrs: nextAttrs };
   return { ...nextBlock, markdown: blockToMarkdown(nextBlock) };
@@ -675,7 +679,7 @@ export function convertBlock(block: BlockViewModel, type: BlockType): BlockViewM
         : type === 'callout'
           ? { calloutType: 'NOTE' }
           : type === 'image'
-            ? { alt: content || '图片描述', src: String(block.attrs?.src || 'path/to/image.png') }
+            ? { alt: content || translateText(getDocumentLanguage(), '图片描述'), src: String(block.attrs?.src || 'path/to/image.png') }
             : undefined,
   };
   return { ...nextBlock, markdown: blockToMarkdown(nextBlock) };

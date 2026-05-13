@@ -1,6 +1,8 @@
 import { Button, Tag, Tooltip } from 'antd';
 import { Settings } from 'lucide-react';
 import type { AIAgentConfig } from '../types';
+import { useSettingsStore } from '../../../store';
+import { translateText } from '../../../i18n';
 
 export interface AgentSelectorProps {
   agents: AIAgentConfig[];
@@ -10,12 +12,15 @@ export interface AgentSelectorProps {
 }
 
 export function AgentSelector({ agents, currentAgentId, onChangeAgent, onOpenAgentManager }: AgentSelectorProps) {
+  const language = useSettingsStore(s => s.general.language);
+  const t = (value: string) => translateText(language, value);
+
   return (
     <div className="ai-agent-selector">
       <div className="ai-section-row">
-        <span className="ai-section-label">智能体</span>
+        <span className="ai-section-label">{t('智能体')}</span>
         <Button type="text" size="small" icon={<Settings size={14} />} onClick={onOpenAgentManager}>
-          管理
+          {t('管理')}
         </Button>
       </div>
       <div className="ai-agent-grid">
@@ -32,9 +37,9 @@ export function AgentSelector({ agents, currentAgentId, onChangeAgent, onOpenAge
                 <span className="ai-agent-icon">{agent.iconText || 'AI'}</span>
                 <span className="ai-agent-main">
                   <span className="ai-agent-name">{agent.name}</span>
-                  <span className="ai-agent-desc">{agent.description || '自定义智能体'}</span>
+                  <span className="ai-agent-desc">{agent.description || t('自定义智能体')}</span>
                 </span>
-                {!agent.enabled && <Tag bordered={false}>停用</Tag>}
+                {!agent.enabled && <Tag bordered={false}>{t('停用')}</Tag>}
               </button>
             </Tooltip>
           );

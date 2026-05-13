@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Card, Row, Col, Tag, Button, Input, Select, Space, Typography, Empty, Spin, message } from 'antd';
 import { SearchOutlined, DownloadOutlined, CheckOutlined } from '@ant-design/icons';
-import { usePluginStore } from '../../../store';
+import { usePluginStore, useSettingsStore } from '../../../store';
 import type { PluginManifest } from '../../../types';
+import { translateText } from '../../../i18n';
 
 const { Text } = Typography;
 
@@ -17,8 +18,10 @@ const categoryMap: Record<string, string> = {
 
 export default function PluginCenterPage() {
   const { registry, installed, loading, fetchRegistry, installPlugin } = usePluginStore();
+  const language = useSettingsStore(s => s.general.language);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<string>('all');
+  const t = (value: string) => translateText(language, value);
 
   useEffect(() => {
     fetchRegistry().catch(() => {
@@ -37,9 +40,9 @@ export default function PluginCenterPage() {
   const handleInstall = async (plugin: PluginManifest) => {
     try {
       await installPlugin(plugin);
-      message.success(`已安装 ${plugin.displayName || plugin.name}`);
+      message.success(`${t('已安装')} ${plugin.displayName || plugin.name}`);
     } catch {
-      message.error('安装失败');
+      message.error(t('安装失败'));
     }
   };
 
@@ -47,7 +50,7 @@ export default function PluginCenterPage() {
     return (
       <div style={{ textAlign: 'center', padding: 60 }}>
         <Spin size="large" />
-        <p className="settings-muted" style={{ marginTop: 16 }}>加载插件源...</p>
+        <p className="settings-muted" style={{ marginTop: 16 }}>{t('加载插件源...')}</p>
       </div>
     );
   }
@@ -55,10 +58,10 @@ export default function PluginCenterPage() {
   if (registry.length === 0) {
     return (
       <Empty
-        description="暂无可用插件"
+        description={t('暂无可用插件')}
         image={Empty.PRESENTED_IMAGE_SIMPLE}
       >
-        <Text type="secondary">请检查插件源配置，或稍后重试</Text>
+        <Text type="secondary">{t('请检查插件源配置，或稍后重试')}</Text>
       </Empty>
     );
   }
@@ -68,7 +71,7 @@ export default function PluginCenterPage() {
       {/* Search & Filter */}
       <Space style={{ marginBottom: 24 }} size="middle">
         <Input
-          placeholder="搜索插件"
+          placeholder={t('搜索插件')}
           prefix={<SearchOutlined />}
           style={{ width: 300 }}
           value={search}
@@ -80,8 +83,8 @@ export default function PluginCenterPage() {
           onChange={setCategory}
           style={{ width: 140 }}
           options={[
-            { value: 'all', label: '全部分类' },
-            ...Object.entries(categoryMap).map(([key, label]) => ({ value: key, label })),
+            { value: 'all', label: t('全部分类') },
+            ...Object.entries(categoryMap).map(([key, label]) => ({ value: key, label: t(label) })),
           ]}
         />
       </Space>
@@ -96,7 +99,7 @@ export default function PluginCenterPage() {
               title={plugin.displayName || plugin.name}
               extra={
                 installedIds.has(plugin.id) ? (
-                  <Tag icon={<CheckOutlined />} color="success">已安装</Tag>
+                  <Tag icon={<CheckOutlined />} color="success">{t('已安装')}</Tag>
                 ) : (
                   <Button
                     size="small"
@@ -104,7 +107,7 @@ export default function PluginCenterPage() {
                     icon={<DownloadOutlined />}
                     onClick={() => handleInstall(plugin)}
                   >
-                    安装
+                    {t('安装')}
                   </Button>
                 )
               }
@@ -116,7 +119,7 @@ export default function PluginCenterPage() {
                 {plugin.tags?.map((tag) => (
                   <Tag key={tag}>{tag}</Tag>
                 ))}
-                <Tag color="blue">{categoryMap[plugin.category] || plugin.category}</Tag>
+                <Tag color="blue">{categoryMap[plugin.category] ? t(categoryMap[plugin.category]) : plugin.category}</Tag>
                 {plugin.license && <Tag>{plugin.license}</Tag>}
               </Space>
               <div className="settings-muted" style={{ marginTop: 8 }}>

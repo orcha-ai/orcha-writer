@@ -1,5 +1,6 @@
 import { createAIId, nowIso } from './id';
 import type { AIContextSnapshot, AIContextSource, BuildAIContextOptions, CursorAroundText, EditorRange } from '../types';
+import { translateText } from '../../../i18n';
 
 const DEFAULT_CURSOR_AROUND_CHARS = 800;
 const MAX_DOCUMENT_CONTEXT_CHARS = 60000;
@@ -81,7 +82,7 @@ export async function buildAIContext(options: BuildAIContextOptions): Promise<AI
   return snapshot;
 }
 
-export function describeContextSource(source: AIContextSource): string {
+export function describeContextSource(source: AIContextSource, language?: unknown): string {
   const labels: Record<AIContextSource, string> = {
     selected_text: '选中文本',
     cursor_around: '光标附近',
@@ -89,5 +90,5 @@ export function describeContextSource(source: AIContextSource): string {
     document_meta: '文件信息',
     manual_input: '手动输入',
   };
-  return labels[source];
+  return translateText(language, labels[source]);
 }

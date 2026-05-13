@@ -15,7 +15,7 @@ import {
   Settings,
   ScrollText,
 } from 'lucide-react';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
@@ -28,10 +28,18 @@ import { findFirstMdFile, readFirstLevel } from '../utils/workspace';
 import { getActiveEditorView, pasteClipboardImagesIntoActiveEditor } from './Editor';
 import { basename, formatMarkdownImageUrl, markdownImagePathForDocument, stripExtension } from '../utils/markdownImages';
 import { renderMarkdownForExport } from '../utils/exportMarkdown';
-import { availableMarkdownPath, decodeDialogPath, fileNameFromPath, normalizeMarkdownFileName } from '../utils/savePaths';
+import {
+  availableTextFilePath,
+  decodeDialogPath,
+  ensureTextFileExtension,
+  fileNameFromPath,
+  getTextFileDialogFilters,
+  normalizeTextFileName,
+} from '../utils/savePaths';
 import { useSettingsStore, useShortcutStore } from '../store';
 import type { ThemeMode } from '../types';
 import { runUpdateCheckFlow } from '../utils/updateUi';
+import { isEnglishLanguage, translateText } from '../i18n';
 
 function normalizeThemeColor(color: string | undefined): string {
   const value = color?.trim();
@@ -121,10 +129,10 @@ function selectAllEditorContent(): boolean {
   return true;
 }
 
-async function canWriteExportPath(path: string, overwriteExisting: boolean): Promise<boolean> {
+async function canWriteExportPath(path: string, overwriteExisting: boolean, existingMessage: string): Promise<boolean> {
   if (overwriteExisting) return true;
   if (!(await pathExists(path))) return true;
-  message.warning('目标文件已存在，已按设置取消导出');
+  message.warning(existingMessage);
   return false;
 }
 
@@ -172,9 +180,15 @@ export default function Toolbar() {
   const saveSettings = useSettingsStore(s => s.saveAll);
   const exportSettings = useSettingsStore(s => s.export);
   const fileSettings = useSettingsStore(s => s.files);
+  const language = useSettingsStore(s => s.general.language);
   const themeColor = useSettingsStore(s => s.appearance.themeColor);
   const shortcuts = useShortcutStore(s => s.shortcuts);
   const [isDragging, setIsDragging] = useState(false);
+  const t = useCallback((value: string, params?: Record<string, string | number>) => (
+    translateText(language, value, params)
+  ), [language]);
+  const isEnglish = isEnglishLanguage(language);
+  const textFileDialogFilters = useMemo(() => getTextFileDialogFilters(language), [language]);
 
   const setThemeMode = useCallback((themeMode: ThemeMode) => {
     dispatch({ type: 'SET_THEME', payload: themeMode });
@@ -213,16 +227,24 @@ export default function Toolbar() {
     const id = `draft-${Date.now()}`;
     dispatch({
       type: 'OPEN_TAB',
-      payload: { id, name: '未命名.md', path: id, content: '# 未命名\n\n', isDraft: true },
+      payload: { id, name: t('未命名.md'), path: id, content: `# ${t('未命名')}\n\n`, isDraft: true },
     });
-  }, [dispatch]);
+  }, [dispatch, t]);
+
+  const handleNewTextFile = useCallback(() => {
+    const id = `draft-text-${Date.now()}`;
+    dispatch({
+      type: 'OPEN_TAB',
+      payload: { id, name: t('未命名.txt'), path: id, content: '', isDraft: true },
+    });
+  }, [dispatch, t]);
 
   const handleOpenFile = useCallback(async () => {
     try {
       const selected = await open({
         multiple: true,
-        title: '打开 Markdown 文件',
-        filters: [{ name: 'Markdown', extensions: ['md'] }],
+        title: t('打开文本或代码文件'),
+        filters: textFileDialogFilters,
       });
       if (!selected) return;
       const paths = Array.isArray(selected) ? selected : [selected];
@@ -241,14 +263,14 @@ export default function Toolbar() {
     } catch (e) {
       console.error('Failed to open file:', e);
     }
-  }, [dispatch]);
+  }, [dispatch, t, textFileDialogFilters]);
 
   const handleOpenFolder = useCallback(async () => {
     try {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: '选择工作区文件夹',
+        title: t('选择工作区文件夹'),
       });
       if (!selected) return;
 
@@ -285,7 +307,7 @@ export default function Toolbar() {
               id: firstMd.path,
               name: firstMd.name,
               path: firstMd.path,
-              content: `# ${firstMd.name.replace('.md', '')}\n\n`,
+              content: `# ${firstMd.name.replace('.md', '') || t('未命名')}\n\n`,
             },
           });
         }
@@ -293,7 +315,7 @@ export default function Toolbar() {
     } catch (e) {
       console.error('Failed to open folder:', e);
     }
-  }, [dispatch, fileSettings.hidePatterns]);
+  }, [dispatch, fileSettings.hidePatterns, t]);
 
   const handleSave = useCallback(async () => {
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
@@ -302,16 +324,16 @@ export default function Toolbar() {
     try {
       if (activeTab.isDraft) {
         const path = state.workspacePath
-          ? await availableMarkdownPath(state.workspacePath, activeTab.name)
+          ? await availableTextFilePath(state.workspacePath, activeTab.name)
           : await (async () => {
               const selected = await save({
-                title: '保存文件',
-                defaultPath: normalizeMarkdownFileName(activeTab.name),
-                filters: [{ name: 'Markdown', extensions: ['md'] }],
+                title: t('保存文件'),
+                defaultPath: normalizeTextFileName(activeTab.name),
+                filters: textFileDialogFilters,
               });
               if (!selected) return '';
               const decoded = decodeDialogPath(selected);
-              return /\.md$/i.test(decoded) ? decoded : `${decoded}.md`;
+              return ensureTextFileExtension(decoded, activeTab.name);
             })();
 
         if (!path) return;
@@ -329,18 +351,18 @@ export default function Toolbar() {
           dispatch({ type: 'SET_WORKSPACE', payload: { path: state.workspacePath, tree } });
         }
 
-        message.success(`已保存到 ${name}`);
+        message.success(t('已保存到 {name}', { name }));
       } else {
         // Save existing file
         await writeTextFile(activeTab.path, activeTab.content);
         dispatch({ type: 'MARK_TAB_SAVED', payload: activeTab.id });
-        message.success('已保存');
+        message.success(t('已保存'));
       }
     } catch (e) {
       console.error('Failed to save file:', e);
-      message.error('保存失败');
+      message.error(t('保存失败'));
     }
-  }, [dispatch, fileSettings.hidePatterns, state.activeTabId, state.tabs, state.workspacePath]);
+  }, [dispatch, fileSettings.hidePatterns, state.activeTabId, state.tabs, state.workspacePath, t, textFileDialogFilters]);
 
   const handleExportHTML = useCallback(async () => {
     console.log('handleExportHTML called');
@@ -362,7 +384,7 @@ export default function Toolbar() {
         ? `${exportSettings.defaultExportDir}/${defaultFileName}`
         : defaultFileName;
       const fullHTML = `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="${isEnglish ? 'en-US' : 'zh-CN'}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -392,18 +414,18 @@ export default function Toolbar() {
 ${htmlBody}
 </body>
 </html>`;
-      const selected = await save({ title: '导出为 HTML', defaultPath, filters: [{ name: 'HTML', extensions: ['html'] }] });
+      const selected = await save({ title: t('导出为 HTML'), defaultPath, filters: [{ name: 'HTML', extensions: ['html'] }] });
       console.log('export_html save returned:', selected, 'type:', typeof selected);
       if (!selected) return;
       const path = decodeDialogPath(selected);
-      if (!(await canWriteExportPath(path, exportSettings.overwriteExisting))) return;
+      if (!(await canWriteExportPath(path, exportSettings.overwriteExisting, t('目标文件已存在，已按设置取消导出')))) return;
       await writeTextFile(path, fullHTML);
       if (exportSettings.openAfterExport) {
         await openPath(path);
       }
       console.log('export_html written to:', path);
     } catch (e) { console.error('Failed to export HTML:', e); }
-  }, [state.tabs, state.activeTabId, exportSettings.defaultExportDir, exportSettings.openAfterExport, exportSettings.overwriteExisting, themeColor]);
+  }, [state.tabs, state.activeTabId, exportSettings.defaultExportDir, exportSettings.openAfterExport, exportSettings.overwriteExisting, isEnglish, t, themeColor]);
 
   const handleExportPDF = useCallback(async () => {
     console.log('handleExportPDF called');
@@ -411,7 +433,7 @@ ${htmlBody}
     if (!activeTab) return;
     try {
       const htmlBody = await renderMarkdownForExport(activeTab.content, activeTab.path);
-      const defaultFileName = activeTab.name.replace(/\.md$/, '') + '_打印版.html';
+      const defaultFileName = activeTab.name.replace(/\.md$/, '') + (isEnglish ? '_print.html' : '_打印版.html');
       const defaultPath = exportSettings.defaultExportDir
         ? `${exportSettings.defaultExportDir}/${defaultFileName.replace(/\.html$/, '.pdf')}`
         : defaultFileName.replace(/\.html$/, '.pdf');
@@ -419,7 +441,7 @@ ${htmlBody}
       const pageSize = page.format === 'custom' ? '' : `${page.format} ${page.orientation}`;
       const pageMargin = `${page.margin.top} ${page.margin.right} ${page.margin.bottom} ${page.margin.left}`;
       const headerFooter = exportSettings.headerFooter.enabled
-        ? `<div class="print-footer"><span>${exportSettings.headerFooter.showDocumentTitle ? activeTab.name : ''}</span>${exportSettings.headerFooter.showPageNumber ? '<span>第 <span class="page-number"></span> 页</span>' : '<span></span>'}</div>`
+        ? `<div class="print-footer"><span>${exportSettings.headerFooter.showDocumentTitle ? activeTab.name : ''}</span>${exportSettings.headerFooter.showPageNumber ? (isEnglish ? '<span>Page <span class="page-number"></span></span>' : '<span>第 <span class="page-number"></span> 页</span>') : '<span></span>'}</div>`
         : '';
       const fullHTML = `<!DOCTYPE html><html><head><title>${activeTab.name}</title><style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -455,10 +477,10 @@ ${htmlBody}
         : requestedEngine === 'system_chrome' && chromeEngine?.available;
 
       if (useChrome) {
-        const selected = await save({ title: '导出为 PDF', defaultPath, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
+        const selected = await save({ title: t('导出为 PDF'), defaultPath, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
         if (!selected) return;
         const path = decodeDialogPath(selected);
-        if (!(await canWriteExportPath(path, exportSettings.overwriteExisting))) return;
+        if (!(await canWriteExportPath(path, exportSettings.overwriteExisting, t('目标文件已存在，已按设置取消导出')))) return;
 
         // Use Chrome headless export
         const result: { success: boolean; output_path?: string; error?: string } = await invoke('export_pdf_chrome', {
@@ -470,7 +492,7 @@ ${htmlBody}
         });
         if (!result.success) {
           console.error('Chrome PDF export failed:', result.error);
-          message.warning('Chrome 导出失败，已打开系统打印');
+          message.warning(t('Chrome 导出失败，已打开系统打印'));
           await printHtmlDocument(fullHTML);
           return;
         }
@@ -479,30 +501,30 @@ ${htmlBody}
         }
       } else {
         if (requestedEngine === 'system_chrome') {
-          message.warning('系统 Chrome 不可用，已打开系统打印');
+          message.warning(t('系统 Chrome 不可用，已打开系统打印'));
         }
         await printHtmlDocument(fullHTML);
       }
     } catch (e) { console.error('Failed to export PDF:', e); }
-  }, [state.tabs, state.activeTabId, exportSettings, themeColor]);
+  }, [state.tabs, state.activeTabId, exportSettings, isEnglish, t, themeColor]);
 
   const handleSaveAs = useCallback(async () => {
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
     if (!activeTab) return;
     try {
       const defaultPath = activeTab.isDraft && state.workspacePath
-        ? `${state.workspacePath}/${normalizeMarkdownFileName(activeTab.name)}`
+        ? `${state.workspacePath}/${normalizeTextFileName(activeTab.name)}`
         : activeTab.isDraft
-          ? normalizeMarkdownFileName(activeTab.name)
+          ? normalizeTextFileName(activeTab.name)
           : activeTab.path;
       const selected = await save({
-        title: '另存为',
+        title: t('另存为'),
         defaultPath,
-        filters: [{ name: 'Markdown', extensions: ['md'] }],
+        filters: textFileDialogFilters,
       });
       if (!selected) return;
       const decoded = decodeDialogPath(selected);
-      const decodedPath = /\.md$/i.test(decoded) ? decoded : `${decoded}.md`;
+      const decodedPath = ensureTextFileExtension(decoded, activeTab.name);
       await writeTextFile(decodedPath, activeTab.content);
       const id = decodedPath;
       const name = fileNameFromPath(decodedPath);
@@ -515,12 +537,12 @@ ${htmlBody}
         const tree = await readFirstLevel(state.workspacePath, fileSettings.hidePatterns);
         dispatch({ type: 'SET_WORKSPACE', payload: { path: state.workspacePath, tree } });
       }
-      message.success(`已保存到 ${name}`);
+      message.success(t('已保存到 {name}', { name }));
     } catch (e) {
       console.error('Failed to save as:', e);
-      message.error('另存为失败');
+      message.error(t('另存为失败'));
     }
-  }, [dispatch, fileSettings.hidePatterns, state.activeTabId, state.tabs, state.workspacePath]);
+  }, [dispatch, fileSettings.hidePatterns, state.activeTabId, state.tabs, state.workspacePath, t, textFileDialogFilters]);
 
   const handleCheckUpdate = useCallback(async () => {
     await runUpdateCheckFlow();
@@ -593,29 +615,29 @@ ${htmlBody}
     if (typeof selectedPath !== 'string' || !selectedPath) return;
     const imagePath = decodeDialogPath(selectedPath);
     const markdownPath = markdownImagePathForDocument(imagePath, activeTab.path);
-    const alt = stripExtension(basename(imagePath)) || '图片';
+    const alt = stripExtension(basename(imagePath)) || t('图片');
     appendMarkdownToActiveTab(`\n![${alt}](${formatMarkdownImageUrl(markdownPath)})\n`);
-  }, [appendMarkdownToActiveTab, state.activeTabId, state.tabs]);
+  }, [appendMarkdownToActiveTab, state.activeTabId, state.tabs, t]);
 
   const handleInsertLink = useCallback(() => {
-    appendMarkdownToActiveTab('\n[链接](url)\n');
-  }, [appendMarkdownToActiveTab]);
+    appendMarkdownToActiveTab(isEnglish ? '\n[Link](url)\n' : '\n[链接](url)\n');
+  }, [appendMarkdownToActiveTab, isEnglish]);
 
   const handleInsertTable = useCallback(() => {
-    appendMarkdownToActiveTab('\n| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n|  |  |  |\n');
-  }, [appendMarkdownToActiveTab]);
+    appendMarkdownToActiveTab(isEnglish ? '\n| Column 1 | Column 2 | Column 3 |\n| --- | --- | --- |\n|  |  |  |\n' : '\n| 列1 | 列2 | 列3 |\n| --- | --- | --- |\n|  |  |  |\n');
+  }, [appendMarkdownToActiveTab, isEnglish]);
 
   const handleInsertCode = useCallback(() => {
-    appendMarkdownToActiveTab('\n```\n代码\n```\n');
-  }, [appendMarkdownToActiveTab]);
+    appendMarkdownToActiveTab(isEnglish ? '\n```\ncode\n```\n' : '\n```\n代码\n```\n');
+  }, [appendMarkdownToActiveTab, isEnglish]);
 
   const handleInsertHr = useCallback(() => {
     appendMarkdownToActiveTab('\n---\n');
   }, [appendMarkdownToActiveTab]);
 
   const handleInsertTask = useCallback(() => {
-    appendMarkdownToActiveTab('\n- [ ] 任务\n- [ ] 任务\n');
-  }, [appendMarkdownToActiveTab]);
+    appendMarkdownToActiveTab(isEnglish ? '\n- [ ] Task\n- [ ] Task\n' : '\n- [ ] 任务\n- [ ] 任务\n');
+  }, [appendMarkdownToActiveTab, isEnglish]);
 
   const runShortcutAction = useCallback((id: string) => {
     switch (id) {
@@ -628,6 +650,9 @@ ${htmlBody}
         break;
       case 'file.new':
         handleNewFile();
+        break;
+      case 'file.newText':
+        handleNewTextFile();
         break;
       case 'file.open':
         void handleOpenFile();
@@ -723,6 +748,7 @@ ${htmlBody}
     handleInsertTable,
     handleInsertTask,
     handleNewFile,
+    handleNewTextFile,
     handleOpenFile,
     handleOpenFolder,
     handleSave,
@@ -740,6 +766,9 @@ ${htmlBody}
       switch (action) {
         case 'new_file':
           handleNewFile();
+          break;
+        case 'new_text_file':
+          handleNewTextFile();
           break;
         case 'open_file':
           handleOpenFile();
@@ -908,6 +937,7 @@ ${htmlBody}
     };
   }, [
     handleNewFile,
+    handleNewTextFile,
     handleOpenFile,
     handleOpenFolder,
     handleSave,
@@ -1075,23 +1105,23 @@ ${htmlBody}
       <div className="toolbar">
         {/* Left section */}
         <div className="toolbar-section left">
-          <button className="toolbar-btn" onClick={handleNewFile} data-tooltip="新建文件" aria-label="新建文件">
+          <button className="toolbar-btn" onClick={handleNewFile} data-tooltip={t('新建文件')} aria-label={t('新建文件')}>
             <FilePlus size={16} />
           </button>
-          <button className="toolbar-btn" onClick={handleOpenFile} data-tooltip="打开文件" aria-label="打开文件">
+          <button className="toolbar-btn" onClick={handleOpenFile} data-tooltip={t('打开文件')} aria-label={t('打开文件')}>
             <FileText size={16} />
           </button>
-          <button className="toolbar-btn" onClick={handleOpenFolder} data-tooltip="打开文件夹" aria-label="打开文件夹">
+          <button className="toolbar-btn" onClick={handleOpenFolder} data-tooltip={t('打开文件夹')} aria-label={t('打开文件夹')}>
             <FolderOpen size={16} />
           </button>
-          <button className="toolbar-btn" onClick={handleSave} data-tooltip="保存" aria-label="保存">
+          <button className="toolbar-btn" onClick={handleSave} data-tooltip={t('保存')} aria-label={t('保存')}>
             <Save size={16} />
           </button>
           <button
             className={`toolbar-btn ${state.searchOpen ? 'active' : ''}`}
             onClick={() => dispatch({ type: 'OPEN_SEARCH' })}
-            data-tooltip="搜索"
-            aria-label="搜索"
+            data-tooltip={t('搜索')}
+            aria-label={t('搜索')}
           >
             <Search size={16} />
           </button>
@@ -1105,38 +1135,38 @@ ${htmlBody}
             <button
               className={`view-toggle-btn ${state.viewMode === 'block' ? 'active' : ''}`}
               onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'block' })}
-              data-tooltip="块编辑模式"
-              aria-label="块编辑模式"
+              data-tooltip={t('块编辑模式')}
+              aria-label={t('块编辑模式')}
             >
               <ScrollText size={14} />
-              <span>块编辑</span>
+              <span>{t('块编辑')}</span>
             </button>
             <button
               className={`view-toggle-btn ${state.viewMode === 'edit' ? 'active' : ''}`}
               onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'edit' })}
-              data-tooltip="MD 源码模式"
-              aria-label="MD 源码模式"
+              data-tooltip={t('MD 源码模式')}
+              aria-label={t('MD 源码模式')}
             >
               <Edit3 size={14} />
-              <span>MD 源码</span>
+              <span>{t('MD 源码')}</span>
             </button>
             <button
               className={`view-toggle-btn ${state.viewMode === 'preview' ? 'active' : ''}`}
               onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'preview' })}
-              data-tooltip="预览模式"
-              aria-label="预览模式"
+              data-tooltip={t('预览模式')}
+              aria-label={t('预览模式')}
             >
               <Eye size={14} />
-              <span>预览</span>
+              <span>{t('预览')}</span>
             </button>
             <button
               className={`view-toggle-btn ${state.viewMode === 'split' ? 'active' : ''}`}
               onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'split' })}
-              data-tooltip="双栏模式"
-              aria-label="双栏模式"
+              data-tooltip={t('双栏模式')}
+              aria-label={t('双栏模式')}
             >
               <Columns size={14} />
-              <span>双栏</span>
+              <span>{t('双栏')}</span>
             </button>
           </div>
         </div>
@@ -1149,24 +1179,24 @@ ${htmlBody}
             <button
               className={`theme-toggle-btn ${state.theme === 'light' ? 'active' : ''}`}
               onClick={() => setThemeMode('light')}
-              data-tooltip="浅色主题"
-              aria-label="浅色主题"
+              data-tooltip={t('浅色主题')}
+              aria-label={t('浅色主题')}
             >
               <Sun size={13} />
             </button>
             <button
               className={`theme-toggle-btn ${state.theme === 'dark' ? 'active' : ''}`}
               onClick={() => setThemeMode('dark')}
-              data-tooltip="深色主题"
-              aria-label="深色主题"
+              data-tooltip={t('深色主题')}
+              aria-label={t('深色主题')}
             >
               <Moon size={13} />
             </button>
             <button
               className={`theme-toggle-btn ${state.theme === 'system' ? 'active' : ''}`}
               onClick={() => setThemeMode('system')}
-              data-tooltip="跟随系统"
-              aria-label="跟随系统"
+              data-tooltip={t('跟随系统')}
+              aria-label={t('跟随系统')}
             >
               <Monitor size={13} />
             </button>
@@ -1177,8 +1207,8 @@ ${htmlBody}
           <button
             className={`toolbar-btn ${state.editorSettings.syncScroll ? 'active' : ''}`}
             onClick={toggleSyncScroll}
-            data-tooltip="同屏滚动"
-            aria-label="同屏滚动"
+            data-tooltip={t('同屏滚动')}
+            aria-label={t('同屏滚动')}
           >
             <ScrollText size={16} />
           </button>
@@ -1186,8 +1216,8 @@ ${htmlBody}
           <button
             className="toolbar-btn"
             onClick={() => navigate('/settings/general')}
-            data-tooltip="设置"
-            aria-label="设置"
+            data-tooltip={t('设置')}
+            aria-label={t('设置')}
           >
             <Settings size={16} />
           </button>
@@ -1197,7 +1227,7 @@ ${htmlBody}
 
       {/* Drag overlay */}
       <div className={`drag-overlay ${isDragging ? '' : 'hidden'}`}>
-        <p>释放以打开文件</p>
+        <p>{t('释放以打开文件')}</p>
       </div>
     </>
   );

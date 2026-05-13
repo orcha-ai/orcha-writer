@@ -3,6 +3,7 @@ import { readConfig, writeConfig } from '../../../config';
 import { DEFAULT_AGENT_ID } from '../constants/builtinAgents';
 import { createAIId, nowIso } from '../services/id';
 import type { AIConversation, AIMessage, AIRequestLog } from '../types';
+import { getDocumentLanguage, translateText } from '../../../i18n';
 
 interface ConversationTarget {
   documentId?: string;
@@ -32,7 +33,7 @@ function createConversation(target: ConversationTarget): AIConversation {
   const now = nowIso();
   return {
     id: createAIId('conv'),
-    title: target.documentTitle || 'AI 对话',
+    title: target.documentTitle || translateText(getDocumentLanguage(), 'AI 对话'),
     documentId: target.documentId,
     documentPath: target.documentPath,
     currentAgentId: DEFAULT_AGENT_ID,

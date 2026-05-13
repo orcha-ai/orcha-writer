@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react';
 import { useApp } from '../AppContext';
 import { useSettingsStore } from '../store';
 import { PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { translateText } from '../i18n';
 
 interface Heading {
   level: number;
@@ -16,6 +17,8 @@ export default function Outline() {
   const { state, dispatch } = useApp();
   const updateAppearance = useSettingsStore(s => s.updateAppearance);
   const saveSettings = useSettingsStore(s => s.saveAll);
+  const language = useSettingsStore(s => s.general.language);
+  const t = (value: string) => translateText(language, value);
   const activeTab = state.tabs.find(t => t.id === state.activeTabId);
 
   const setOutlineVisible = useCallback((visible: boolean) => {
@@ -44,8 +47,8 @@ export default function Outline() {
       <button
         className="side-panel-toggle outline-panel-toggle"
         onClick={() => setOutlineVisible(true)}
-        title="显示大纲"
-        aria-label="显示大纲"
+        title={t('显示大纲')}
+        aria-label={t('显示大纲')}
       >
         <PanelRightOpen size={14} />
       </button>
@@ -55,12 +58,12 @@ export default function Outline() {
   return (
     <div className="outline-panel">
       <div className="outline-header">
-        <span className="outline-title">大纲</span>
+        <span className="outline-title">{t('大纲')}</span>
         <button
           className="panel-collapse-btn"
           onClick={() => setOutlineVisible(false)}
-          title="隐藏大纲"
-          aria-label="隐藏大纲"
+          title={t('隐藏大纲')}
+          aria-label={t('隐藏大纲')}
         >
           <PanelRightClose size={14} />
         </button>
@@ -68,7 +71,7 @@ export default function Outline() {
       <div className="outline-content">
         {headings.length === 0 ? (
           <div style={{ padding: '12px', color: 'var(--text-tertiary)', fontSize: '12px' }}>
-            无标题
+            {t('无标题')}
           </div>
         ) : (
           headings.map((h, i) => (

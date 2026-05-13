@@ -89,8 +89,8 @@ function extractCodeLanguage(info: string): string {
   return info.trim().split(/\s+/)[0]?.replace(/[^\w#+.-]/g, '') || '';
 }
 
-function formatCodeLanguage(language: string): string {
-  if (!language) return '纯文本';
+function formatCodeLanguage(language: string, plainTextLabel = 'Plain Text'): string {
+  if (!language) return plainTextLabel;
   return CODE_LANGUAGE_LABELS[language.toLowerCase()] || language.toUpperCase();
 }
 
@@ -127,13 +127,41 @@ function renderCodeLanguageOptions(language: string, plainTextLabel: string): st
   const hasLanguage = CODE_LANGUAGE_OPTIONS.some(option => option.value === normalizedLanguage);
   const options = hasLanguage || !normalizedLanguage
     ? CODE_LANGUAGE_OPTIONS
-    : [...CODE_LANGUAGE_OPTIONS, { value: normalizedLanguage, label: formatCodeLanguage(normalizedLanguage) }];
+    : [...CODE_LANGUAGE_OPTIONS, { value: normalizedLanguage, label: formatCodeLanguage(normalizedLanguage, plainTextLabel) }];
 
   return options.map(option => {
     const label = option.value ? option.label : plainTextLabel;
     const selected = option.value === normalizedLanguage ? ' selected' : '';
     return `<option value="${escapeHtml(option.value)}"${selected}>${escapeHtml(label)}</option>`;
   }).join('');
+}
+
+function normalizeTabSize(value: number): number {
+  return Number.isFinite(value) ? Math.min(Math.max(Math.round(value), 1), 8) : 2;
+}
+
+function formatCodeWhitespace(content: string, tabSize: number): string {
+  const spaces = ' '.repeat(normalizeTabSize(tabSize));
+  let lines = content
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map(line => line.replace(/\t/g, spaces).replace(/[ \t]+$/g, ''));
+
+  while (lines.length > 0 && lines[0].trim() === '') lines = lines.slice(1);
+  while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines = lines.slice(0, -1);
+
+  const indentedLines = lines.filter(line => line.trim() !== '');
+  const commonIndent = indentedLines.reduce((minimum, line) => {
+    const indent = line.match(/^ */)?.[0].length ?? 0;
+    return Math.min(minimum, indent);
+  }, Number.POSITIVE_INFINITY);
+
+  if (Number.isFinite(commonIndent) && commonIndent > 0) {
+    lines = lines.map(line => line.trim() ? line.slice(commonIndent) : '');
+  }
+
+  return lines.join('\n');
 }
 
 async function copyTextToClipboard(text: string): Promise<void> {
@@ -199,7 +227,7 @@ function extractFrontMatter(content: string, enabled: boolean): { body: string; 
   return { body, html: `<dl class="md-frontmatter">${html}</dl>`, lineOffset };
 }
 
-function renderToc(headings: HeadingInfo[]): string {
+function renderToc(headings: HeadingInfo[], title: string): string {
   const items = headings
     .filter((heading) => heading.level <= 3)
     .map((heading) => (
@@ -208,12 +236,12 @@ function renderToc(headings: HeadingInfo[]): string {
     .join('');
 
   if (!items) return '';
-  return `<nav class="md-toc"><div class="md-toc-title">目录</div><ol>${items}</ol></nav>`;
+  return `<nav class="md-toc"><div class="md-toc-title">${escapeHtml(title)}</div><ol>${items}</ol></nav>`;
 }
 
-function injectToc(html: string, markdown: MarkdownSettings, headings: HeadingInfo[]): string {
+function injectToc(html: string, markdown: MarkdownSettings, headings: HeadingInfo[], title: string): string {
   if (!markdown.toc) return html;
-  return html.replace(/<p>\s*\[toc\]\s*<\/p>/gi, renderToc(headings));
+  return html.replace(/<p>\s*\[toc\]\s*<\/p>/gi, renderToc(headings, title));
 }
 
 function addCalloutRule(md: MarkdownIt) {
@@ -354,7 +382,10 @@ function createMd(markdown: MarkdownSettings, preview: PreviewSettings, security
       `<div class="md-code-block" data-code-kind="${token.type === 'fence' ? 'fence' : 'indented'}"${lineStartAttr}>`,
       '<div class="md-code-toolbar">',
       `<select class="md-code-language-select" aria-label="${escapeHtml(text.preview.codeLanguage)}" data-code-language="${escapeHtml(normalizedLanguage)}">${languageOptions}</select>`,
+      '<div class="md-code-actions">',
+      `<button type="button" class="md-code-format" aria-label="${escapeHtml(text.preview.formatCode)}"${token.type === 'fence' ? '' : ' disabled'}>${escapeHtml(text.preview.formatCode)}</button>`,
       `<button type="button" class="md-code-copy" aria-label="${escapeHtml(text.preview.copyCode)}">${escapeHtml(text.preview.copyCode)}</button>`,
+      '</div>',
       '</div>',
       `<pre class="md-code-pre"><code${languageClass}>${codeHtml}</code></pre>`,
       '</div>',
@@ -395,7 +426,7 @@ function renderMarkdown(content: string, markdown: MarkdownSettings, preview: Pr
   const env: MarkdownRenderEnv = { headings: [], slugCounts: {}, bodyLineOffset: frontMatter.lineOffset };
   const md = createMd(markdown, preview, security, language, documentPath);
   const raw = frontMatter.html + md.render(normalizeMarkdownImageSyntax(frontMatter.body), env);
-  return injectToc(raw, markdown, env.headings);
+  return injectToc(raw, markdown, env.headings, getLocaleText(language).preview.tocTitle);
 }
 
 function replaceFenceLanguage(content: string, lineStart: number, language: string): string {
@@ -414,9 +445,31 @@ function replaceFenceLanguage(content: string, lineStart: number, language: stri
   return lines.join(newline);
 }
 
+function replaceFenceCodeBlockContent(content: string, lineStart: number, nextCode: string): string {
+  if (lineStart < 0) return content;
+  const newline = content.includes('\r\n') ? '\r\n' : '\n';
+  const lines = content.split(/\r?\n/);
+  const openingLine = lines[lineStart];
+  if (typeof openingLine !== 'string') return content;
+
+  const openingMatch = openingLine.match(/^(\s*)(`{3,}|~{3,})/);
+  if (!openingMatch) return content;
+
+  const fence = openingMatch[2];
+  const fenceChar = fence[0];
+  const closingPattern = new RegExp(`^\\s*\\${fenceChar}{${fence.length},}\\s*$`);
+  const closingLineIndex = lines.findIndex((line, index) => index > lineStart && closingPattern.test(line));
+  if (closingLineIndex <= lineStart) return content;
+
+  const nextLines = nextCode ? nextCode.split('\n') : [];
+  lines.splice(lineStart + 1, closingLineIndex - lineStart - 1, ...nextLines);
+  return lines.join(newline);
+}
+
 export default function Preview() {
   const { state, dispatch } = useApp();
   const general = useSettingsStore(s => s.general);
+  const editor = useSettingsStore(s => s.editor);
   const markdown = useSettingsStore(s => s.markdown);
   const preview = useSettingsStore(s => s.preview);
   const security = useSettingsStore(s => s.security);
@@ -495,6 +548,37 @@ export default function Preview() {
     });
 
     const handleClick = (event: MouseEvent) => {
+      const formatButton = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>('button.md-code-format');
+      if (formatButton) {
+        event.preventDefault();
+        const codeBlock = formatButton.closest<HTMLElement>('.md-code-block');
+        const code = codeBlock?.querySelector<HTMLElement>('code');
+        const lineStart = Number(codeBlock?.dataset.lineStart);
+        const canFormat = codeBlock?.dataset.codeKind === 'fence' && activeTab && Number.isFinite(lineStart);
+
+        if (!canFormat || !code) {
+          formatButton.textContent = text.preview.formatFailed;
+          window.setTimeout(() => {
+            formatButton.textContent = text.preview.formatCode;
+          }, 1200);
+          return;
+        }
+
+        const formattedCode = formatCodeWhitespace(code.textContent || '', editor.tabSize);
+        const nextContent = replaceFenceCodeBlockContent(activeTab.content, lineStart, formattedCode);
+        if (nextContent !== activeTab.content) {
+          dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: nextContent } });
+        } else {
+          formatButton.classList.add('is-formatted');
+          formatButton.textContent = text.preview.formattedCode;
+          window.setTimeout(() => {
+            formatButton.classList.remove('is-formatted');
+            formatButton.textContent = text.preview.formatCode;
+          }, 1200);
+        }
+        return;
+      }
+
       const copyButton = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>('button.md-code-copy');
       if (copyButton) {
         event.preventDefault();
@@ -568,7 +652,7 @@ export default function Preview() {
       root.removeEventListener('change', handleChange);
       images.forEach(image => image.removeEventListener('error', handleImageError));
     };
-  }, [activeTab, dispatch, html, isHidden, markdown.codeHighlight, preview.openExternalLink, security.confirmExternalLinks, text]);
+  }, [activeTab, dispatch, editor.tabSize, html, isHidden, markdown.codeHighlight, preview.openExternalLink, security.confirmExternalLinks, text]);
 
   const previewThemeClassName = getPreviewThemeClassName(preview.previewTheme);
   const codeThemeClassName = getPreviewCodeThemeClassName(preview.codeTheme);
