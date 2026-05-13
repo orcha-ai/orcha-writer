@@ -61,6 +61,14 @@ struct OpenedDocument {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ImportedMarkdown {
+    path: String,
+    file_name: String,
+    content: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ClipboardImage {
     file_name: String,
     mime_type: String,
@@ -220,6 +228,64 @@ fn is_markdown_file(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+fn is_pdf_file(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("pdf"))
+        .unwrap_or(false)
+}
+
+fn markdown_title_from_path(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|name| name.to_str())
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("PDF 转换结果")
+        .to_string()
+}
+
+fn clean_pdf_page_text(page: &str) -> String {
+    let mut lines = Vec::new();
+    let mut previous_blank = false;
+
+    for line in page.lines() {
+        let trimmed = line.trim_end();
+        let is_blank = trimmed.trim().is_empty();
+        if is_blank {
+            if !previous_blank && !lines.is_empty() {
+                lines.push(String::new());
+            }
+            previous_blank = true;
+            continue;
+        }
+        lines.push(trimmed.to_string());
+        previous_blank = false;
+    }
+
+    lines.join("\n").trim().to_string()
+}
+
+fn pdf_text_to_markdown(path: &Path, text: &str) -> String {
+    let title = markdown_title_from_path(path);
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let pages: Vec<String> = normalized
+        .split('\u{c}')
+        .map(clean_pdf_page_text)
+        .filter(|page| !page.trim().is_empty())
+        .collect();
+
+    let mut markdown = format!("# {}\n\n", title);
+    if pages.len() <= 1 {
+        markdown.push_str(pages.first().map(String::as_str).unwrap_or(""));
+    } else {
+        for (index, page) in pages.iter().enumerate() {
+            markdown.push_str(&format!("## 第 {} 页\n\n{}\n\n", index + 1, page));
+        }
+    }
+
+    markdown.trim_end().to_string()
+}
+
 // ── Collect markdown file paths from CLI arguments ──
 fn collect_markdown_paths(args: Vec<String>, cwd: Option<PathBuf>) -> Vec<String> {
     args.into_iter()
@@ -299,6 +365,40 @@ fn open_markdown_file(path: String) -> Result<OpenedDocument, String> {
         content,
         external: true,
         readonly: false,
+    })
+}
+
+#[command]
+fn import_pdf_text_as_markdown(path: String) -> Result<ImportedMarkdown, String> {
+    let path_buf = PathBuf::from(&path);
+    if !path_buf.exists() {
+        return Err("文件不存在".to_string());
+    }
+    if !path_buf.is_file() {
+        return Err("目标路径不是文件".to_string());
+    }
+    if !is_pdf_file(&path_buf) {
+        return Err("当前仅支持文字版 PDF".to_string());
+    }
+
+    let metadata = std::fs::metadata(&path_buf).map_err(|e| e.to_string())?;
+    const MAX_PDF_SIZE: u64 = 80 * 1024 * 1024;
+    if metadata.len() > MAX_PDF_SIZE {
+        return Err("PDF 文件过大，暂不支持超过 80MB 的文件".to_string());
+    }
+
+    let extracted = pdf_extract::extract_text(&path_buf)
+        .map_err(|e| format!("PDF 文本提取失败: {}", e))?;
+    if extracted.trim().is_empty() {
+        return Err("未检测到可提取文本，这可能是扫描版 PDF。可安装 OCR/视觉插件后再试。".to_string());
+    }
+
+    let title = markdown_title_from_path(&path_buf);
+    let file_name = format!("{}.md", title);
+    Ok(ImportedMarkdown {
+        path: path_buf.to_string_lossy().to_string(),
+        file_name,
+        content: pdf_text_to_markdown(&path_buf, &extracted),
     })
 }
 
@@ -1719,6 +1819,7 @@ fn main() {
             take_pending_open_files,
             exit_app,
             open_markdown_file,
+            import_pdf_text_as_markdown,
             read_directory_entries,
             read_file_content,
             write_file_content,

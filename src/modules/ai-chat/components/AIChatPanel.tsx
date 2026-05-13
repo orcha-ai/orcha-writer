@@ -1,4 +1,6 @@
 import { Alert, Button, message, Modal, Tooltip } from 'antd';
+import { invoke } from '@tauri-apps/api/core';
+import { confirm as confirmDialog, open } from '@tauri-apps/plugin-dialog';
 import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
 import { PanelRightOpen } from 'lucide-react';
 import { subscribeEditorSelection } from '../../../components/Editor';
@@ -23,7 +25,7 @@ import type {
 } from '../types';
 import { DEFAULT_AI_SETTINGS } from '../types';
 import { AIChatHeader } from './AIChatHeader';
-import { AIInputBox } from './AIInputBox';
+import { AIInputBox, type AIInputAttachment } from './AIInputBox';
 import { ContextBox } from './ContextBox';
 import { MessageList } from './MessageList';
 import { SelectionAIPopover } from './SelectionAIPopover';
@@ -40,17 +42,32 @@ export interface AIChatPanelProps {
   onClose?: () => void;
 }
 
-function confirmAction(title: string, content: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    Modal.confirm({
+interface ConfirmActionOptions {
+  okText?: string;
+  cancelText?: string;
+  kind?: 'info' | 'warning' | 'error';
+}
+
+async function confirmAction(title: string, content: string, options?: ConfirmActionOptions): Promise<boolean> {
+  try {
+    return await confirmDialog(content, {
       title,
-      content,
-      okText: '继续',
-      cancelText: '取消',
-      onOk: () => resolve(true),
-      onCancel: () => resolve(false),
+      kind: options?.kind || 'warning',
+      okLabel: options?.okText || '继续',
+      cancelLabel: options?.cancelText || '取消',
     });
-  });
+  } catch {
+    return new Promise((resolve) => {
+      Modal.confirm({
+        title,
+        content,
+        okText: options?.okText || '继续',
+        cancelText: options?.cancelText || '取消',
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      });
+    });
+  }
 }
 
 function cardText(card: AIResultCard): string {
@@ -81,6 +98,10 @@ function getErrorMessage(error: unknown): string {
   return 'AI 请求失败';
 }
 
+function fileNameFromPath(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() || '未命名.pdf';
+}
+
 const EMPTY_MESSAGES: AIMessage[] = [];
 const CHAT_SCROLL_BOTTOM_THRESHOLD = 72;
 
@@ -89,6 +110,12 @@ interface BlockAIEventDetail {
   commandId?: string;
   resultMode?: AICommandPreset['resultMode'];
   selection?: EditorSelection | null;
+}
+
+interface ImportedMarkdown {
+  path: string;
+  fileName: string;
+  content: string;
 }
 
 function isNearScrollBottom(element: HTMLElement): boolean {
@@ -129,6 +156,8 @@ export function AIChatPanel({
   const [selection, setSelection] = useState<EditorSelection | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [deepThinkingEnabled, setDeepThinkingEnabled] = useState(false);
+  const [pendingImportFile, setPendingImportFile] = useState<{ path: string; name: string } | null>(null);
+  const [convertingImport, setConvertingImport] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const previousMessageCountRef = useRef(0);
   const previousConversationIdRef = useRef<string | null>(null);
@@ -180,6 +209,13 @@ export function AIChatPanel({
   );
   const thinkingAvailable = Boolean(model?.thinkingSupported);
   const thinkingBudget = thinkingAvailable ? model?.thinkingBudget : undefined;
+  const pendingAttachment = useMemo<AIInputAttachment | null>(() => {
+    if (!pendingImportFile) return null;
+    return {
+      name: pendingImportFile.name,
+      description: 'PDF · 文字版提取 · 本地处理',
+    };
+  }, [pendingImportFile]);
 
   useEffect(() => {
     setDeepThinkingEnabled(Boolean(model?.thinkingSupported && model.thinkingEnabled));
@@ -548,6 +584,99 @@ export function AIChatPanel({
     });
   }, [allCommands, editorBridge, selection, sendMessage]);
 
+  const handleAttachFile = useCallback(async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        title: '上传文件转 Markdown',
+        filters: [{ name: '文字版 PDF', extensions: ['pdf'] }],
+      });
+      if (!selected) return;
+      const path = Array.isArray(selected) ? selected[0] : selected;
+      if (!path) return;
+      setPendingImportFile({ path, name: fileNameFromPath(path) });
+      message.success('已添加 PDF');
+    } catch (error) {
+      console.error('Failed to attach import file:', error);
+      message.error('选择文件失败');
+    }
+  }, []);
+
+  const handleConvertAttachment = useCallback(async () => {
+    if (!conversation || !pendingImportFile || convertingImport) return;
+    const confirmed = await confirmAction(
+      '转换为 Markdown？',
+      '将从 PDF 文本层提取内容，不会上传到云端。扫描件或图片型 PDF 暂时无法识别。',
+      { okText: '开始转换' },
+    );
+    if (!confirmed) return;
+
+    const now = nowIso();
+    const userMessage: AIMessage = {
+      id: createAIId('msg'),
+      conversationId: conversation.id,
+      role: 'user',
+      content: `转换 PDF：${pendingImportFile.name}`,
+      status: 'success',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const assistantMessage: AIMessage = {
+      id: createAIId('msg'),
+      conversationId: conversation.id,
+      role: 'assistant',
+      content: `正在从 ${pendingImportFile.name} 提取 PDF 文本...`,
+      status: 'pending',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    addMessage(conversation.id, userMessage);
+    addMessage(conversation.id, assistantMessage);
+    setConvertingImport(true);
+
+    try {
+      const result = await invoke<ImportedMarkdown>('import_pdf_text_as_markdown', { path: pendingImportFile.path });
+      updateMessage(conversation.id, assistantMessage.id, {
+        content: `已从 ${pendingImportFile.name} 提取 Markdown`,
+        status: 'success',
+        resultCards: [
+          {
+            id: createAIId('card'),
+            type: 'markdown_result',
+            title: result.fileName,
+            markdown: result.content,
+            actions: [
+              { type: 'create_markdown_file', label: '新建文档', primary: true },
+              { type: 'insert_at_cursor', label: '插入光标处' },
+              { type: 'copy', label: '复制' },
+            ],
+          },
+        ],
+      });
+      setPendingImportFile(null);
+    } catch (error) {
+      const errorMessage = getErrorMessage(error);
+      updateMessage(conversation.id, assistantMessage.id, {
+        content: '',
+        status: 'failed',
+        errorCode: 'pdf_import_failed',
+        errorMessage,
+        resultCards: [
+          {
+            id: createAIId('card'),
+            type: 'error',
+            title: 'PDF 转换失败',
+            content: errorMessage,
+            actions: [{ type: 'copy', label: '复制错误信息' }],
+          },
+        ],
+      });
+    } finally {
+      setConvertingImport(false);
+    }
+  }, [addMessage, conversation, convertingImport, pendingImportFile, updateMessage]);
+
   const handleResultAction = useCallback(async (action: AIResultAction, card: AIResultCard, sourceMessage: AIMessage) => {
     const text = cardText(card);
     if (action.type === 'regenerate') {
@@ -698,7 +827,7 @@ export function AIChatPanel({
       </div>
       <AIInputBox
         sending={sending}
-        disabled={!conversation}
+        disabled={!conversation || convertingImport}
         modelLabel={modelLabel(model?.model, provider?.name)}
         agents={agents}
         currentAgent={currentAgent}
@@ -706,6 +835,10 @@ export function AIChatPanel({
         onOpenAgentManager={onOpenAgentManager || onOpenSettings}
         commands={commands}
         onRunCommand={handleRunCommand}
+        onAttachFile={handleAttachFile}
+        attachment={pendingAttachment}
+        onConvertAttachment={handleConvertAttachment}
+        onRemoveAttachment={() => setPendingImportFile(null)}
         thinkingAvailable={thinkingAvailable}
         thinkingEnabled={deepThinkingEnabled}
         thinkingBudget={thinkingBudget}

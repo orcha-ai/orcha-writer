@@ -480,6 +480,94 @@
   box-shadow: var(--shadow-sm);
 }
 
+.ai-input-attachment {
+  min-height: 36px;
+  margin-bottom: 8px;
+  padding: 5px 5px 5px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-tertiary) 54%, var(--bg-card) 46%);
+}
+
+.ai-input-attachment-icon {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: var(--accent-bg-soft);
+  color: var(--accent);
+}
+
+.ai-input-attachment-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ai-input-attachment-name,
+.ai-input-attachment-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-input-attachment-name {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.ai-input-attachment-desc {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.ai-input-attachment-action,
+.ai-input-attachment-remove {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ai-input-attachment-action {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.ai-input-attachment-remove {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ai-input-attachment-action:hover,
+.ai-input-attachment-remove:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ai-input-attachment-action:disabled,
+.ai-input-attachment-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .ai-slash-command-popover {
   position: absolute;
   left: 10px;
@@ -625,6 +713,67 @@
 
 .ai-thinking-toggle.disabled {
   opacity: 0.58;
+}
+
+.ai-input-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-tertiary) 66%, var(--bg-card) 34%);
+}
+
+.ai-input-action-button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ai-input-action-button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ai-input-send-button {
+  background: var(--accent);
+  color: var(--text-inverse);
+  box-shadow: 0 6px 14px rgba(10, 132, 255, 0.22);
+}
+
+.ai-input-send-button:hover {
+  background: var(--accent-hover);
+  color: var(--text-inverse);
+}
+
+.ai-input-send-button.danger {
+  background: var(--danger-bg);
+  color: var(--danger);
+  box-shadow: none;
+}
+
+.ai-input-send-button.danger:hover {
+  background: color-mix(in srgb, var(--danger-bg) 82%, var(--danger) 18%);
+  color: var(--danger);
+}
+
+.ai-input-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.ai-input-send-button:disabled {
+  opacity: 0.62;
 }
 
 .ai-agent-menu-item {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { message, Modal } from 'antd';
+import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 import { useAiStore, usePluginStore, useSettingsStore, useShortcutStore } from '../../store';
@@ -49,6 +50,26 @@ function formatUnsavedTabsMessage(tabs: TabFile[]): string {
   const visibleNames = tabs.slice(0, 3).map(tab => `「${tab.name}」`).join('、');
   const moreText = tabs.length > 3 ? ' 等' : '';
   return `有 ${tabs.length} 个文档尚未保存：${visibleNames}${moreText}。退出后未保存的修改会丢失。`;
+}
+
+function confirmUnsavedExit(tabs: TabFile[]): Promise<boolean> {
+  const content = formatUnsavedTabsMessage(tabs);
+  return confirmDialog(content, {
+    title: '有未保存的文档',
+    kind: 'warning',
+    okLabel: '仍然退出',
+    cancelLabel: '取消',
+  }).catch(() => new Promise((resolve) => {
+    Modal.confirm({
+      title: '有未保存的文档',
+      content,
+      okText: '仍然退出',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false),
+    });
+  }));
 }
 
 export function SettingsApplier() {
@@ -195,19 +216,9 @@ export function SettingsApplier() {
       if (exitPromptOpenRef.current) return;
       exitPromptOpenRef.current = true;
 
-      Modal.confirm({
-        title: '有未保存的文档',
-        content: formatUnsavedTabsMessage(unsavedTabs),
-        okText: '仍然退出',
-        okButtonProps: { danger: true },
-        cancelText: '取消',
-        onOk: () => {
-          exitPromptOpenRef.current = false;
-          void invoke('exit_app');
-        },
-        onCancel: () => {
-          exitPromptOpenRef.current = false;
-        },
+      void confirmUnsavedExit(unsavedTabs).then(shouldExit => {
+        exitPromptOpenRef.current = false;
+        if (shouldExit) void invoke('exit_app');
       });
     }).then(fn => {
       unlisten = fn;

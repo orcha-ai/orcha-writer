@@ -1,8 +1,13 @@
 import { Button, Dropdown, Input, Switch, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
-import { Bot, Brain, ChevronDown, Send, Settings, Square } from 'lucide-react';
+import { Bot, Brain, ChevronDown, FileText, Paperclip, Send, Settings, Square, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { AIAgentConfig, AICommandPreset } from '../types';
+
+export interface AIInputAttachment {
+  name: string;
+  description: string;
+}
 
 interface AIInputBoxProps {
   disabled?: boolean;
@@ -16,6 +21,10 @@ interface AIInputBoxProps {
   onOpenAgentManager?: () => void;
   commands: AICommandPreset[];
   onRunCommand: (commandId: string) => void;
+  onAttachFile?: () => void;
+  attachment?: AIInputAttachment | null;
+  onConvertAttachment?: () => void;
+  onRemoveAttachment?: () => void;
   thinkingAvailable?: boolean;
   thinkingEnabled?: boolean;
   thinkingBudget?: number;
@@ -42,6 +51,10 @@ export function AIInputBox({
   onOpenAgentManager,
   commands,
   onRunCommand,
+  onAttachFile,
+  attachment,
+  onConvertAttachment,
+  onRemoveAttachment,
   thinkingAvailable,
   thinkingEnabled,
   thinkingBudget,
@@ -116,6 +129,34 @@ export function AIInputBox({
 
   return (
     <div className="ai-input-box">
+      {attachment && (
+        <div className="ai-input-attachment">
+          <span className="ai-input-attachment-icon">
+            <FileText size={14} />
+          </span>
+          <span className="ai-input-attachment-main">
+            <span className="ai-input-attachment-name">{attachment.name}</span>
+            <span className="ai-input-attachment-desc">{attachment.description}</span>
+          </span>
+          <button
+            type="button"
+            className="ai-input-attachment-action"
+            disabled={disabled || sending}
+            onClick={onConvertAttachment}
+          >
+            转换
+          </button>
+          <button
+            type="button"
+            className="ai-input-attachment-remove"
+            disabled={disabled || sending}
+            aria-label="移除附件"
+            onClick={onRemoveAttachment}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
       <Input.TextArea
         value={value}
         placeholder="问 AI，输入 / 调用快捷指令..."
@@ -209,16 +250,30 @@ export function AIInputBox({
             />
           </span>
         </Tooltip>
-        <Button
-          type={sending ? 'default' : 'primary'}
-          danger={sending}
-          size="small"
-          icon={sending ? <Square size={13} /> : <Send size={15} />}
-          disabled={disabled}
-          onClick={sending ? onCancel : submit}
-        >
-          {sending ? '取消' : '发送'}
-        </Button>
+        <div className="ai-input-actions">
+          <Tooltip title="上传文件转 Markdown">
+            <button
+              type="button"
+              className="ai-input-action-button"
+              disabled={disabled || sending || !onAttachFile}
+              aria-label="上传文件转 Markdown"
+              onClick={onAttachFile}
+            >
+              <Paperclip size={15} />
+            </button>
+          </Tooltip>
+          <Tooltip title={sending ? '取消' : '发送'}>
+            <button
+              type="button"
+              className={`ai-input-action-button ai-input-send-button${sending ? ' danger' : ''}`}
+              disabled={disabled}
+              aria-label={sending ? '取消' : '发送'}
+              onClick={sending ? onCancel : submit}
+            >
+              {sending ? <Square size={13} /> : <Send size={15} />}
+            </button>
+          </Tooltip>
+        </div>
       </div>
     </div>
   );
