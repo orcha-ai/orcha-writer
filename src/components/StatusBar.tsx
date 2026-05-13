@@ -9,6 +9,11 @@ export default function StatusBar() {
   const t = (value: string, params?: Record<string, string | number>) => translateText(language, value, params);
   const activeTab = state.tabs.find(t => t.id === state.activeTabId);
   const blockStatus = state.viewMode === 'block' ? state.blockSelectionStatus : null;
+  const previewLabel = activeTab?.preview?.kind === 'image'
+    ? t('图片预览')
+    : activeTab?.preview?.kind === 'pdf'
+      ? t('PDF 预览')
+      : null;
 
   return (
     <div className="statusbar">
@@ -47,20 +52,28 @@ export default function StatusBar() {
       </div>
 
       <div className="statusbar-right">
-        <div className="statusbar-item">
-          <span>UTF-8</span>
-        </div>
-        <div className="statusbar-item">
-          <span>Markdown</span>
-        </div>
-        {activeTab && (
+        {previewLabel ? (
+          <div className="statusbar-item">
+            <span>{previewLabel}</span>
+          </div>
+        ) : (
           <>
             <div className="statusbar-item">
-              <span>{t('行 {line}, 列 {column}', { line: state.cursorPosition.line, column: state.cursorPosition.ch })}</span>
+              <span>UTF-8</span>
             </div>
             <div className="statusbar-item">
-              <span>{t('{count} 字', { count: state.wordCount })}</span>
+              <span>Markdown</span>
             </div>
+            {activeTab && (
+              <>
+                <div className="statusbar-item">
+                  <span>{t('行 {line}, 列 {column}', { line: state.cursorPosition.line, column: state.cursorPosition.ch })}</span>
+                </div>
+                <div className="statusbar-item">
+                  <span>{t('{count} 字', { count: state.wordCount })}</span>
+                </div>
+              </>
+            )}
           </>
         )}
       </div>

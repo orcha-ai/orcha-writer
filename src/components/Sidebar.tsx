@@ -6,7 +6,7 @@ import type { CSSProperties, DragEvent, KeyboardEvent, MouseEvent } from 'react'
 import { message } from 'antd';
 import { ensureDir, pathExists, readTextFile, rename, remove, writeTextFile } from '../utils/fs';
 import { buildHidePatterns, readFirstLevel } from '../utils/workspace';
-import { isMarkdownFileName, isOpenableTextFileName } from '../utils/savePaths';
+import { getPreviewFileKind, isMarkdownFileName, isOpenableTextFileName } from '../utils/savePaths';
 import type { FileNode, RecentFile } from '../types';
 import { getLocaleText, normalizeAppLanguage } from '../i18n';
 
@@ -345,6 +345,16 @@ export default function Sidebar() {
     if (node.type !== 'file') return;
     const id = node.path;
     const ext = node.name.split('.').pop()?.toLowerCase() || '';
+    const previewKind = getPreviewFileKind(node.name);
+
+    if (previewKind) {
+      dispatch({
+        type: 'OPEN_TAB',
+        payload: { id, name: node.name, path: node.path, content: '', preview: { kind: previewKind } },
+      });
+      dispatch({ type: 'ADD_RECENT_FILE', payload: { path: node.path, name: node.name, lastOpened: Date.now() } });
+      return;
+    }
 
     if (!isOpenableTextFileName(node.name)) {
       dispatch({ type: 'OPEN_TAB', payload: { id, name: node.name, path: node.path, content: `# ${node.name}\n\n${text.sidebar.unsupportedFile(ext)}\n` } });
@@ -856,6 +866,16 @@ export default function Sidebar() {
 
           {state.sidebarActiveTab === 'recent' && (
             <RecentFiles recentFiles={state.recentFiles} language={appLanguage} text={text} openFile={async (rf) => {
+              const previewKind = getPreviewFileKind(rf.name);
+              if (previewKind) {
+                dispatch({
+                  type: 'OPEN_TAB',
+                  payload: { id: rf.path, name: rf.name, path: rf.path, content: '', preview: { kind: previewKind } },
+                });
+                dispatch({ type: 'ADD_RECENT_FILE', payload: { path: rf.path, name: rf.name, lastOpened: Date.now() } });
+                return;
+              }
+
               let content: string;
               try {
                 content = await readTextFile(rf.path);

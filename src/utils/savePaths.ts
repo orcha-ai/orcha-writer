@@ -1,7 +1,10 @@
 import { pathExists } from './fs';
 import { getDocumentLanguage, translateText } from '../i18n';
+import type { FilePreviewKind } from '../types';
 
 export const MARKDOWN_EXTENSIONS = ['md', 'markdown', 'mdown', 'mkd'];
+export const IMAGE_FILE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'tif', 'tiff', 'avif', 'heic', 'heif'];
+export const PDF_FILE_EXTENSIONS = ['pdf'];
 
 export const TEXT_FILE_EXTENSIONS = [
   ...MARKDOWN_EXTENSIONS,
@@ -63,6 +66,10 @@ function extensionFromName(name: string): string | null {
   return name.slice(dotIndex + 1).toLowerCase();
 }
 
+export function fileExtensionFromName(name: string): string | null {
+  return extensionFromName(name);
+}
+
 function sanitizeFileName(name: string, fallback = translateText(getDocumentLanguage(), '未命名.md')): string {
   return (name.trim() || fallback).replace(/[\\/:*?"<>|]/g, '-');
 }
@@ -75,6 +82,18 @@ export function isMarkdownFileName(name: string): boolean {
 export function isOpenableTextFileName(name: string): boolean {
   const extension = extensionFromName(name);
   return Boolean(extension && TEXT_FILE_EXTENSIONS.includes(extension));
+}
+
+export function getPreviewFileKind(name: string): FilePreviewKind | null {
+  const extension = extensionFromName(name);
+  if (!extension) return null;
+  if (IMAGE_FILE_EXTENSIONS.includes(extension)) return 'image';
+  if (PDF_FILE_EXTENSIONS.includes(extension)) return 'pdf';
+  return null;
+}
+
+export function isPreviewableFileName(name: string): boolean {
+  return Boolean(getPreviewFileKind(name));
 }
 
 export function normalizeTextFileName(name: string): string {

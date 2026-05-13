@@ -11,6 +11,12 @@ export interface FileNode {
   children?: FileNode[];
 }
 
+export type FilePreviewKind = 'image' | 'pdf';
+
+export interface FilePreview {
+  kind: FilePreviewKind;
+}
+
 export interface TabFile {
   id: string;
   name: string;
@@ -18,6 +24,7 @@ export interface TabFile {
   content: string;
   saved: boolean;
   isDraft: boolean;
+  preview?: FilePreview;
 }
 
 export type ViewMode = 'block' | 'edit' | 'preview' | 'split';

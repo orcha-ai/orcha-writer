@@ -1,7 +1,8 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useReducer, useEffect, useState, useCallback } from 'react';
 import type {
   AppState, TabFile, FileNode, ViewMode, ThemeMode,
-  RecentFile, EditorSettings, AppearanceSettings, BlockSelectionStatus
+  RecentFile, EditorSettings, AppearanceSettings, BlockSelectionStatus, FilePreview
 } from './types';
 import { defaultAppearanceSettings, defaultEditorSettings } from './types';
 import { readConfig, writeConfig } from './config';
@@ -14,7 +15,7 @@ type AppAction =
   | { type: 'TOGGLE_OUTLINE' }
   | { type: 'SET_OUTLINE_VISIBLE'; payload: boolean }
   | { type: 'SET_SIDEBAR_TAB'; payload: 'workspace' | 'recent' }
-  | { type: 'OPEN_TAB'; payload: { id: string; name: string; path: string; content: string; isDraft?: boolean } }
+  | { type: 'OPEN_TAB'; payload: { id: string; name: string; path: string; content: string; isDraft?: boolean; preview?: FilePreview } }
   | { type: 'SAVE_TAB_AS'; payload: { oldId: string; id: string; name: string; path: string; content: string } }
   | { type: 'CLOSE_TAB'; payload: string }
   | { type: 'CLOSE_OTHER_TABS'; payload: string }

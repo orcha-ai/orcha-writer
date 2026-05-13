@@ -3,6 +3,7 @@ import Sidebar from './components/Sidebar';
 import TabBar from './components/TabBar';
 import Editor from './components/Editor';
 import Preview from './components/Preview';
+import FilePreview from './components/FilePreview';
 import Outline from './components/Outline';
 import StatusBar from './components/StatusBar';
 import SearchPanel from './components/SearchPanel';
@@ -49,6 +50,7 @@ export default function WorkspaceContent() {
   const t = useCallback((value: string) => translateText(language, value), [language]);
   const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId);
   const activeTabId = activeTab?.id;
+  const activeFilePreview = Boolean(activeTab?.preview);
   const editorBridge = useMemo(() => createCodeMirrorEditorBridge(), []);
 
   const handleCreateMarkdownFile = useCallback(async (content: string) => {
@@ -94,10 +96,16 @@ export default function WorkspaceContent() {
           <div style={{ position: 'relative', flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
             <SearchPanel />
             <div className="editor-container">
-              <BlockEditor />
-              <Editor />
-              <div className={`resize-handle ${state.viewMode === 'split' ? '' : 'hidden'}`} />
-              <Preview />
+              {activeFilePreview ? (
+                <FilePreview />
+              ) : (
+                <>
+                  <BlockEditor />
+                  <Editor />
+                  <div className={`resize-handle ${state.viewMode === 'split' ? '' : 'hidden'}`} />
+                  <Preview />
+                </>
+              )}
             </div>
           </div>
         </div>
