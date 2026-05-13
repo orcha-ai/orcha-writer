@@ -8,6 +8,8 @@ export interface UpdateCheckResult {
   latestVersion: string;
   releaseUrl: string;
   available: boolean;
+  installMode: 'native' | 'manual';
+  message?: string;
 }
 
 export interface UpdateInstallProgress {
@@ -18,7 +20,6 @@ export interface UpdateInstallProgress {
 
 export interface UpdateInstallResult extends UpdateCheckResult {
   status: 'up-to-date' | 'installed' | 'manual';
-  message?: string;
 }
 
 const FALLBACK_CURRENT_VERSION = __APP_VERSION__;
@@ -53,8 +54,7 @@ export async function getCurrentVersion(): Promise<string> {
   return FALLBACK_CURRENT_VERSION;
 }
 
-export async function checkForUpdates(): Promise<UpdateCheckResult> {
-  const currentVersion = await getCurrentVersion();
+async function checkGithubRelease(currentVersion: string, manualReason?: string): Promise<UpdateCheckResult> {
   const response = await fetch(LATEST_RELEASE_API, {
     headers: {
       Accept: 'application/vnd.github+json',
@@ -72,12 +72,15 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
   };
   const latestVersion = release.tag_name || release.name || currentVersion;
   const releaseUrl = release.html_url || RELEASES_URL;
+  const available = compareVersions(latestVersion, currentVersion) > 0;
 
   return {
     currentVersion,
     latestVersion,
     releaseUrl,
-    available: compareVersions(latestVersion, currentVersion) > 0,
+    available,
+    installMode: available && manualReason ? 'manual' : 'native',
+    message: manualReason,
   };
 }
 
@@ -86,10 +89,35 @@ function errorMessage(error: unknown): string {
   return typeof error === 'string' ? error : '自动更新失败';
 }
 
+export async function checkForUpdates(): Promise<UpdateCheckResult> {
+  const currentVersion = await getCurrentVersion();
+  let manualReason: string | undefined = isTauri() ? undefined : '当前环境不支持自动安装。';
+
+  if (isTauri()) {
+    try {
+      const nativeUpdate = await checkNativeUpdate();
+      if (nativeUpdate) {
+        return {
+          currentVersion: nativeUpdate.currentVersion,
+          latestVersion: nativeUpdate.version,
+          releaseUrl: RELEASES_URL,
+          available: true,
+          installMode: 'native',
+        };
+      }
+      manualReason = '自动安装通道没有返回可安装更新。';
+    } catch (error) {
+      manualReason = `自动安装通道不可用：${errorMessage(error)}`;
+    }
+  }
+
+  return checkGithubRelease(currentVersion, manualReason);
+}
+
 export async function installAvailableUpdate(
   onProgress?: (progress: UpdateInstallProgress) => void,
 ): Promise<UpdateInstallResult> {
-  let nativeError: string | undefined;
+  let manualReason: string | undefined = isTauri() ? undefined : '当前环境不支持自动安装。';
   let githubResult: UpdateCheckResult;
 
   if (isTauri()) {
@@ -119,19 +147,21 @@ export async function installAvailableUpdate(
           latestVersion: nativeUpdate.version,
           releaseUrl: RELEASES_URL,
           available: true,
+          installMode: 'native',
           status: 'installed',
         };
       }
+      manualReason = '自动安装通道没有返回可安装更新。';
     } catch (error) {
-      nativeError = errorMessage(error);
+      manualReason = `自动安装通道不可用：${errorMessage(error)}`;
     }
   }
 
   try {
-    githubResult = await checkForUpdates();
+    githubResult = await checkGithubRelease(await getCurrentVersion(), manualReason);
   } catch (error) {
-    if (nativeError) {
-      throw new Error(`${nativeError}；GitHub Releases 检查也失败：${errorMessage(error)}`, { cause: error });
+    if (manualReason) {
+      throw new Error(`${manualReason}；GitHub Releases 检查也失败：${errorMessage(error)}`, { cause: error });
     }
     throw error;
   }
@@ -140,16 +170,15 @@ export async function installAvailableUpdate(
     return {
       ...githubResult,
       status: 'up-to-date',
-      message: nativeError,
+      message: manualReason,
     };
   }
 
   return {
     ...githubResult,
+    installMode: 'manual',
     status: 'manual',
-    message: nativeError
-      ? `自动安装通道不可用：${nativeError}`
-      : '当前环境不支持自动安装，已回退到发布页。',
+    message: manualReason || '当前环境不支持自动安装，可打开发布页手动下载。',
   };
 }
 

@@ -20,7 +20,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { open as openPath } from '@tauri-apps/plugin-shell';
-import { message, Modal } from 'antd';
+import { message } from 'antd';
 import { redo, undo } from '@codemirror/commands';
 import { EditorSelection } from '@codemirror/state';
 import { pathExists, readTextFile, writeTextFile } from '../utils/fs';
@@ -31,7 +31,7 @@ import { renderMarkdownForExport } from '../utils/exportMarkdown';
 import { availableMarkdownPath, decodeDialogPath, fileNameFromPath, normalizeMarkdownFileName } from '../utils/savePaths';
 import { useSettingsStore, useShortcutStore } from '../store';
 import type { ThemeMode } from '../types';
-import { checkForUpdates, installAvailableUpdate, relaunchApplication } from '../utils/update';
+import { runUpdateCheckFlow } from '../utils/updateUi';
 
 function normalizeThemeColor(color: string | undefined): string {
   const value = color?.trim();
@@ -523,48 +523,7 @@ ${htmlBody}
   }, [dispatch, fileSettings.hidePatterns, state.activeTabId, state.tabs, state.workspacePath]);
 
   const handleCheckUpdate = useCallback(async () => {
-    try {
-      const result = await checkForUpdates();
-      if (!result.available) {
-        message.success(`当前已是最新版本（${result.currentVersion}）`);
-        return;
-      }
-
-      Modal.confirm({
-        title: `发现新版本 ${result.latestVersion}`,
-        content: `当前版本：${result.currentVersion}`,
-        okText: '下载并安装',
-        cancelText: '稍后',
-        onOk: async () => {
-          const hide = message.loading('正在下载并安装更新...', 0);
-          try {
-            const installResult = await installAvailableUpdate();
-            hide();
-            if (installResult.status === 'installed') {
-              Modal.confirm({
-                title: `新版本 ${installResult.latestVersion} 已安装`,
-                content: '重启应用后即可使用新版本。',
-                okText: '立即重启',
-                cancelText: '稍后',
-                onOk: () => relaunchApplication(),
-              });
-              return;
-            }
-            if (installResult.status === 'manual') {
-              message.warning(installResult.message || '自动安装暂不可用，已打开发布页');
-              await openPath(installResult.releaseUrl);
-              return;
-            }
-            message.success(`当前已是最新版本（${installResult.currentVersion}）`);
-          } catch (error) {
-            hide();
-            message.warning(error instanceof Error ? error.message : '下载安装更新失败');
-          }
-        },
-      });
-    } catch (error) {
-      message.warning(error instanceof Error ? error.message : '检查更新失败');
-    }
+    await runUpdateCheckFlow();
   }, []);
 
   const handleRecentFilesMenu = useCallback(() => {

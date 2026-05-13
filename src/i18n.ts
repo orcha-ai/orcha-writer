@@ -28,7 +28,7 @@ export const localeText = {
         startupBlank: '空白页',
         startupSpecificWorkspace: '指定工作区',
         autoUpdate: '自动检查更新',
-        autoUpdateTooltip: '启动时自动检查并尝试下载安装；更新安装后提示重启，自动通道不可用时回退到发布页',
+        autoUpdateTooltip: '启动时自动检查并尝试下载安装；更新安装后提示重启，自动通道不可用时提示手动下载',
         recentFileCount: '最近文件数量',
       },
       menu: {
@@ -110,7 +110,7 @@ export const localeText = {
         startupBlank: 'Blank Page',
         startupSpecificWorkspace: 'Specific Workspace',
         autoUpdate: 'Check For Updates',
-        autoUpdateTooltip: 'Automatically check for updates on startup, prompt to restart after installation, and fall back to the release page if auto update is unavailable.',
+        autoUpdateTooltip: 'Automatically check for updates on startup, prompt to restart after installation, and suggest manual download if auto update is unavailable.',
         recentFileCount: 'Recent Files',
       },
       menu: {

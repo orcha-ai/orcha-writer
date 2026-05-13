@@ -137,7 +137,7 @@ export function SettingsApplier() {
                 onOk: () => relaunchApplication(),
               });
             } else if (result.status === 'manual') {
-              message.info(`发现新版本 ${result.latestVersion}，自动安装暂不可用，可在关于页面打开发布页`);
+              message.info(`发现新版本 ${result.latestVersion}，自动安装暂不可用，可在关于页面手动下载`);
             }
           })
           .catch(error => console.warn('[SettingsApplier] Auto update failed:', error));

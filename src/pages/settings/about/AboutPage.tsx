@@ -1,9 +1,9 @@
-import { Card, Space, Typography, Button, Modal, message } from 'antd';
+import { Card, Space, Typography, Button } from 'antd';
 import { GithubOutlined, BugOutlined, SyncOutlined } from '@ant-design/icons';
-import { open as openPath } from '@tauri-apps/plugin-shell';
 import { useEffect, useState } from 'react';
 import aboutLogo from '../../../assets/brand/orcha-writer-about-logo.png';
-import { checkForUpdates, getCurrentVersion, installAvailableUpdate, relaunchApplication } from '../../../utils/update';
+import { getCurrentVersion } from '../../../utils/update';
+import { runUpdateCheckFlow } from '../../../utils/updateUi';
 
 const { Paragraph, Text } = Typography;
 
@@ -29,46 +29,7 @@ export default function AboutPage() {
   const handleCheckUpdates = async () => {
     setChecking(true);
     try {
-      const result = await checkForUpdates();
-      if (!result.available) {
-        message.success(`当前已是最新版本（${result.currentVersion}）`);
-        return;
-      }
-
-      Modal.confirm({
-        title: `发现新版本 ${result.latestVersion}`,
-        content: `当前版本：${result.currentVersion}`,
-        okText: '下载并安装',
-        cancelText: '稍后',
-        onOk: async () => {
-          const hide = message.loading('正在下载并安装更新...', 0);
-          try {
-            const installResult = await installAvailableUpdate();
-            hide();
-            if (installResult.status === 'installed') {
-              Modal.confirm({
-                title: `新版本 ${installResult.latestVersion} 已安装`,
-                content: '重启应用后即可使用新版本。',
-                okText: '立即重启',
-                cancelText: '稍后',
-                onOk: () => relaunchApplication(),
-              });
-              return;
-            }
-            if (installResult.status === 'manual') {
-              message.warning(installResult.message || '自动安装暂不可用，已打开发布页');
-              await openPath(installResult.releaseUrl);
-              return;
-            }
-            message.success(`当前已是最新版本（${installResult.currentVersion}）`);
-          } catch (error) {
-            hide();
-            message.warning(error instanceof Error ? error.message : '下载安装更新失败');
-          }
-        },
-      });
-    } catch (error) {
-      message.warning(error instanceof Error ? error.message : '检查更新失败');
+      await runUpdateCheckFlow();
     } finally {
       setChecking(false);
     }
