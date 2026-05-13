@@ -22,7 +22,6 @@ function normalizeGeneralSettings(value: unknown): GeneralSettings {
   return {
     language: normalizeAppLanguage(raw?.language),
     startupOpen: raw?.startupOpen ?? defaultGeneralSettings.startupOpen,
-    autoSave: raw?.autoSave ?? defaultGeneralSettings.autoSave,
     autoUpdate: raw?.autoUpdate ?? defaultGeneralSettings.autoUpdate,
     recentFileCount: raw?.recentFileCount ?? defaultGeneralSettings.recentFileCount,
     lastViewMode: raw?.lastViewMode ?? defaultGeneralSettings.lastViewMode,
@@ -117,6 +116,25 @@ function normalizePreviewSettings(value: unknown): PreviewSettings {
   };
 }
 
+function normalizeFileSettings(value: unknown): FileSettings {
+  const raw = value as Partial<FileSettings>;
+  const attachmentRule = raw?.attachmentRule === 'workspace-assets' || raw?.attachmentRule === 'document-assets'
+    ? raw.attachmentRule
+    : defaultFileSettings.attachmentRule;
+
+  return {
+    defaultWorkspace: raw?.defaultWorkspace ?? defaultFileSettings.defaultWorkspace,
+    attachmentRule,
+    hidePatterns: Array.isArray(raw?.hidePatterns)
+      ? raw.hidePatterns.filter((item): item is string => typeof item === 'string')
+      : defaultFileSettings.hidePatterns,
+    defaultTemplate: raw?.defaultTemplate ?? defaultFileSettings.defaultTemplate,
+    deleteBehavior: raw?.deleteBehavior === 'direct' || raw?.deleteBehavior === 'trash'
+      ? raw.deleteBehavior
+      : defaultFileSettings.deleteBehavior,
+  };
+}
+
 interface SettingsState {
   general: GeneralSettings;
   appearance: AppearanceSettings;
@@ -184,7 +202,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const editor = await readConfig<EditorSettingsV2>('editor', defaultEditorSettingsV2);
     const markdown = await readConfig<unknown>('markdown', defaultMarkdownSettings);
     const preview = await readConfig<PreviewSettings>('preview', defaultPreviewSettings);
-    const files = await readConfig<FileSettings>('files', defaultFileSettings);
+    const files = await readConfig<unknown>('files', defaultFileSettings);
     const exportCfg = await readConfig<unknown>('export', wrapExportConfig(defaultExportSettings));
     const security = await readConfig<SecuritySettings>('security', defaultSecuritySettings);
     const advanced = await readConfig<AdvancedSettings>('advanced', defaultAdvancedSettings);
@@ -195,7 +213,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       editor: normalizeEditorSettings(editor),
       markdown: normalizeMarkdownSettings(markdown),
       preview: normalizePreviewSettings(preview),
-      files: { ...defaultFileSettings, ...files },
+      files: normalizeFileSettings(files),
       export: normalizeExportSettings(exportCfg),
       security: { ...defaultSecuritySettings, ...security },
       advanced: { ...defaultAdvancedSettings, ...advanced },

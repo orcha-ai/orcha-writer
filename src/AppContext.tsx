@@ -5,7 +5,6 @@ import type {
 } from './types';
 import { defaultAppearanceSettings, defaultEditorSettings } from './types';
 import { readConfig, writeConfig } from './config';
-import { writeTextFile } from './utils/fs';
 
 type AppAction =
   | { type: 'SET_VIEW_MODE'; payload: ViewMode }
@@ -23,7 +22,6 @@ type AppAction =
   | { type: 'SET_ACTIVE_TAB'; payload: string | null }
   | { type: 'UPDATE_TAB_CONTENT'; payload: { id: string; content: string } }
   | { type: 'MARK_TAB_SAVED'; payload: string }
-  | { type: 'MARK_TAB_SAVED_IF_CONTENT'; payload: { id: string; content: string } }
   | { type: 'MARK_TAB_UNSAVED'; payload: string }
   | { type: 'RENAME_TAB_TITLE'; payload: { id: string; name: string } }
   | { type: 'RENAME_PATH'; payload: { oldPath: string; newPath: string; name: string } }
@@ -191,13 +189,6 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         tabs: state.tabs.map(t =>
           t.id === action.payload ? { ...t, saved: true } : t
-        ),
-      };
-    case 'MARK_TAB_SAVED_IF_CONTENT':
-      return {
-        ...state,
-        tabs: state.tabs.map(t =>
-          t.id === action.payload.id && t.content === action.payload.content ? { ...t, saved: true } : t
         ),
       };
     case 'MARK_TAB_UNSAVED':
@@ -380,61 +371,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!initialized || !state.workspacePath) return;
     writeConfig('workspace-path', state.workspacePath);
   }, [state.workspacePath, initialized]);
-
-  // Auto-save changed files and keep unsaved drafts recoverable.
-  useEffect(() => {
-    const drafts: Record<string, { title: string; content: string; updated: number }> = {};
-    const saved = localStorage.getItem('orcha-drafts');
-    if (saved) {
-      try {
-        Object.assign(drafts, JSON.parse(saved));
-      } catch {
-        localStorage.removeItem('orcha-drafts');
-      }
-    }
-
-    let saving = false;
-    const interval = setInterval(() => {
-      if (!state.editorSettings.autoSave) return;
-      if (saving) return;
-      saving = true;
-
-      void (async () => {
-        let draftsChanged = false;
-
-        for (const tab of state.tabs) {
-          if (tab.isDraft) {
-            drafts[tab.id] = {
-              title: tab.name,
-              content: tab.content,
-              updated: Date.now(),
-            };
-            draftsChanged = true;
-            continue;
-          }
-
-          if (!tab.saved) {
-            try {
-              await writeTextFile(tab.path, tab.content);
-              dispatch({ type: 'MARK_TAB_SAVED_IF_CONTENT', payload: { id: tab.id, content: tab.content } });
-            } catch (error) {
-              console.warn('[AppContext] Auto-save failed:', error);
-            }
-          }
-        }
-
-        if (draftsChanged) {
-          localStorage.setItem('orcha-drafts', JSON.stringify(drafts));
-        }
-        saving = false;
-      })();
-    }, state.editorSettings.autoSaveDelay);
-
-    return () => {
-      clearInterval(interval);
-      saving = false;
-    };
-  }, [state.tabs, state.editorSettings]);
 
   return (
     <AppContext.Provider value={{ state, dispatch }}>

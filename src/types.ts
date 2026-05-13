@@ -67,8 +67,6 @@ export interface EditorSettings {
   showLineNumbers: boolean;
   autoWrap: boolean;
   tabSize: number;
-  autoSave: boolean;
-  autoSaveDelay: number;
   syncScroll: boolean;
 }
 
@@ -79,8 +77,6 @@ export const defaultEditorSettings: EditorSettings = {
   showLineNumbers: true,
   autoWrap: true,
   tabSize: 2,
-  autoSave: true,
-  autoSaveDelay: 2000,
   syncScroll: true,
 };
 
@@ -205,7 +201,6 @@ export interface ShortcutConfig {
 export interface GeneralSettings {
   language: AppLanguage;
   startupOpen: 'blank' | 'last-workspace' | 'specific-workspace';
-  autoSave: boolean;
   autoUpdate: boolean;
   recentFileCount: number;
   lastViewMode: ViewMode;
@@ -259,7 +254,6 @@ export interface FileSettings {
   attachmentRule: 'document-assets' | 'workspace-assets';
   hidePatterns: string[];
   defaultTemplate: string;
-  autoSaveInterval: number;
   deleteBehavior: 'direct' | 'trash';
 }
 
@@ -350,7 +344,6 @@ export interface ExportSettings {
 export const defaultGeneralSettings: GeneralSettings = {
   language: 'zh-CN',
   startupOpen: 'last-workspace',
-  autoSave: true,
   autoUpdate: true,
   recentFileCount: 10,
   lastViewMode: 'split',
@@ -404,7 +397,6 @@ export const defaultFileSettings: FileSettings = {
   attachmentRule: 'document-assets',
   hidePatterns: ['node_modules', '.git', '.orcha-writer'],
   defaultTemplate: '',
-  autoSaveInterval: 30,
   deleteBehavior: 'trash',
 };
 

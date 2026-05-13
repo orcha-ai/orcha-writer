@@ -76,29 +76,6 @@ export default function SettingsModal() {
             </div>
           </div>
 
-          {/* Auto-save Settings */}
-          <div className="settings-section">
-            <div className="settings-section-title">自动保存</div>
-            <div className="settings-row">
-              <span className="settings-label">启用自动保存</span>
-              <Toggle on={settings.autoSave} onChange={() => dispatch({ type: 'UPDATE_SETTINGS', payload: { autoSave: !settings.autoSave } })} />
-            </div>
-            <div className="settings-row">
-              <span className="settings-label">保存延迟</span>
-              <div className="settings-value">
-                <input
-                  className="settings-input"
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={settings.autoSaveDelay / 1000}
-                  onChange={(e) => dispatch({ type: 'UPDATE_SETTINGS', payload: { autoSaveDelay: Number(e.target.value) * 1000 } })}
-                />
-                <span style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>秒</span>
-              </div>
-            </div>
-          </div>
-
           {/* Preview Settings */}
           <div className="settings-section">
             <div className="settings-section-title">预览</div>

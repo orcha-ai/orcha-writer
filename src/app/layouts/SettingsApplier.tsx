@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { message, Modal } from 'antd';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
@@ -8,7 +8,7 @@ import { readConfig, writeConfig } from '../../config';
 import { readTextFile } from '../../utils/fs';
 import { installAvailableUpdate, relaunchApplication } from '../../utils/update';
 import { findFirstMdFile, readFirstLevel } from '../../utils/workspace';
-import type { FileSettings, GeneralSettings } from '../../types';
+import type { FileSettings, GeneralSettings, TabFile } from '../../types';
 import { normalizeAppLanguage } from '../../i18n';
 
 function normalizeThemeColor(color: string | undefined): string {
@@ -37,13 +37,33 @@ function applyThemeColorVariables(root: HTMLElement, color: string): void {
   root.style.setProperty('--bg-tree-active', `color-mix(in srgb, ${color} 16%, var(--bg-primary))`);
 }
 
+function getUnsavedTabs(tabs: TabFile[]): TabFile[] {
+  return tabs.filter(tab => tab.isDraft || !tab.saved);
+}
+
+function formatUnsavedTabsMessage(tabs: TabFile[]): string {
+  if (tabs.length === 1) {
+    return `「${tabs[0].name}」尚未保存。退出后未保存的修改会丢失。`;
+  }
+
+  const visibleNames = tabs.slice(0, 3).map(tab => `「${tab.name}」`).join('、');
+  const moreText = tabs.length > 3 ? ' 等' : '';
+  return `有 ${tabs.length} 个文档尚未保存：${visibleNames}${moreText}。退出后未保存的修改会丢失。`;
+}
+
 export function SettingsApplier() {
-  const { appearance, editor, files, general, preview, loadAll, updateGeneral } = useSettingsStore();
+  const { appearance, editor, general, preview, loadAll, updateGeneral } = useSettingsStore();
   const loadShortcuts = useShortcutStore(s => s.load);
   const loadPlugins = usePluginStore(s => s.load);
   const loadAi = useAiStore(s => s.load);
   const { state, dispatch } = useApp();
   const [settingsReady, setSettingsReady] = useState(false);
+  const tabsRef = useRef(state.tabs);
+  const exitPromptOpenRef = useRef(false);
+
+  useEffect(() => {
+    tabsRef.current = state.tabs;
+  }, [state.tabs]);
 
   // Load settings on mount
   useEffect(() => {
@@ -146,12 +166,10 @@ export function SettingsApplier() {
     dispatch({
       type: 'UPDATE_SETTINGS',
       payload: {
-        autoSave: general.autoSave,
-        autoSaveDelay: Math.max(5, files.autoSaveInterval || 30) * 1000,
         syncScroll: preview.syncScroll,
       },
     });
-  }, [dispatch, general.autoSave, general.language, files.autoSaveInterval, preview.syncScroll]);
+  }, [dispatch, general.language, preview.syncScroll]);
 
   // Keep recent files capped by the user-configured count.
   useEffect(() => {
@@ -162,13 +180,35 @@ export function SettingsApplier() {
     }
   }, [dispatch, general.recentFileCount, settingsReady, state.recentFiles]);
 
-  // Always quit the app when the main window is closed.
+  // Always quit the app when the main window is closed, after warning about unsaved documents.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
 
     void getCurrentWindow().onCloseRequested(event => {
       event.preventDefault();
-      void invoke('exit_app');
+      const unsavedTabs = getUnsavedTabs(tabsRef.current);
+      if (unsavedTabs.length === 0) {
+        void invoke('exit_app');
+        return;
+      }
+
+      if (exitPromptOpenRef.current) return;
+      exitPromptOpenRef.current = true;
+
+      Modal.confirm({
+        title: '有未保存的文档',
+        content: formatUnsavedTabsMessage(unsavedTabs),
+        okText: '仍然退出',
+        okButtonProps: { danger: true },
+        cancelText: '取消',
+        onOk: () => {
+          exitPromptOpenRef.current = false;
+          void invoke('exit_app');
+        },
+        onCancel: () => {
+          exitPromptOpenRef.current = false;
+        },
+      });
     }).then(fn => {
       unlisten = fn;
     }).catch(error => {

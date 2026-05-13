@@ -50,15 +50,6 @@ export default function GeneralPage() {
           </Form.Item>
 
           <Form.Item
-            label={text.settings.general.autoSave}
-            name="autoSave"
-            valuePropName="checked"
-            tooltip={text.settings.general.autoSaveTooltip}
-          >
-            <Switch />
-          </Form.Item>
-
-          <Form.Item
             label={text.settings.general.autoUpdate}
             name="autoUpdate"
             valuePropName="checked"

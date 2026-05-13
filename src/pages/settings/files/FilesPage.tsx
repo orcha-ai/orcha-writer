@@ -1,4 +1,4 @@
-import { Card, Form, Input, InputNumber, Button, Space, List, message } from 'antd';
+import { Card, Form, Input, Button, Space, List, message } from 'antd';
 import { FolderOpenOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
 import { useSettingsStore } from '../../../store';
 import type { FileSettings } from '../../../types';
@@ -73,10 +73,6 @@ export default function FilesPage() {
                 选择目录
               </Button>
             </Space.Compact>
-          </Form.Item>
-
-          <Form.Item label="自动保存间隔" name="autoSaveInterval">
-            <InputNumber min={5} max={300} style={{ width: 120 }} suffix="秒" />
           </Form.Item>
 
           <Form.Item label="隐藏目录规则">

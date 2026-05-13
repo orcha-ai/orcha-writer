@@ -1872,7 +1872,7 @@ fn main() {
                 "save_as" => { window.emit("menu-action", "save_as").ok(); }
                 "close_file" => { window.emit("menu-action", "close_file").ok(); }
                 "recent_files" => { window.emit("menu-action", "recent_files").ok(); }
-                "quit" => { app.exit(0); }
+                "quit" => { window.close().ok(); }
                 "find" => { window.emit("menu-action", "find").ok(); }
                 "replace" => { window.emit("menu-action", "replace").ok(); }
                 "command_palette" => { window.emit("menu-action", "command_palette").ok(); }

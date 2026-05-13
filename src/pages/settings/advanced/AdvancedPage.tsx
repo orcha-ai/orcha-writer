@@ -1,5 +1,5 @@
 import { Card, Button, Space, Typography, message } from 'antd';
-import { FolderOpenOutlined, ClearOutlined, RestOutlined } from '@ant-design/icons';
+import { FolderOpenOutlined, RestOutlined } from '@ant-design/icons';
 import { open as openPath } from '@tauri-apps/plugin-shell';
 import { useSettingsStore } from '../../../store';
 import { getConfigDir, getCacheDir, getLogsDir } from '../../../config/paths';
@@ -15,11 +15,6 @@ export default function AdvancedPage() {
     } catch {
       message.warning('当前环境无法打开目录');
     }
-  };
-
-  const handleClearCache = () => {
-    localStorage.removeItem('orcha-drafts');
-    message.success('草稿缓存已清理');
   };
 
   const handleResetSettings = async () => {
@@ -49,9 +44,6 @@ export default function AdvancedPage() {
 
       <Card title="操作" style={{ marginBottom: 16 }}>
         <Space direction="vertical" style={{ width: '100%' }}>
-          <Button icon={<ClearOutlined />} onClick={handleClearCache}>
-            清理草稿缓存
-          </Button>
           <Button icon={<RestOutlined />} danger onClick={handleResetSettings}>
             重置基础设置
           </Button>
