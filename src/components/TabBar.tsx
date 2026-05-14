@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useApp } from '../AppContext';
 import { useSettingsStore } from '../store';
-import { ListX, X } from 'lucide-react';
+import { CopyX, ListX, X } from 'lucide-react';
 import { rename } from '../utils/fs';
 import { translateText } from '../i18n';
 
 const CONTEXT_MENU_WIDTH = 180;
-const CONTEXT_MENU_HEIGHT = 76;
+const CONTEXT_MENU_HEIGHT = 108;
 
 function clampMenuPosition(value: number, size: number, viewportSize: number): number {
   return Math.max(8, Math.min(value, viewportSize - size - 8));
@@ -127,6 +127,11 @@ export default function TabBar() {
     dispatch({ type: 'CLOSE_ALL_TABS' });
   }, [closeContextMenu, dispatch]);
 
+  const handleCloseOtherTabs = useCallback((tabId: string) => {
+    closeContextMenu();
+    dispatch({ type: 'CLOSE_OTHER_TABS', payload: tabId });
+  }, [closeContextMenu, dispatch]);
+
   useEffect(() => {
     if (!contextMenu) return undefined;
     if (!state.tabs.some(tab => tab.id === contextMenu.tabId)) {
@@ -228,6 +233,14 @@ export default function TabBar() {
         >
           <div className="context-menu-item" role="menuitem" onClick={() => handleCloseTab(contextMenu.tabId)}>
             <X size={14} /> {t('关闭')}
+          </div>
+          <div
+            className={`context-menu-item ${state.tabs.length <= 1 ? 'disabled' : ''}`}
+            role="menuitem"
+            aria-disabled={state.tabs.length <= 1}
+            onClick={state.tabs.length > 1 ? () => handleCloseOtherTabs(contextMenu.tabId) : undefined}
+          >
+            <CopyX size={14} /> {t('关闭其他标签')}
           </div>
           <div className="context-menu-item" role="menuitem" onClick={handleCloseAllTabs}>
             <ListX size={14} /> {t('关闭所有标签')}

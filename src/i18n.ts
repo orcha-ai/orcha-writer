@@ -195,6 +195,7 @@ const enTextByZh: Record<string, string> = {
   '行 {line}, 列 {column}': 'Ln {line}, Col {column}',
   '{count} 字': '{count} chars',
   '关闭标签': 'Close Tab',
+  '关闭其他标签': 'Close Other Tabs',
   '关闭所有标签': 'Close All Tabs',
   '「{name}」尚未保存。退出后未保存的修改会丢失。': '"{name}" has unsaved changes. Unsaved edits will be lost after quitting.',
   ' 等': ', etc.',
