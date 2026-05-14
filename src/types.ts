@@ -45,7 +45,7 @@ export interface AppState {
   theme: ThemeMode;
   sidebarVisible: boolean;
   outlineVisible: boolean;
-  sidebarActiveTab: 'workspace' | 'recent';
+  sidebarActiveTab: 'workspace' | 'outline' | 'recent';
   workspacePath: string | null;
   workspaceTree: FileNode[];
   recentFiles: RecentFile[];
@@ -221,6 +221,7 @@ export interface AppearanceSettings {
   showSidebar: boolean;
   sidebarWidth: number;
   showOutline: boolean;
+  outlinePosition: 'right' | 'left';
   showTabs: boolean;
   transparency: boolean;
 }
@@ -364,6 +365,7 @@ export const defaultAppearanceSettings: AppearanceSettings = {
   showSidebar: true,
   sidebarWidth: 240,
   showOutline: true,
+  outlinePosition: 'right',
   showTabs: true,
   transparency: false,
 };

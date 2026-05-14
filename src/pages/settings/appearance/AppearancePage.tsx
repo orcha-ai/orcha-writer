@@ -5,6 +5,9 @@ import type { AppearanceSettings } from '../../../types';
 import { useEffect } from 'react';
 import { translateText } from '../../../i18n';
 
+type OutlineDockSetting = AppearanceSettings['outlinePosition'] | 'hidden';
+type AppearanceFormValues = Partial<AppearanceSettings> & { outlineDock?: OutlineDockSetting };
+
 function normalizeThemeColor(value: unknown): string | undefined {
   if (!value) return undefined;
   if (typeof value === 'string') return value;
@@ -19,25 +22,46 @@ export default function AppearancePage() {
   const language = useSettingsStore(s => s.general.language);
   const [form] = Form.useForm();
   const t = (value: string) => translateText(language, value);
+  const outlineDock: OutlineDockSetting = appearance.showOutline ? appearance.outlinePosition : 'hidden';
 
   useEffect(() => {
-    form.setFieldsValue(appearance);
-  }, [appearance, form]);
+    form.setFieldsValue({
+      ...appearance,
+      outlineDock,
+    });
+  }, [appearance, form, outlineDock]);
 
   const handleSave = async () => {
-    const values = await form.validateFields() as Partial<AppearanceSettings>;
+    const values = await form.validateFields() as AppearanceFormValues;
+    const { outlineDock, ...appearanceValues } = values;
+    const outlineValues = outlineDock
+      ? {
+          showOutline: outlineDock !== 'hidden',
+          outlinePosition: outlineDock === 'hidden' ? appearance.outlinePosition : outlineDock,
+        }
+      : {};
+
     updateAppearance({
-      ...values,
+      ...appearanceValues,
+      ...outlineValues,
       themeColor: normalizeThemeColor(values.themeColor) || appearance.themeColor,
     });
     await saveAll();
     message.success(t('设置已保存'));
   };
 
-  const handleValuesChange = (changedValues: Partial<AppearanceSettings>) => {
+  const handleValuesChange = (changedValues: AppearanceFormValues) => {
     const next = { ...changedValues };
     if ('themeColor' in changedValues) {
       next.themeColor = normalizeThemeColor(changedValues.themeColor) || appearance.themeColor;
+    }
+    if ('outlineDock' in changedValues) {
+      const outlineDock = changedValues.outlineDock;
+      delete next.outlineDock;
+      if (outlineDock) {
+        next.showOutline = outlineDock !== 'hidden';
+        next.outlinePosition = outlineDock === 'hidden' ? appearance.outlinePosition : outlineDock;
+      }
     }
     updateAppearance(next);
   };
@@ -50,7 +74,7 @@ export default function AppearancePage() {
           layout="horizontal"
           labelCol={{ span: 4 }}
           wrapperCol={{ span: 12 }}
-          initialValues={appearance}
+          initialValues={{ ...appearance, outlineDock }}
           onValuesChange={handleValuesChange}
         >
           <Form.Item label={t('主题模式')} name="themeMode">
@@ -86,8 +110,12 @@ export default function AppearancePage() {
             <Switch />
           </Form.Item>
 
-          <Form.Item label={t('显示大纲')} name="showOutline" valuePropName="checked">
-            <Switch />
+          <Form.Item label={t('大纲位置')} name="outlineDock">
+            <Radio.Group>
+              <Radio.Button value="right">{t('右侧')}</Radio.Button>
+              <Radio.Button value="left">{t('左侧标签')}</Radio.Button>
+              <Radio.Button value="hidden">{t('关闭')}</Radio.Button>
+            </Radio.Group>
           </Form.Item>
 
           <Form.Item label={t('显示标签栏')} name="showTabs" valuePropName="checked">

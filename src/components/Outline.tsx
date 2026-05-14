@@ -19,28 +19,11 @@ export default function Outline() {
   const saveSettings = useSettingsStore(s => s.saveAll);
   const language = useSettingsStore(s => s.general.language);
   const t = (value: string) => translateText(language, value);
-  const activeTab = state.tabs.find(t => t.id === state.activeTabId);
-
   const setOutlineVisible = useCallback((visible: boolean) => {
     dispatch({ type: 'SET_OUTLINE_VISIBLE', payload: visible });
     updateAppearance({ showOutline: visible });
     void saveSettings();
   }, [dispatch, saveSettings, updateAppearance]);
-
-  const headings = useMemo<Heading[]>(() => {
-    if (!activeTab?.content) return [];
-    const lines = activeTab.content.split('\n');
-    const result: Heading[] = [];
-    for (const line of lines) {
-      const match = line.match(/^(#{1,6})\s+(.+)$/);
-      if (match) {
-        const level = match[1].length;
-        const text = match[2].replace(/[*_`~]/g, '');
-        result.push({ level, text, id: text.toLowerCase().replace(/[^\w一-鿿\s-]/g, '').replace(/\s+/g, '-') });
-      }
-    }
-    return result;
-  }, [activeTab]);
 
   if (!state.outlineVisible) {
     return (
@@ -68,28 +51,54 @@ export default function Outline() {
           <PanelRightClose size={14} />
         </button>
       </div>
-      <div className="outline-content">
-        {headings.length === 0 ? (
-          <div style={{ padding: '12px', color: 'var(--text-tertiary)', fontSize: '12px' }}>
-            {t('无标题')}
+      <OutlineContent />
+    </div>
+  );
+}
+
+export function OutlineContent() {
+  const { state } = useApp();
+  const language = useSettingsStore(s => s.general.language);
+  const t = (value: string) => translateText(language, value);
+  const activeTab = state.tabs.find(t => t.id === state.activeTabId);
+
+  const headings = useMemo<Heading[]>(() => {
+    if (!activeTab?.content) return [];
+    const lines = activeTab.content.split('\n');
+    const result: Heading[] = [];
+    for (const line of lines) {
+      const match = line.match(/^(#{1,6})\s+(.+)$/);
+      if (match) {
+        const level = match[1].length;
+        const text = match[2].replace(/[*_`~]/g, '');
+        result.push({ level, text, id: text.toLowerCase().replace(/[^\w一-鿿\s-]/g, '').replace(/\s+/g, '-') });
+      }
+    }
+    return result;
+  }, [activeTab]);
+
+  return (
+    <div className="outline-content">
+      {headings.length === 0 ? (
+        <div style={{ padding: '12px', color: 'var(--text-tertiary)', fontSize: '12px' }}>
+          {t('无标题')}
+        </div>
+      ) : (
+        headings.map((h, i) => (
+          <div
+            key={i}
+            className={`outline-item h${h.level}`}
+            style={{ '--level': h.level } as OutlineItemStyle}
+            title={h.text}
+            onClick={() => {
+              const target = document.getElementById(h.id);
+              if (target) target.scrollIntoView({ behavior: 'smooth' });
+            }}
+          >
+            {h.text}
           </div>
-        ) : (
-          headings.map((h, i) => (
-            <div
-              key={i}
-              className={`outline-item h${h.level}`}
-              style={{ '--level': h.level } as OutlineItemStyle}
-              title={h.text}
-              onClick={() => {
-                const target = document.getElementById(h.id);
-                if (target) target.scrollIntoView({ behavior: 'smooth' });
-              }}
-            >
-              {h.text}
-            </div>
-          ))
-        )}
-      </div>
+        ))
+      )}
     </div>
   );
 }

@@ -47,6 +47,7 @@ export default function WorkspaceContent() {
   const { state, dispatch } = useApp();
   const navigate = useNavigate();
   const language = useSettingsStore(s => s.general.language);
+  const outlinePosition = useSettingsStore(s => s.appearance.outlinePosition);
   const t = useCallback((value: string) => translateText(language, value), [language]);
   const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId);
   const activeTabId = activeTab?.id;
@@ -109,7 +110,7 @@ export default function WorkspaceContent() {
             </div>
           </div>
         </div>
-        <Outline />
+        {outlinePosition === 'right' && <Outline />}
         <AIChatPanel
           documentId={activeTab?.id || 'empty-document'}
           documentPath={activeTab?.isDraft ? undefined : activeTab?.path}

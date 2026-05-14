@@ -9,6 +9,7 @@ import { buildHidePatterns, readFirstLevel } from '../utils/workspace';
 import { getPreviewFileKind, isMarkdownFileName, isOpenableTextFileName } from '../utils/savePaths';
 import type { FileNode, RecentFile } from '../types';
 import { getLocaleText, normalizeAppLanguage } from '../i18n';
+import { OutlineContent } from './Outline';
 
 const SIDEBAR_MIN_WIDTH = 180;
 const SIDEBAR_MAX_WIDTH = 420;
@@ -152,6 +153,16 @@ function rebaseExpandedFolders(expanded: Set<string>, oldPath: string, newPath: 
   return new Set([...expanded].map(path => rebasePath(path, oldPath, newPath)));
 }
 
+function areFileTreesEqual(left: FileNode[], right: FileNode[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((node, index) => {
+    const other = right[index];
+    if (!other) return false;
+    if (node.name !== other.name || node.path !== other.path || node.type !== other.type) return false;
+    return areFileTreesEqual(node.children || [], other.children || []);
+  });
+}
+
 async function readVisibleTree(
   rootPath: string,
   expandedFolders: Set<string>,
@@ -178,6 +189,7 @@ export default function Sidebar() {
   const { files, appearance, general, updateAppearance, saveAll } = useSettingsStore();
   const text = getLocaleText(general.language);
   const appLanguage = normalizeAppLanguage(general.language);
+  const showOutlineTab = appearance.outlinePosition === 'left' && state.outlineVisible;
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: FileNode | null } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -204,6 +216,7 @@ export default function Sidebar() {
   const renameCancelledRef = useRef(false);
   const createFolderInFlightRef = useRef(false);
   const createFileInFlightRef = useRef(false);
+  const refreshInFlightRef = useRef(false);
   const dragNodeRef = useRef<FileNode | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const sidebarContentRef = useRef<HTMLDivElement | null>(null);
@@ -228,6 +241,12 @@ export default function Sidebar() {
     }
   }, [appearance.sidebarWidth, isResizing]);
 
+  useEffect(() => {
+    if (state.sidebarActiveTab === 'outline' && !showOutlineTab) {
+      dispatch({ type: 'SET_SIDEBAR_TAB', payload: 'workspace' });
+    }
+  }, [dispatch, showOutlineTab, state.sidebarActiveTab]);
+
   const saveSidebarWidth = useCallback(async (width: number) => {
     const nextWidth = clampSidebarWidth(width);
     updateAppearance({ sidebarWidth: nextWidth });
@@ -238,8 +257,34 @@ export default function Sidebar() {
     const workspacePath = workspacePathRef.current;
     if (!workspacePath) return;
     const tree = await readVisibleTree(workspacePath, expanded, hidePatternsRef.current);
+    if (areFileTreesEqual(treeRef.current, tree)) return;
     dispatch({ type: 'SET_WORKSPACE', payload: { path: workspacePath, tree } });
   }, [dispatch]);
+
+  useEffect(() => {
+    if (!state.workspacePath) return undefined;
+
+    const refreshFromDisk = async () => {
+      if (refreshInFlightRef.current) return;
+      refreshInFlightRef.current = true;
+      try {
+        await refreshWorkspaceTree();
+      } catch (error) {
+        console.warn('[Sidebar] Failed to auto-refresh workspace:', error);
+      } finally {
+        refreshInFlightRef.current = false;
+      }
+    };
+
+    void refreshFromDisk();
+    const intervalId = window.setInterval(refreshFromDisk, 1800);
+    window.addEventListener('focus', refreshFromDisk);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshFromDisk);
+    };
+  }, [refreshWorkspaceTree, state.workspacePath]);
 
   const scrollActiveTreeItemIntoView = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -815,6 +860,14 @@ export default function Sidebar() {
           >
             {text.sidebar.recentFiles}
           </button>
+          {showOutlineTab && (
+            <button
+              className={`sidebar-tab ${state.sidebarActiveTab === 'outline' ? 'active' : ''}`}
+              onClick={() => dispatch({ type: 'SET_SIDEBAR_TAB', payload: 'outline' })}
+            >
+              {text.sidebar.outline}
+            </button>
+          )}
           <div className="sidebar-tab-spacer" />
           <button
             className="panel-collapse-btn"
@@ -862,6 +915,12 @@ export default function Sidebar() {
               onDragEnd={handleTreeDragEnd}
               text={text}
             />
+          )}
+
+          {state.sidebarActiveTab === 'outline' && showOutlineTab && (
+            <div className="outline-sidebar-tab">
+              <OutlineContent />
+            </div>
           )}
 
           {state.sidebarActiveTab === 'recent' && (

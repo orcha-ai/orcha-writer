@@ -1,5 +1,5 @@
 import { Button, Tooltip } from 'antd';
-import { PanelRightClose, RotateCcw, Settings } from 'lucide-react';
+import { PanelRightClose, Settings, Trash2 } from 'lucide-react';
 import { useSettingsStore } from '../../../store';
 import { translateText } from '../../../i18n';
 
@@ -21,7 +21,7 @@ export function AIChatHeader({ onOpenSettings, onClear, onClose }: AIChatHeaderP
       </div>
       <div className="ai-chat-header-actions">
         <Tooltip title={t('清空会话')}>
-          <Button type="text" size="small" icon={<RotateCcw size={16} />} onClick={onClear} />
+          <Button type="text" size="small" icon={<Trash2 size={16} />} onClick={onClear} />
         </Tooltip>
         <Tooltip title={t('AI 设置')}>
           <Button type="text" size="small" icon={<Settings size={16} />} onClick={onOpenSettings} />

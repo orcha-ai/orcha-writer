@@ -61,9 +61,11 @@ export default function AboutPage() {
             style={{ width: '100%', height: 'auto', display: 'block' }}
           />
         </div>
-        <Text type="secondary">{t('版本 {version}', { version: currentVersion })}</Text>
+        <div style={{ marginBottom: 16 }}>
+          <Text type="secondary">{t('版本号：{version}', { version: currentVersion })}</Text>
+        </div>
 
-        <Space style={{ marginTop: 16 }}>
+        <Space>
           <Button icon={<SyncOutlined />} type="primary" loading={checking} onClick={handleCheckUpdates}>
             {t('检查更新')}
           </Button>

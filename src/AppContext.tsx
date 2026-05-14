@@ -14,7 +14,7 @@ type AppAction =
   | { type: 'SET_SIDEBAR_VISIBLE'; payload: boolean }
   | { type: 'TOGGLE_OUTLINE' }
   | { type: 'SET_OUTLINE_VISIBLE'; payload: boolean }
-  | { type: 'SET_SIDEBAR_TAB'; payload: 'workspace' | 'recent' }
+  | { type: 'SET_SIDEBAR_TAB'; payload: 'workspace' | 'outline' | 'recent' }
   | { type: 'OPEN_TAB'; payload: { id: string; name: string; path: string; content: string; isDraft?: boolean; preview?: FilePreview } }
   | { type: 'SAVE_TAB_AS'; payload: { oldId: string; id: string; name: string; path: string; content: string } }
   | { type: 'CLOSE_TAB'; payload: string }
@@ -22,6 +22,7 @@ type AppAction =
   | { type: 'CLOSE_ALL_TABS' }
   | { type: 'SET_ACTIVE_TAB'; payload: string | null }
   | { type: 'UPDATE_TAB_CONTENT'; payload: { id: string; content: string } }
+  | { type: 'REFRESH_TAB_CONTENT'; payload: { id: string; content: string } }
   | { type: 'MARK_TAB_SAVED'; payload: string }
   | { type: 'MARK_TAB_UNSAVED'; payload: string }
   | { type: 'RENAME_TAB_TITLE'; payload: { id: string; name: string } }
@@ -183,6 +184,13 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         tabs: state.tabs.map(t =>
           t.id === action.payload.id ? { ...t, content: action.payload.content, saved: false } : t
+        ),
+      };
+    case 'REFRESH_TAB_CONTENT':
+      return {
+        ...state,
+        tabs: state.tabs.map(t =>
+          t.id === action.payload.id ? { ...t, content: action.payload.content, saved: true } : t
         ),
       };
     case 'MARK_TAB_SAVED':

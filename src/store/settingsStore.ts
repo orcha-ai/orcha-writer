@@ -135,6 +135,19 @@ function normalizeFileSettings(value: unknown): FileSettings {
   };
 }
 
+function normalizeAppearanceSettings(value: unknown): AppearanceSettings {
+  const raw = value && typeof value === 'object' ? value as Partial<AppearanceSettings> : {};
+  const outlinePosition = raw?.outlinePosition === 'left' || raw?.outlinePosition === 'right'
+    ? raw.outlinePosition
+    : defaultAppearanceSettings.outlinePosition;
+
+  return {
+    ...defaultAppearanceSettings,
+    ...raw,
+    outlinePosition,
+  };
+}
+
 interface SettingsState {
   general: GeneralSettings;
   appearance: AppearanceSettings;
@@ -209,7 +222,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
     set({
       general: normalizeGeneralSettings(general),
-      appearance: { ...defaultAppearanceSettings, ...appearance },
+      appearance: normalizeAppearanceSettings(appearance),
       editor: normalizeEditorSettings(editor),
       markdown: normalizeMarkdownSettings(markdown),
       preview: normalizePreviewSettings(preview),

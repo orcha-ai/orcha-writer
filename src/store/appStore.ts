@@ -13,7 +13,7 @@ interface AppState {
   // Sidebar
   sidebarVisible: boolean;
   outlineVisible: boolean;
-  sidebarActiveTab: 'workspace' | 'recent';
+  sidebarActiveTab: 'workspace' | 'outline' | 'recent';
 
   // Workspace
   workspacePath: string | null;
@@ -34,7 +34,7 @@ interface AppState {
   setTheme: (theme: ThemeMode) => void;
   toggleSidebar: () => void;
   toggleOutline: () => void;
-  setSidebarTab: (tab: 'workspace' | 'recent') => void;
+  setSidebarTab: (tab: 'workspace' | 'outline' | 'recent') => void;
 
   openTab: (tab: { id: string; name: string; path: string; content: string; isDraft?: boolean }) => void;
   closeTab: (id: string) => void;

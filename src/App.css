@@ -1446,6 +1446,10 @@ body.sidebar-resizing * {
   padding: 4px 0;
 }
 
+.outline-sidebar-tab {
+  min-height: 100%;
+}
+
 .outline-item {
   padding: 4px 12px 4px calc(12px + (var(--level, 1) - 1) * 16px);
   font-size: 12px;

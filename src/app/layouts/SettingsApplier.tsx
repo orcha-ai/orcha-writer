@@ -5,6 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
 import { useAiStore, usePluginStore, useSettingsStore, useShortcutStore } from '../../store';
 import { useApp } from '../../AppContext';
+import { getActiveEditorView } from '../../components/Editor';
 import { readConfig, writeConfig } from '../../config';
 import { readTextFile } from '../../utils/fs';
 import { installAvailableUpdate, relaunchApplication } from '../../utils/update';
@@ -86,11 +87,75 @@ export function SettingsApplier() {
   const { state, dispatch } = useApp();
   const [settingsReady, setSettingsReady] = useState(false);
   const tabsRef = useRef(state.tabs);
+  const activeTabIdRef = useRef(state.activeTabId);
+  const viewModeRef = useRef(state.viewMode);
   const exitPromptOpenRef = useRef(false);
 
   useEffect(() => {
     tabsRef.current = state.tabs;
   }, [state.tabs]);
+
+  useEffect(() => {
+    activeTabIdRef.current = state.activeTabId;
+  }, [state.activeTabId]);
+
+  useEffect(() => {
+    viewModeRef.current = state.viewMode;
+  }, [state.viewMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let syncInFlight = false;
+
+    const syncSavedTabsFromDisk = async () => {
+      if (syncInFlight) return;
+      const tabs = tabsRef.current.filter(tab => !tab.isDraft && !tab.preview && tab.saved);
+      if (tabs.length === 0) return;
+
+      syncInFlight = true;
+      try {
+        await Promise.all(tabs.map(async (tab) => {
+          const previousContent = tab.content;
+          try {
+            const content = await readTextFile(tab.path);
+            if (cancelled || content === previousContent) return;
+
+            const latestTab = tabsRef.current.find(current => current.id === tab.id);
+            if (
+              !latestTab ||
+              latestTab.isDraft ||
+              latestTab.preview ||
+              !latestTab.saved ||
+              latestTab.content !== previousContent
+            ) {
+              return;
+            }
+            if (latestTab.id === activeTabIdRef.current) {
+              if (viewModeRef.current === 'block') return;
+              const editorView = getActiveEditorView();
+              if (editorView && editorView.state.doc.toString() !== previousContent) return;
+            }
+
+            dispatch({ type: 'REFRESH_TAB_CONTENT', payload: { id: tab.id, content } });
+          } catch {
+            // The file may have been deleted, moved, or be temporarily unreadable.
+          }
+        }));
+      } finally {
+        syncInFlight = false;
+      }
+    };
+
+    void syncSavedTabsFromDisk();
+    const intervalId = window.setInterval(syncSavedTabsFromDisk, 1800);
+    window.addEventListener('focus', syncSavedTabsFromDisk);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', syncSavedTabsFromDisk);
+    };
+  }, [dispatch]);
 
   // Load settings on mount
   useEffect(() => {
