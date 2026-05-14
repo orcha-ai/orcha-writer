@@ -585,9 +585,7 @@ export function AIChatPanel({
       message.warning(t('没有可重新生成的上一条请求'));
       return;
     }
-    void sendMessage(previousUserMessage.content, previousUserMessage.commandId, {
-      deepThinkingEnabled: previousUserMessage.deepThinkingEnabled,
-    });
+    void sendMessage(previousUserMessage.content, previousUserMessage.commandId);
   }, [conversation, sendMessage, t]);
 
   const handleRunCommand = useCallback((commandId: string) => {

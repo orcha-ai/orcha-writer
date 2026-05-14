@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { message, Modal } from 'antd';
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import { useAiStore, usePluginStore, useSettingsStore, useShortcutStore } from '../../store';
 import { useApp } from '../../AppContext';
 import { getActiveEditorView } from '../../components/Editor';
@@ -278,6 +278,8 @@ export function SettingsApplier() {
 
   // Always quit the app when the main window is closed, after warning about unsaved documents.
   useEffect(() => {
+    if (!isTauri()) return undefined;
+
     let unlisten: (() => void) | undefined;
 
     void getCurrentWindow().onCloseRequested(event => {

@@ -270,12 +270,12 @@ async function sendNativeAIChat(options: SendAIChatOptions): Promise<AIChatRespo
       const contentDelta = event.payload.contentDelta || '';
       const reasoningDelta = event.payload.reasoningDelta || '';
       if (contentDelta) content += contentDelta;
-      if (reasoningDelta) reasoningContent += reasoningDelta;
+      if (request.deepThinkingEnabled && reasoningDelta) reasoningContent += reasoningDelta;
       options.onStreamUpdate?.({
         content,
-        reasoningContent: reasoningContent || undefined,
+        reasoningContent: request.deepThinkingEnabled ? reasoningContent || undefined : undefined,
         contentDelta: contentDelta || undefined,
-        reasoningDelta: reasoningDelta || undefined,
+        reasoningDelta: request.deepThinkingEnabled ? reasoningDelta || undefined : undefined,
       });
     });
 
@@ -290,7 +290,7 @@ async function sendNativeAIChat(options: SendAIChatOptions): Promise<AIChatRespo
       throwIfCancelled(options.abortSignal);
       options.onStreamUpdate?.({
         content: response.content,
-        reasoningContent: response.reasoningContent,
+        reasoningContent: request.deepThinkingEnabled ? response.reasoningContent : undefined,
       });
     } finally {
       options.abortSignal?.removeEventListener('abort', cancelStream);
@@ -307,7 +307,7 @@ async function sendNativeAIChat(options: SendAIChatOptions): Promise<AIChatRespo
   return {
     messageId: createAIId('msg'),
     content: response.content,
-    reasoningContent: response.reasoningContent,
+    reasoningContent: request.deepThinkingEnabled ? response.reasoningContent : undefined,
     resultCards: response.content.trim() ? makeResultCards(options, response.content) : [],
     usage: response.usage,
     model: response.model || model.model,

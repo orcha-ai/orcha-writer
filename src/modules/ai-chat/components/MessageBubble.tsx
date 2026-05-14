@@ -28,7 +28,7 @@ function ThinkingProcess({ message, language }: { message: AIMessage; language: 
   }, [isThinking, message.id]);
 
   if (message.role !== 'assistant') return null;
-  if (!message.deepThinkingEnabled && !reasoningContent) return null;
+  if (!message.deepThinkingEnabled) return null;
   if (message.status === 'failed' && !reasoningContent) return null;
 
   const statusText = isThinking

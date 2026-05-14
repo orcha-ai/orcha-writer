@@ -1,6 +1,6 @@
 import { useApp } from '../AppContext';
 import { useSettingsStore } from '../store';
-import { FolderOpen, Folder, File, ChevronRight, FilePlus, FolderPlus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { FolderOpen, Folder, File, ChevronRight, FilePlus, FolderPlus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import type { CSSProperties, DragEvent, KeyboardEvent, MouseEvent } from 'react';
 import { message } from 'antd';
@@ -14,6 +14,8 @@ import { OutlineContent } from './Outline';
 const SIDEBAR_MIN_WIDTH = 180;
 const SIDEBAR_MAX_WIDTH = 420;
 const SIDEBAR_DEFAULT_WIDTH = 240;
+const FILE_SEARCH_RESULT_LIMIT = 120;
+const FILE_SEARCH_DEBOUNCE_MS = 250;
 const ROOT_DROP_TARGET = '__orcha_workspace_root__';
 type DepthStyle = CSSProperties & { '--depth': number };
 
@@ -25,6 +27,11 @@ interface CreateFolderState {
 interface CreateFileState {
   parentPath: string | null;
   value: string;
+}
+
+interface FileSearchResult {
+  node: FileNode;
+  relativePath: string;
 }
 
 interface TreeHandlers {
@@ -88,6 +95,16 @@ function parentPathOf(path: string): string {
 
 function normalizePathForCompare(path: string): string {
   return path.replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function relativeWorkspacePath(path: string, workspacePath: string): string {
+  const normalizedPath = normalizePathForCompare(path);
+  const normalizedWorkspace = normalizePathForCompare(workspacePath);
+  if (normalizedPath === normalizedWorkspace) return '';
+  if (normalizedPath.startsWith(`${normalizedWorkspace}/`)) {
+    return normalizedPath.slice(normalizedWorkspace.length + 1);
+  }
+  return normalizedPath;
 }
 
 function isPathWithinWorkspace(path: string, workspacePath: string): boolean {
@@ -184,6 +201,49 @@ async function readVisibleTree(
   return load(rootPath);
 }
 
+function matchesFileSearch(node: FileNode, relativePath: string, query: string): boolean {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return false;
+  const haystack = `${node.name} ${relativePath}`.toLowerCase();
+  return terms.every(term => haystack.includes(term));
+}
+
+async function searchWorkspaceFiles(
+  workspacePath: string,
+  query: string,
+  hidePatterns: string[],
+  limit = FILE_SEARCH_RESULT_LIMIT,
+  shouldCancel?: () => boolean,
+): Promise<FileSearchResult[]> {
+  const results: FileSearchResult[] = [];
+
+  const visit = async (directoryPath: string) => {
+    if (results.length >= limit || shouldCancel?.()) return;
+    let nodes: FileNode[];
+    try {
+      nodes = await readFirstLevel(directoryPath, hidePatterns);
+    } catch (error) {
+      console.warn('[Sidebar] Failed to search folder:', directoryPath, error);
+      return;
+    }
+    if (shouldCancel?.()) return;
+
+    for (const node of nodes) {
+      if (results.length >= limit || shouldCancel?.()) return;
+      const relativePath = relativeWorkspacePath(node.path, workspacePath);
+      if (node.type === 'file' && matchesFileSearch(node, relativePath, query)) {
+        results.push({ node, relativePath });
+      }
+      if (node.type === 'folder') {
+        await visit(node.path);
+      }
+    }
+  };
+
+  await visit(workspacePath);
+  return results;
+}
+
 export default function Sidebar() {
   const { state, dispatch } = useApp();
   const { files, appearance, general, updateAppearance, saveAll } = useSettingsStore();
@@ -201,6 +261,9 @@ export default function Sidebar() {
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => clampSidebarWidth(appearance.sidebarWidth));
   const [isResizing, setIsResizing] = useState(false);
+  const [fileSearchQuery, setFileSearchQuery] = useState('');
+  const [fileSearchResults, setFileSearchResults] = useState<FileSearchResult[]>([]);
+  const [isFileSearching, setIsFileSearching] = useState(false);
 
   // Combine default + user-configured hidden patterns
   const hidePatterns = useMemo(() => buildHidePatterns(files.hidePatterns || []), [files.hidePatterns]);
@@ -234,6 +297,44 @@ export default function Sidebar() {
   useEffect(() => { workspacePathRef.current = state.workspacePath; }, [state.workspacePath]);
   useEffect(() => { hidePatternsRef.current = hidePatterns; }, [hidePatterns]);
   useEffect(() => { widthRef.current = sidebarWidth; }, [sidebarWidth]);
+
+  useEffect(() => {
+    const query = fileSearchQuery.trim();
+    if (!state.workspacePath || !query || state.sidebarActiveTab !== 'workspace') {
+      setFileSearchResults([]);
+      setIsFileSearching(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setIsFileSearching(true);
+      void searchWorkspaceFiles(state.workspacePath!, query, hidePatternsRef.current, FILE_SEARCH_RESULT_LIMIT, () => cancelled)
+        .then(results => {
+          if (!cancelled) setFileSearchResults(results);
+        })
+        .catch(error => {
+          if (!cancelled) {
+            console.warn('[Sidebar] Failed to search workspace:', error);
+            setFileSearchResults([]);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setIsFileSearching(false);
+        });
+    }, FILE_SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [fileSearchQuery, state.sidebarActiveTab, state.workspacePath]);
+
+  useEffect(() => {
+    setFileSearchQuery('');
+    setFileSearchResults([]);
+    setIsFileSearching(false);
+  }, [state.workspacePath]);
 
   useEffect(() => {
     if (!isResizing) {
@@ -881,40 +982,79 @@ export default function Sidebar() {
 
         <div ref={sidebarContentRef} className="sidebar-content" onClick={closeContextMenu}>
           {state.sidebarActiveTab === 'workspace' && (
-            <WorkspaceTree
-              tree={state.workspaceTree}
-              workspacePath={state.workspacePath}
-              expandedFolders={expandedFolders}
-              loadingFolders={loadingFolders}
-              toggleFolder={toggleFolder}
-              openFile={openFile}
-              activeTabId={state.activeTabId}
-              onContextMenu={handleContextMenu}
-              renaming={renaming}
-              renameValue={renameValue}
-              onRenameChange={setRenameValue}
-              onRenameSubmit={handleRenameSubmit}
-              onRenameCancel={handleRenameCancel}
-              onRename={handleRename}
-              creatingFolder={creatingFolder}
-              onCreateFolderStart={handleCreateFolderStart}
-              onCreateFolderChange={(value) => setCreatingFolder(current => current ? { ...current, value } : current)}
-              onCreateFolderSubmit={handleCreateFolderSubmit}
-              onCreateFolderCancel={handleCreateFolderCancel}
-              creatingFile={creatingFile}
-              onCreateFileStart={handleCreateFileStart}
-              onCreateFileChange={(value) => setCreatingFile(current => current ? { ...current, value } : current)}
-              onCreateFileSubmit={handleCreateFileSubmit}
-              onCreateFileCancel={handleCreateFileCancel}
-              draggingPath={draggingPath}
-              dropTargetPath={dropTargetPath}
-              onDragStart={handleTreeDragStart}
-              onDragOver={handleTreeDragOver}
-              onDragLeave={handleTreeDragLeave}
-              onDrop={handleTreeDrop}
-              onDragEnd={handleTreeDragEnd}
-              text={text}
-            />
+            <>
+              <div className="workspace-search-box" onClick={(event) => event.stopPropagation()}>
+                <Search size={14} className="workspace-search-icon" />
+                <input
+                  value={fileSearchQuery}
+                  disabled={!state.workspacePath}
+                  placeholder={text.sidebar.searchFiles}
+                  aria-label={text.sidebar.searchFiles}
+                  onChange={(event) => setFileSearchQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                      event.preventDefault();
+                      setFileSearchQuery('');
+                    }
+                  }}
+                />
+                {fileSearchQuery && (
+                  <button
+                    type="button"
+                    className="workspace-search-clear"
+                    aria-label={text.sidebar.clearFileSearch}
+                    onClick={() => setFileSearchQuery('')}
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+              {fileSearchQuery.trim() ? (
+                <FileSearchResults
+                  query={fileSearchQuery}
+                  results={fileSearchResults}
+                  isSearching={isFileSearching}
+                  activeTabId={state.activeTabId}
+                  text={text}
+                  onOpenFile={openFile}
+                />
+              ) : (
+                <WorkspaceTree
+                  tree={state.workspaceTree}
+                  workspacePath={state.workspacePath}
+                  expandedFolders={expandedFolders}
+                  loadingFolders={loadingFolders}
+                  toggleFolder={toggleFolder}
+                  openFile={openFile}
+                  activeTabId={state.activeTabId}
+                  onContextMenu={handleContextMenu}
+                  renaming={renaming}
+                  renameValue={renameValue}
+                  onRenameChange={setRenameValue}
+                  onRenameSubmit={handleRenameSubmit}
+                  onRenameCancel={handleRenameCancel}
+                  onRename={handleRename}
+                  creatingFolder={creatingFolder}
+                  onCreateFolderStart={handleCreateFolderStart}
+                  onCreateFolderChange={(value) => setCreatingFolder(current => current ? { ...current, value } : current)}
+                  onCreateFolderSubmit={handleCreateFolderSubmit}
+                  onCreateFolderCancel={handleCreateFolderCancel}
+                  creatingFile={creatingFile}
+                  onCreateFileStart={handleCreateFileStart}
+                  onCreateFileChange={(value) => setCreatingFile(current => current ? { ...current, value } : current)}
+                  onCreateFileSubmit={handleCreateFileSubmit}
+                  onCreateFileCancel={handleCreateFileCancel}
+                  draggingPath={draggingPath}
+                  dropTargetPath={dropTargetPath}
+                  onDragStart={handleTreeDragStart}
+                  onDragOver={handleTreeDragOver}
+                  onDragLeave={handleTreeDragLeave}
+                  onDrop={handleTreeDrop}
+                  onDragEnd={handleTreeDragEnd}
+                  text={text}
+                />
+              )}
+            </>
           )}
 
           {state.sidebarActiveTab === 'outline' && showOutlineTab && (
@@ -1363,6 +1503,71 @@ function NewFolderInput({
         onFocus={(e) => e.currentTarget.select()}
         autoFocus
       />
+    </div>
+  );
+}
+
+function FileSearchResults({
+  query,
+  results,
+  isSearching,
+  activeTabId,
+  text,
+  onOpenFile,
+}: {
+  query: string;
+  results: FileSearchResult[];
+  isSearching: boolean;
+  activeTabId: string | null;
+  text: ReturnType<typeof getLocaleText>;
+  onOpenFile: (node: FileNode) => void | Promise<void>;
+}) {
+  if (isSearching && results.length === 0) {
+    return (
+      <div className="workspace-search-state">
+        <span className="spinner" />
+        <span>{text.sidebar.searchingFiles}</span>
+      </div>
+    );
+  }
+
+  if (results.length === 0) {
+    return (
+      <div className="workspace-search-state">
+        <File size={28} />
+        <span>{text.sidebar.noFileSearchResults(query.trim())}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="workspace-search-results">
+      <div className="workspace-search-summary">
+        {results.length >= FILE_SEARCH_RESULT_LIMIT
+          ? text.sidebar.fileSearchLimited(results.length)
+          : text.sidebar.fileSearchCount(results.length)}
+        {isSearching && <span className="workspace-search-summary-spinner" />}
+      </div>
+      {results.map(result => (
+        <div
+          key={result.node.path}
+          className={`workspace-search-result ${activeTabId === result.node.path ? 'active' : ''}`}
+          title={result.node.path}
+          tabIndex={0}
+          onClick={() => onOpenFile(result.node)}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            void onOpenFile(result.node);
+          }}
+        >
+          <File size={14} className="icon" />
+          <div className="workspace-search-result-info">
+            <div className="workspace-search-result-name">{result.node.name}</div>
+            <div className="workspace-search-result-path">{result.relativePath}</div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

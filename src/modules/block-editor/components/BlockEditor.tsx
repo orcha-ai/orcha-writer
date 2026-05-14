@@ -139,6 +139,12 @@ const BLOCK_AI_OPTIONS: Array<{ action: BlockAIAction; label: string }> = [
 
 const BLOCK_AI_POPOVER_WIDTH = 360;
 const BLOCK_AI_POPOVER_HEIGHT = 292;
+const INITIAL_RENDERED_BLOCK_COUNT = 140;
+const RENDER_BLOCK_BATCH_SIZE = 240;
+
+function initialRenderedBlockCount(length: number): number {
+  return Math.min(length, INITIAL_RENDERED_BLOCK_COUNT);
+}
 
 function blockIcon(type: BlockType) {
   switch (type) {
@@ -223,6 +229,13 @@ function cloneBlock(block: BlockViewModel, suffix: string | number): BlockViewMo
     markdown: blockToMarkdown(block),
     sourceRange: undefined,
   };
+}
+
+function nextFocusBlockIdAfterDelete(blocks: BlockViewModel[], blockIndex: number, direction: 'previous' | 'next'): string | undefined {
+  const fallbackIndex = direction === 'previous' ? blockIndex + 1 : blockIndex - 1;
+  return (direction === 'previous'
+    ? blocks[blockIndex - 1]?.id
+    : blocks[blockIndex + 1]?.id) ?? blocks[fallbackIndex]?.id;
 }
 
 function inferMarkdownBlockFromText(block: BlockViewModel, value: string): BlockViewModel | null {
@@ -396,6 +409,14 @@ function supportsInlineMarkdownPreview(block: BlockViewModel): boolean {
   return !['code_block', 'frontmatter', 'html_block', 'math_block', 'table', 'image', 'horizontal_rule'].includes(block.type);
 }
 
+function hasInlineMarkdownPreviewSyntax(value: string): boolean {
+  return /[`*_~[\]\\]/.test(value);
+}
+
+function shouldRenderInlineMarkdownPreview(block: BlockViewModel, value: string): boolean {
+  return supportsInlineMarkdownPreview(block) && hasInlineMarkdownPreviewSyntax(value);
+}
+
 function resizeTextarea(textarea: HTMLTextAreaElement | null): void {
   if (!textarea) return;
   textarea.style.height = '0px';
@@ -515,7 +536,10 @@ export default function BlockEditor() {
     translateText(language, value, params)
   ), [language]);
   const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
-  const [blocks, setBlocks] = useState<BlockViewModel[]>(() => parseMarkdownToBlocks(activeTab?.content || ''));
+  const [blocks, setBlocks] = useState<BlockViewModel[]>(() => (
+    state.viewMode === 'block' ? parseMarkdownToBlocks(activeTab?.content || '') : []
+  ));
+  const [renderedBlockCount, setRenderedBlockCount] = useState(() => initialRenderedBlockCount(blocks.length));
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [slash, setSlash] = useState<SlashState | null>(null);
@@ -545,6 +569,7 @@ export default function BlockEditor() {
     [blocks, selectedIndices],
   );
   const listMarkers = useMemo(() => blocks.map((_, index) => listMarker(blocks, index)), [blocks]);
+  const renderedBlocks = useMemo(() => blocks.slice(0, renderedBlockCount), [blocks, renderedBlockCount]);
   const tableModels = useMemo(() => {
     const models = new Map<string, MarkdownTableModel | null>();
     blocks.forEach((block) => {
@@ -599,20 +624,50 @@ export default function BlockEditor() {
   useEffect(() => {
     const nextTabId = activeTab?.id ?? null;
     const nextContent = activeTab?.content || '';
+
+    if (!activeTab || state.viewMode !== 'block') {
+      currentTabIdRef.current = nextTabId;
+      syncedContentRef.current = nextContent;
+      if (blocks.length > 0) {
+        setBlocks([]);
+        setRenderedBlockCount(0);
+      }
+      return;
+    }
+
     const tabChanged = currentTabIdRef.current !== nextTabId;
     const contentChangedExternally = syncedContentRef.current !== nextContent;
 
-    if (!tabChanged && !contentChangedExternally) return;
+    if (!tabChanged && !contentChangedExternally && blocks.length > 0) return;
 
     currentTabIdRef.current = nextTabId;
     syncedContentRef.current = nextContent;
-    setBlocks(parseMarkdownToBlocks(nextContent));
-  }, [activeTab?.content, activeTab?.id]);
+    const nextBlocks = parseMarkdownToBlocks(nextContent);
+    setBlocks(nextBlocks);
+    setRenderedBlockCount(initialRenderedBlockCount(nextBlocks.length));
+  }, [activeTab, activeTab?.content, activeTab?.id, blocks.length, state.viewMode]);
 
   useEffect(() => {
     setSelectedIndex(current => clampIndex(current, blocks.length));
     setSelectedIndices(current => normalizeIndices(current, blocks.length));
   }, [blocks.length]);
+
+  useEffect(() => {
+    if (state.viewMode !== 'block') return undefined;
+    if (renderedBlockCount >= blocks.length) return undefined;
+
+    let frame = 0;
+    const renderNextBatch = () => {
+      setRenderedBlockCount((current) => {
+        if (current >= blocks.length) return current;
+        return Math.min(blocks.length, current + RENDER_BLOCK_BATCH_SIZE);
+      });
+      frame = window.requestAnimationFrame(renderNextBatch);
+    };
+
+    frame = window.requestAnimationFrame(renderNextBatch);
+    return () => window.cancelAnimationFrame(frame);
+  }, [blocks.length, renderedBlockCount, state.viewMode]);
 
   useLayoutEffect(() => {
     if (state.viewMode !== 'block') return;
@@ -1290,10 +1345,9 @@ export default function BlockEditor() {
       }
     }
 
-    if (event.key === 'Backspace' && !event.currentTarget.value && blocks.length > 1) {
+    if ((event.key === 'Backspace' || event.key === 'Delete') && !event.currentTarget.value && blocks.length > 1) {
       event.preventDefault();
-      const nextFocusIndex = Math.max(0, blockIndex - 1);
-      const nextFocusBlockId = blocks[nextFocusIndex]?.id;
+      const nextFocusBlockId = nextFocusBlockIdAfterDelete(blocks, blockIndex, event.key === 'Backspace' ? 'previous' : 'next');
       deleteBlocksAt([blockIndex]);
       window.setTimeout(() => {
         if (nextFocusBlockId) textareasRef.current[nextFocusBlockId]?.focus();
@@ -1521,7 +1575,7 @@ export default function BlockEditor() {
       <main className="block-document-scroll">
         <div ref={documentRef} className="block-document">
           <div className="block-list">
-            {blocks.map((block, index) => {
+            {renderedBlocks.map((block, index) => {
               const isSelected = selectedIndex === index || selectedIndicesSet.has(index);
               const isPrimarySelected = selectedIndex === index;
               const isSlashOpen = slash?.blockIndex === index;
@@ -1540,7 +1594,7 @@ export default function BlockEditor() {
                 ? ({ '--block-list-indent': `${listIndentPx(block)}px` } as CSSProperties)
                 : undefined;
               const tableModel = block.type === 'table' ? tableModels.get(block.id) || null : null;
-              const inlineMarkdownPreview = supportsInlineMarkdownPreview(block);
+              const inlineMarkdownPreview = shouldRenderInlineMarkdownPreview(block, textareaValue);
               return (
                 <div
                   key={block.id}
@@ -1889,6 +1943,13 @@ export default function BlockEditor() {
                 </div>
               );
             })}
+            {renderedBlockCount < blocks.length && (
+              <div
+                className="block-render-placeholder"
+                style={{ height: `${(blocks.length - renderedBlockCount) * 38}px` }}
+                aria-hidden="true"
+              />
+            )}
           </div>
         </div>
       </main>

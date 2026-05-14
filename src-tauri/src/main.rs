@@ -1440,9 +1440,13 @@ async fn send_gemini_request(
     if let Some(max_tokens) = request.max_tokens {
         generation_config["maxOutputTokens"] = json!(max_tokens);
     }
-    if request.enable_thinking.unwrap_or(false) {
-        if let Some(thinking_budget) = request.thinking_budget {
-            generation_config["thinkingConfig"] = json!({ "thinkingBudget": thinking_budget });
+    if let Some(enable_thinking) = request.enable_thinking {
+        if enable_thinking {
+            if let Some(thinking_budget) = request.thinking_budget {
+                generation_config["thinkingConfig"] = json!({ "thinkingBudget": thinking_budget });
+            }
+        } else {
+            generation_config["thinkingConfig"] = json!({ "thinkingBudget": 0 });
         }
     }
     if generation_config.as_object().map(|object| !object.is_empty()).unwrap_or(false) {
