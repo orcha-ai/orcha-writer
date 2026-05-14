@@ -90,6 +90,11 @@ interface BlockAISelectionPayload {
   };
 }
 
+interface SyncBlocksOptions {
+  recordHistory?: boolean;
+  selectedIndices?: number[];
+}
+
 type BlockAIAction = 'polish' | 'expand' | 'shorten' | 'convert_to_list' | 'generate_next_block';
 
 const CONVERT_OPTIONS: Array<{ type: BlockType; label: string }> = [
@@ -519,7 +524,7 @@ export default function BlockEditor() {
   const [blockMenu, setBlockMenu] = useState<BlockContextMenuState | null>(null);
   const [blockAI, setBlockAI] = useState<BlockAIPopoverState | null>(null);
   const [blockAIPrompt, setBlockAIPrompt] = useState('');
-  const textareasRef = useRef<Record<number, HTMLTextAreaElement | null>>({});
+  const textareasRef = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const documentRef = useRef<HTMLDivElement | null>(null);
   const blockMenuRef = useRef<HTMLDivElement | null>(null);
   const blockAIRef = useRef<HTMLDivElement | null>(null);
@@ -531,12 +536,24 @@ export default function BlockEditor() {
   const historyFutureRef = useRef<string[]>([]);
   const currentTabIdRef = useRef<string | null>(activeTab?.id ?? null);
   const syncedContentRef = useRef(activeTab?.content || '');
+  const textEditHistoryRef = useRef<{ tabId: string; blockId: string } | null>(null);
   const selectedBlock = selectedIndex == null ? null : blocks[selectedIndex] || null;
   const blockSearchQuery = state.searchQuery.trim();
+  const selectedIndicesSet = useMemo(() => new Set(selectedIndices), [selectedIndices]);
   const selectedBlocks = useMemo(
     () => normalizeIndices(selectedIndices, blocks.length).map(index => blocks[index]).filter(Boolean),
     [blocks, selectedIndices],
   );
+  const listMarkers = useMemo(() => blocks.map((_, index) => listMarker(blocks, index)), [blocks]);
+  const tableModels = useMemo(() => {
+    const models = new Map<string, MarkdownTableModel | null>();
+    blocks.forEach((block) => {
+      if (block.type === 'table') {
+        models.set(block.id, parseMarkdownTable(tableMarkdownFromBlock(block)));
+      }
+    });
+    return models;
+  }, [blocks]);
 
   const resizeBlockTextareas = useCallback(() => {
     Object.values(textareasRef.current).forEach(resizeTextarea);
@@ -576,6 +593,7 @@ export default function BlockEditor() {
     setBlockAIPrompt('');
     historyPastRef.current = [];
     historyFutureRef.current = [];
+    textEditHistoryRef.current = null;
   }, [activeTab?.id, setBlockDragTarget]);
 
   useEffect(() => {
@@ -720,13 +738,28 @@ export default function BlockEditor() {
     historyFutureRef.current = [];
   }, []);
 
+  const recordTextEditHistory = useCallback((block: BlockViewModel) => {
+    if (!activeTab) return;
+    const current = textEditHistoryRef.current;
+    if (current?.tabId === activeTab.id && current.blockId === block.id) return;
+    pushHistorySnapshot(activeTab.content);
+    textEditHistoryRef.current = { tabId: activeTab.id, blockId: block.id };
+  }, [activeTab, pushHistorySnapshot]);
+
+  const endTextEditHistory = useCallback(() => {
+    textEditHistoryRef.current = null;
+  }, []);
+
   const syncBlocks = useCallback((
     nextBlocks: BlockViewModel[],
     nextSelectedIndex: number | null = selectedIndex,
-    options: { recordHistory?: boolean; selectedIndices?: number[] } = {},
+    options: SyncBlocksOptions = {},
   ) => {
     if (!activeTab) return;
-    if (options.recordHistory !== false) pushHistorySnapshot(activeTab.content);
+    if (options.recordHistory !== false) {
+      pushHistorySnapshot(activeTab.content);
+      textEditHistoryRef.current = null;
+    }
     const nextContent = serializeBlocks(nextBlocks);
     syncedContentRef.current = nextContent;
     setBlocks(nextBlocks);
@@ -742,22 +775,27 @@ export default function BlockEditor() {
     setBlockAI(null);
   }, [activeTab, dispatch, pushHistorySnapshot, selectedIndex]);
 
-  const replaceBlock = useCallback((blockIndex: number, block: BlockViewModel, nextSelectedIndex = blockIndex) => {
-    syncBlocks(blocks.map((item, index) => (index === blockIndex ? block : item)), nextSelectedIndex);
+  const replaceBlock = useCallback((
+    blockIndex: number,
+    block: BlockViewModel,
+    nextSelectedIndex = blockIndex,
+    options: SyncBlocksOptions = {},
+  ) => {
+    syncBlocks(blocks.map((item, index) => (index === blockIndex ? block : item)), nextSelectedIndex, options);
   }, [blocks, syncBlocks]);
 
   const insertBlockBefore = useCallback((blockIndex: number, block: BlockViewModel = createBlock('paragraph')) => {
     const targetIndex = Math.max(0, Math.min(blockIndex, blocks.length));
     const next = [...blocks.slice(0, targetIndex), block, ...blocks.slice(targetIndex)];
     syncBlocks(next, targetIndex, { selectedIndices: [targetIndex] });
-    window.setTimeout(() => textareasRef.current[targetIndex]?.focus(), 0);
+    window.setTimeout(() => textareasRef.current[block.id]?.focus(), 0);
   }, [blocks, syncBlocks]);
 
   const insertBlockAfter = useCallback((blockIndex: number, block: BlockViewModel = createBlock('paragraph')) => {
     const targetIndex = Math.max(0, Math.min(blockIndex + 1, blocks.length));
     const next = [...blocks.slice(0, targetIndex), block, ...blocks.slice(targetIndex)];
     syncBlocks(next, targetIndex, { selectedIndices: [targetIndex] });
-    window.setTimeout(() => textareasRef.current[targetIndex]?.focus(), 0);
+    window.setTimeout(() => textareasRef.current[block.id]?.focus(), 0);
   }, [blocks, syncBlocks]);
 
   const getSelectionForBlock = useCallback((blockIndex?: number | null) => {
@@ -950,6 +988,7 @@ export default function BlockEditor() {
     setSelectedIndex(null);
     setSelectedIndices([]);
     setSlash(null);
+    textEditHistoryRef.current = null;
     return true;
   }, [activeTab, dispatch]);
 
@@ -965,6 +1004,7 @@ export default function BlockEditor() {
     setSelectedIndex(null);
     setSelectedIndices([]);
     setSlash(null);
+    textEditHistoryRef.current = null;
     return true;
   }, [activeTab, dispatch]);
 
@@ -1091,7 +1131,7 @@ export default function BlockEditor() {
   const openBlockAIPopover = useCallback((event: MouseEvent<HTMLButtonElement>, blockIndex: number) => {
     event.preventDefault();
     event.stopPropagation();
-    const keepMultiSelection = selectedIndices.includes(blockIndex);
+    const keepMultiSelection = selectedIndicesSet.has(blockIndex);
     if (!keepMultiSelection) {
       setSelectedIndices([blockIndex]);
     }
@@ -1101,7 +1141,7 @@ export default function BlockEditor() {
     setBlockAIPrompt('');
     const { x, y } = blockAIPopoverPosition(event.currentTarget.getBoundingClientRect());
     setBlockAI({ x, y, blockIndex });
-  }, [selectedIndices]);
+  }, [selectedIndicesSet]);
 
   const applySlashCommand = useCallback((command: SlashCommand) => {
     if (!slash) return;
@@ -1118,7 +1158,7 @@ export default function BlockEditor() {
       insertBlockAfter(blockIndex, nextBlock);
     } else {
       replaceBlock(blockIndex, nextBlock);
-      window.setTimeout(() => textareasRef.current[blockIndex]?.focus(), 0);
+      window.setTimeout(() => textareasRef.current[nextBlock.id]?.focus(), 0);
     }
     setSlash(null);
   }, [insertBlockAfter, replaceBlock, runAIAction, slash]);
@@ -1139,17 +1179,27 @@ export default function BlockEditor() {
   const handleTextChange = useCallback((blockIndex: number, value: string) => {
     const block = blocks[blockIndex];
     if (!block) return;
-    replaceBlock(blockIndex, inferMarkdownBlockFromText(block, value) ?? updateBlockContent(block, value));
+    recordTextEditHistory(block);
+    replaceBlock(
+      blockIndex,
+      inferMarkdownBlockFromText(block, value) ?? updateBlockContent(block, value),
+      blockIndex,
+      { recordHistory: false },
+    );
     updateSlashQuery(blockIndex, value);
-  }, [blocks, replaceBlock, updateSlashQuery]);
+  }, [blocks, recordTextEditHistory, replaceBlock, updateSlashQuery]);
 
-  const updateTableBlock = useCallback((blockIndex: number, updater: (table: MarkdownTableModel) => MarkdownTableModel) => {
+  const updateTableBlock = useCallback((
+    blockIndex: number,
+    updater: (table: MarkdownTableModel) => MarkdownTableModel,
+    options: SyncBlocksOptions = {},
+  ) => {
     const block = blocks[blockIndex];
     if (!block || block.type !== 'table') return;
     const table = parseMarkdownTable(tableMarkdownFromBlock(block));
     if (!table) return;
     const nextTable = updater(cloneTableModel(table));
-    replaceBlock(blockIndex, updateBlockContent(block, serializeMarkdownTable(nextTable)));
+    replaceBlock(blockIndex, updateBlockContent(block, serializeMarkdownTable(nextTable)), blockIndex, options);
   }, [blocks, replaceBlock]);
 
   const updateTableCell = useCallback((
@@ -1159,6 +1209,8 @@ export default function BlockEditor() {
     columnIndex: number,
     value: string,
   ) => {
+    const block = blocks[blockIndex];
+    if (block) recordTextEditHistory(block);
     updateTableBlock(blockIndex, (table) => {
       if (section === 'header') {
         table.headers[columnIndex] = value;
@@ -1166,8 +1218,8 @@ export default function BlockEditor() {
         table.rows[rowIndex][columnIndex] = value;
       }
       return table;
-    });
-  }, [updateTableBlock]);
+    }, { recordHistory: false });
+  }, [blocks, recordTextEditHistory, updateTableBlock]);
 
   const addTableRow = useCallback((blockIndex: number) => {
     updateTableBlock(blockIndex, (table) => {
@@ -1241,8 +1293,11 @@ export default function BlockEditor() {
     if (event.key === 'Backspace' && !event.currentTarget.value && blocks.length > 1) {
       event.preventDefault();
       const nextFocusIndex = Math.max(0, blockIndex - 1);
+      const nextFocusBlockId = blocks[nextFocusIndex]?.id;
       deleteBlocksAt([blockIndex]);
-      window.setTimeout(() => textareasRef.current[nextFocusIndex]?.focus(), 0);
+      window.setTimeout(() => {
+        if (nextFocusBlockId) textareasRef.current[nextFocusBlockId]?.focus();
+      }, 0);
       return;
     }
 
@@ -1266,7 +1321,7 @@ export default function BlockEditor() {
   const handleBlockContextMenu = useCallback((event: MouseEvent<HTMLElement>, blockIndex: number) => {
     event.preventDefault();
     event.stopPropagation();
-    const keepMultiSelection = selectedIndices.includes(blockIndex);
+    const keepMultiSelection = selectedIndicesSet.has(blockIndex);
     if (!keepMultiSelection) {
       setSelectedIndex(blockIndex);
       setSelectedIndices([blockIndex]);
@@ -1280,7 +1335,7 @@ export default function BlockEditor() {
       blockIndex,
     });
     setBlockAI(null);
-  }, [selectedIndices]);
+  }, [selectedIndicesSet]);
 
   const contextSelection = blockMenu ? getSelectionForBlock(blockMenu.blockIndex) : [];
   const blockAISelection = blockAI ? getSelectionForBlock(blockAI.blockIndex) : [];
@@ -1467,7 +1522,7 @@ export default function BlockEditor() {
         <div ref={documentRef} className="block-document">
           <div className="block-list">
             {blocks.map((block, index) => {
-              const isSelected = selectedIndex === index || selectedIndices.includes(index);
+              const isSelected = selectedIndex === index || selectedIndicesSet.has(index);
               const isPrimarySelected = selectedIndex === index;
               const isSlashOpen = slash?.blockIndex === index;
               const selectionForThisBlock = isSelected ? getSelectionForBlock(index) : [index];
@@ -1479,16 +1534,16 @@ export default function BlockEditor() {
               const resolvedImage = block.type === 'image' && imagePath
                 ? resolveMarkdownImageSource(imagePath, activeTab.path)
                 : null;
-              const marker = listMarker(blocks, index);
+              const marker = listMarkers[index];
               const isListBlock = isListItemBlock(block);
               const contentStyle = isListBlock
                 ? ({ '--block-list-indent': `${listIndentPx(block)}px` } as CSSProperties)
                 : undefined;
-              const tableModel = block.type === 'table' ? parseMarkdownTable(tableMarkdownFromBlock(block)) : null;
+              const tableModel = block.type === 'table' ? tableModels.get(block.id) || null : null;
               const inlineMarkdownPreview = supportsInlineMarkdownPreview(block);
               return (
                 <div
-                  key={`block-row-${index}`}
+                  key={block.id}
                   data-block-index={index}
                   className={[
                     'block-row',
@@ -1564,7 +1619,11 @@ export default function BlockEditor() {
                             <input
                               value={String(block.attrs?.language || '')}
                               placeholder="shell"
-                              onChange={(event) => replaceBlock(index, updateBlockAttrs(block, { language: event.target.value }))}
+                              onChange={(event) => {
+                                recordTextEditHistory(block);
+                                replaceBlock(index, updateBlockAttrs(block, { language: event.target.value }), index, { recordHistory: false });
+                              }}
+                              onBlur={endTextEditHistory}
                               onClick={(event) => event.stopPropagation()}
                             />
                           </div>
@@ -1599,7 +1658,11 @@ export default function BlockEditor() {
                                 value={imagePath}
                                 placeholder="images/example.png"
                                 onFocus={() => selectBlock(index)}
-                                onChange={(event) => replaceBlock(index, updateBlockAttrs(block, { src: event.target.value }))}
+                                onChange={(event) => {
+                                  recordTextEditHistory(block);
+                                  replaceBlock(index, updateBlockAttrs(block, { src: event.target.value }), index, { recordHistory: false });
+                                }}
+                                onBlur={endTextEditHistory}
                               />
                             </label>
                           </div>
@@ -1631,6 +1694,7 @@ export default function BlockEditor() {
                                               setSelectedIndex(index);
                                               setSelectedIndices([index]);
                                             }}
+                                            onBlur={endTextEditHistory}
                                             onChange={(event) => updateTableCell(index, 'header', 0, columnIndex, event.target.value)}
                                           />
                                           <button
@@ -1666,6 +1730,7 @@ export default function BlockEditor() {
                                                 setSelectedIndex(index);
                                                 setSelectedIndices([index]);
                                               }}
+                                              onBlur={endTextEditHistory}
                                               onChange={(event) => updateTableCell(index, 'body', rowIndex, columnIndex, event.target.value)}
                                             />
                                           </div>
@@ -1703,6 +1768,7 @@ export default function BlockEditor() {
                               tabIndex={-1}
                               aria-hidden="true"
                               onChange={(event) => handleTextChange(index, event.target.value)}
+                              onBlur={endTextEditHistory}
                               onKeyDown={(event) => handleTextareaKeyDown(event, index)}
                             />
                           </div>
@@ -1733,7 +1799,8 @@ export default function BlockEditor() {
                             )}
                             <textarea
                               ref={(node) => {
-                                textareasRef.current[index] = node;
+                                if (node) textareasRef.current[block.id] = node;
+                                else delete textareasRef.current[block.id];
                                 if (!node || node.dataset.blockResizeKey === textareaResizeKey) return;
                                 node.dataset.blockResizeKey = textareaResizeKey;
                                 resizeTextarea(node);
@@ -1749,6 +1816,7 @@ export default function BlockEditor() {
                                 setSelectedIndex(index);
                                 setSelectedIndices([index]);
                               }}
+                              onBlur={endTextEditHistory}
                               onKeyDown={(event) => handleTextareaKeyDown(event, index)}
                               onClick={(event) => event.stopPropagation()}
                             />
