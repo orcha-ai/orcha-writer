@@ -1,4 +1,4 @@
-import { Button, Dropdown, Input, Switch, Tooltip } from 'antd';
+import { Button, Dropdown, Input, Segmented, Switch, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import { Bot, Brain, ChevronDown, FileText, Paperclip, Send, Settings, Square, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -11,9 +11,19 @@ export interface AIInputAttachment {
   description: string;
 }
 
+export type AIContextMode = 'auto' | 'selection' | 'document';
+
+export interface AIInputContextPreview {
+  labels: string[];
+  hasSelection: boolean;
+  warning?: string;
+}
+
 interface AIInputBoxProps {
   disabled?: boolean;
   sending?: boolean;
+  value: string;
+  onChangeValue: (value: string) => void;
   onSend: (value: string) => void;
   onCancel?: () => void;
   modelLabel?: string;
@@ -31,6 +41,9 @@ interface AIInputBoxProps {
   thinkingEnabled?: boolean;
   thinkingBudget?: number;
   onChangeThinking?: (enabled: boolean) => void;
+  contextMode: AIContextMode;
+  onChangeContextMode: (mode: AIContextMode) => void;
+  getContextPreview?: (value: string, highlightedCommandId: string | null) => AIInputContextPreview | null;
 }
 
 const MANAGE_AGENTS_KEY = '__manage_agents';
@@ -44,6 +57,8 @@ function slashQuery(input: string): string | null {
 export function AIInputBox({
   disabled,
   sending,
+  value,
+  onChangeValue,
   onSend,
   onCancel,
   modelLabel,
@@ -61,10 +76,12 @@ export function AIInputBox({
   thinkingEnabled,
   thinkingBudget,
   onChangeThinking,
+  contextMode,
+  onChangeContextMode,
+  getContextPreview,
 }: AIInputBoxProps) {
   const language = useSettingsStore(s => s.general.language);
   const t = (value: string, params?: Record<string, string | number>) => translateText(language, value, params);
-  const [value, setValue] = useState('');
   const [highlightedCommandId, setHighlightedCommandId] = useState<string | null>(null);
   const query = slashQuery(value);
   const commandMenuOpen = query !== null && !disabled && !sending;
@@ -80,17 +97,21 @@ export function AIInputBox({
       : commands;
     return matched.slice(0, 8);
   }, [commands, query]);
+  const contextPreview = useMemo(
+    () => getContextPreview?.(value, highlightedCommandId) || null,
+    [getContextPreview, highlightedCommandId, value],
+  );
 
   const submit = () => {
     const trimmed = value.trim();
     if (!trimmed) return;
     onSend(trimmed);
-    setValue('');
+    onChangeValue('');
   };
 
   const runCommand = (commandId: string) => {
     onRunCommand(commandId);
-    setValue('');
+    onChangeValue('');
   };
 
   useEffect(() => {
@@ -161,12 +182,37 @@ export function AIInputBox({
           </button>
         </div>
       )}
+      {contextPreview && (
+        <div className={`ai-input-context-preview${contextPreview.warning ? ' has-warning' : ''}`}>
+          <div className="ai-input-context-main">
+            <span className="ai-input-context-label">
+              {contextPreview.warning ? t('需要上下文') : t('将引用')}
+            </span>
+            <span className="ai-input-context-tags">
+              {(contextPreview.labels.length > 0 ? contextPreview.labels : [t('仅手动输入')]).map((label) => (
+                <span key={label} className="ai-input-context-tag">{label}</span>
+              ))}
+            </span>
+            {contextPreview.warning && <span className="ai-input-context-warning">{contextPreview.warning}</span>}
+          </div>
+          <Segmented
+            size="small"
+            value={contextMode}
+            options={[
+              { label: t('自动'), value: 'auto' },
+              { label: t('选区'), value: 'selection' },
+              { label: t('全文'), value: 'document' },
+            ]}
+            onChange={(nextValue) => onChangeContextMode(nextValue as AIContextMode)}
+          />
+        </div>
+      )}
       <Input.TextArea
         value={value}
         placeholder={t('问 AI，输入 / 调用快捷指令...')}
         autoSize={{ minRows: 2, maxRows: 5 }}
         disabled={disabled || sending}
-        onChange={(event) => setValue(event.target.value)}
+        onChange={(event) => onChangeValue(event.target.value)}
         onKeyDown={(event) => {
           if (commandMenuOpen && filteredCommands.length > 0) {
             const currentIndex = Math.max(0, filteredCommands.findIndex((command) => command.id === highlightedCommandId));
@@ -190,7 +236,7 @@ export function AIInputBox({
           }
           if (commandMenuOpen && event.key === 'Escape') {
             event.preventDefault();
-            setValue('');
+            onChangeValue('');
             return;
           }
           if (event.key === 'Enter' && !event.shiftKey) {

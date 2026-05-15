@@ -20,20 +20,13 @@ export function ContextBox({ context }: ContextBoxProps) {
   const [expanded, setExpanded] = useState(false);
 
   if (!context) {
-    return (
-      <div className="ai-context-box">
-        <div className="ai-section-row">
-          <span className="ai-section-label">{t('本次引用上下文')}</span>
-        </div>
-        <div className="ai-muted">{t('尚未发送请求')}</div>
-      </div>
-    );
+    return null;
   }
 
   return (
-    <div className="ai-context-box">
+    <div className="ai-context-box is-compact">
       <div className="ai-section-row">
-        <span className="ai-section-label">{t('本次引用上下文')}</span>
+        <span className="ai-section-label">{t('上次引用')}</span>
         <Button
           type="text"
           size="small"

@@ -15,6 +15,7 @@ import {
   getTextFileDialogFilters,
   normalizeTextFileName,
 } from '../utils/savePaths';
+import { confirmCloseTabs } from '../utils/unsavedTabs';
 import { isEnglishLanguage, translateText } from '../i18n';
 
 interface MenuItem {
@@ -156,6 +157,13 @@ export default function MenuBar() {
     }
   }, [dispatch, fileSettings.hidePatterns, state.activeTabId, state.tabs, state.workspacePath, t, textFileDialogFilters]);
 
+  const handleCloseActiveTab = useCallback(async () => {
+    const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
+    if (!activeTab) return;
+    if (!(await confirmCloseTabs([activeTab], language))) return;
+    dispatch({ type: 'CLOSE_TAB', payload: activeTab.id });
+  }, [dispatch, language, state.activeTabId, state.tabs]);
+
   const handleExportHTML = useCallback(async () => {
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
     if (!activeTab) return;
@@ -265,7 +273,7 @@ ${htmlBody}
         { label: t('保存'), shortcut: '⌘S', action: handleSave },
         { label: t('另存为'), shortcut: '⌘⇧S', action: handleSaveAs },
         { divider: true },
-        { label: t('关闭文件'), shortcut: '⌘W', action: () => state.activeTabId && dispatch({ type: 'CLOSE_TAB', payload: state.activeTabId }) },
+        { label: t('关闭文件'), shortcut: '⌘W', action: () => { void handleCloseActiveTab(); } },
         { label: t('最近打开') },
         { divider: true },
         { label: t('退出'), shortcut: '⌘Q' },
@@ -366,6 +374,7 @@ ${htmlBody}
     dispatch,
     handleExportHTML,
     handleExportPDF,
+    handleCloseActiveTab,
     handleNewFile,
     handleNewTextFile,
     handleOpenFile,

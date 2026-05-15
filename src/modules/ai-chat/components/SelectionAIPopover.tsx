@@ -9,6 +9,7 @@ export interface SelectionAIPopoverProps {
   visible: boolean;
   selectionText: string;
   position: { x: number; y: number };
+  placement?: 'above' | 'below';
   commands: AICommandPreset[];
   onRunCommand: (commandId: string) => void;
   onSubmitCustomPrompt: (prompt: string) => void;
@@ -28,6 +29,7 @@ export function SelectionAIPopover({
   visible,
   selectionText,
   position,
+  placement = 'above',
   commands,
   onRunCommand,
   onSubmitCustomPrompt,
@@ -71,7 +73,7 @@ export function SelectionAIPopover({
 
   return (
     <div
-      className="ai-selection-popover"
+      className={`ai-selection-popover is-${placement}`}
       style={{ left: position.x, top: position.y }}
       onMouseDown={(event) => {
         const target = event.target as HTMLElement;

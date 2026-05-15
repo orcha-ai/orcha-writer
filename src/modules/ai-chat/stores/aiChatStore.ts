@@ -21,7 +21,7 @@ interface AIChatState {
   getOrCreateConversation: (target: ConversationTarget) => AIConversation;
   setConversationAgent: (conversationId: string, agentId: string) => void;
   addMessage: (conversationId: string, message: AIMessage) => void;
-  updateMessage: (conversationId: string, messageId: string, partial: Partial<AIMessage>) => void;
+  updateMessage: (conversationId: string, messageId: string, partial: Partial<AIMessage>, options?: { persist?: boolean }) => void;
   clearConversation: (conversationId: string) => void;
   appendRequestLog: (log: AIRequestLog) => void;
 }
@@ -106,7 +106,7 @@ export const useAIChatStore = create<AIChatState>((set, get) => ({
     void get().save();
   },
 
-  updateMessage: (conversationId, messageId, partial) => {
+  updateMessage: (conversationId, messageId, partial, options) => {
     set((state) => ({
       conversations: state.conversations.map((conversation) => (
         conversation.id === conversationId
@@ -122,7 +122,9 @@ export const useAIChatStore = create<AIChatState>((set, get) => ({
           : conversation
       )),
     }));
-    void get().save();
+    if (options?.persist !== false) {
+      void get().save();
+    }
   },
 
   clearConversation: (conversationId) => {

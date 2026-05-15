@@ -31,9 +31,10 @@ export interface EditorBridge {
   getTextInRange(range: EditorRange): string;
   getCursorTextAround(options?: CursorAroundOptions): CursorAroundText;
   restoreSelection(range: EditorRange): void;
-  insertAtCursor(text: string): void;
-  replaceRange(range: EditorRange, text: string): void;
-  replaceSelection(text: string): void;
-  appendToDocument(text: string): void;
+  insertAtCursor(text: string): EditorRange | null;
+  replaceRange(range: EditorRange, text: string): EditorRange | null;
+  replaceSelection(text: string): EditorRange | null;
+  appendToDocument(text: string): EditorRange | null;
+  flashRange(range: EditorRange): void;
   focusEditor(): void;
 }

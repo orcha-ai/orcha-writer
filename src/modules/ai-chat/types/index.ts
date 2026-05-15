@@ -124,6 +124,8 @@ export interface AIResultAction {
     | 'create_markdown_file'
     | 'copy'
     | 'regenerate'
+    | 'edit_retry'
+    | 'open_settings'
     | 'cancel';
   label: string;
   primary?: boolean;

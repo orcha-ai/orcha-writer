@@ -1,5 +1,5 @@
 import { Button, Tooltip } from 'antd';
-import { Check, Clipboard, Copy, FilePlus, RotateCcw, SendToBack } from 'lucide-react';
+import { Check, Clipboard, Copy, FilePlus, PenLine, RotateCcw, SendToBack, Settings } from 'lucide-react';
 import { DiffCard } from './DiffCard';
 import type { AIResultAction, AIResultCard as AIResultCardType } from '../types';
 
@@ -20,6 +20,10 @@ function iconForAction(type: AIResultAction['type']) {
       return <FilePlus size={15} />;
     case 'regenerate':
       return <RotateCcw size={15} />;
+    case 'edit_retry':
+      return <PenLine size={15} />;
+    case 'open_settings':
+      return <Settings size={15} />;
     case 'copy':
     default:
       return <Copy size={15} />;
@@ -35,13 +39,16 @@ export function ResultCard({ card, onAction }: ResultCardProps) {
           {card.actions.slice(0, 4).map((action) => (
             <Tooltip key={action.type} title={action.label}>
               <Button
+                className={action.primary ? 'ai-result-primary-action' : undefined}
                 type={action.primary ? 'primary' : 'text'}
                 size="small"
-                shape="circle"
+                shape={action.primary ? 'round' : 'circle'}
                 icon={iconForAction(action.type)}
                 aria-label={action.label}
                 onClick={() => onAction(action, card)}
-              />
+              >
+                {action.primary ? action.label : null}
+              </Button>
             </Tooltip>
           ))}
         </div>

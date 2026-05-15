@@ -26,7 +26,7 @@ import type {
 } from '../types';
 import { DEFAULT_AI_SETTINGS } from '../types';
 import { AIChatHeader } from './AIChatHeader';
-import { AIInputBox, type AIInputAttachment } from './AIInputBox';
+import { AIInputBox, type AIContextMode, type AIInputAttachment, type AIInputContextPreview } from './AIInputBox';
 import { ContextBox } from './ContextBox';
 import { MessageList } from './MessageList';
 import { SelectionAIPopover } from './SelectionAIPopover';
@@ -163,12 +163,15 @@ export function AIChatPanel({
   const [selection, setSelection] = useState<EditorSelection | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [deepThinkingEnabled, setDeepThinkingEnabled] = useState(false);
+  const [draftValue, setDraftValue] = useState('');
+  const [contextMode, setContextMode] = useState<AIContextMode>('auto');
   const [pendingImportFile, setPendingImportFile] = useState<{ path: string; name: string } | null>(null);
   const [convertingImport, setConvertingImport] = useState(false);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const previousMessageCountRef = useRef(0);
   const previousConversationIdRef = useRef<string | null>(null);
   const shouldFollowResponseRef = useRef(true);
+  const suppressSelectionUntilRef = useRef(0);
   const activeRequestRef = useRef<{
     abort: () => void;
     conversationId: string;
@@ -190,7 +193,13 @@ export function AIChatPanel({
       setSelection(null);
       return undefined;
     }
-    return subscribeEditorSelection(setSelection);
+    return subscribeEditorSelection((nextSelection) => {
+      if (Date.now() < suppressSelectionUntilRef.current) {
+        setSelection(null);
+        return;
+      }
+      setSelection(nextSelection);
+    });
   }, [appState.viewMode]);
 
   const conversation = useMemo(
@@ -233,6 +242,63 @@ export function AIChatPanel({
       description: t('PDF · 文字版提取 · 本地处理'),
     };
   }, [pendingImportFile, t]);
+
+  const resolveInputStrategy = useCallback((
+    command: AICommandPreset | undefined,
+    hasSelection: boolean,
+    explicitStrategy?: AIContextStrategy,
+  ): AIContextStrategy => {
+    if (explicitStrategy) return explicitStrategy;
+    if (contextMode === 'selection') return 'selection_with_cursor';
+    if (contextMode === 'document') return 'current_document';
+    return command?.contextStrategy || (hasSelection ? 'selection_with_cursor' : 'current_document');
+  }, [contextMode]);
+
+  const getContextPreview = useCallback((
+    inputValue: string,
+    highlightedCommandId: string | null,
+  ): AIInputContextPreview => {
+    const command = highlightedCommandId ? findCommand(highlightedCommandId, allCommands) : undefined;
+    const selectionSnapshot = selection?.text.trim() ? selection : editorBridge.getSelection();
+    const selectedLength = selectionSnapshot?.text.trim()
+      ? Array.from(selectionSnapshot.text.trim()).length
+      : 0;
+    const documentLength = Array.from(editorBridge.getDocumentContent()).length;
+    const hasSelection = selectedLength > 0;
+    const strategy = resolveInputStrategy(command, hasSelection);
+    const labels: string[] = [];
+
+    if (inputValue.trim()) labels.push(t('手动输入'));
+    if (strategy === 'selection_only' || strategy === 'selection_with_cursor') {
+      if (hasSelection) labels.push(`${t('选中文本')} ${t('{count} 字', { count: selectedLength })}`);
+      if (strategy === 'selection_with_cursor') labels.push(t('光标附近'));
+    }
+    if (strategy === 'current_document' || strategy === 'document_summary') {
+      labels.push(`${t('当前文档')} ${t('{count} 字', { count: documentLength })}`);
+    }
+
+    return {
+      labels,
+      hasSelection,
+      warning: (strategy === 'selection_only' || strategy === 'selection_with_cursor') && !hasSelection
+        ? t('需要先选中文本')
+        : undefined,
+    };
+  }, [allCommands, editorBridge, resolveInputStrategy, selection, t]);
+
+  const flashEditorRange = useCallback((range: ReturnType<EditorBridge['insertAtCursor']>) => {
+    if (!range) return;
+    suppressSelectionUntilRef.current = Date.now() + 1400;
+    setSelection(null);
+    editorBridge.flashRange(range);
+  }, [editorBridge]);
+
+  const focusAIInput = useCallback(() => {
+    window.setTimeout(() => {
+      const input = document.querySelector<HTMLTextAreaElement>('.ai-input-box textarea');
+      input?.focus();
+    });
+  }, []);
 
   useEffect(() => {
     setDeepThinkingEnabled(Boolean(model?.thinkingSupported && model.thinkingEnabled));
@@ -359,7 +425,7 @@ export function AIChatPanel({
         content: latestStreamUpdate.content || (thinking.enabled ? '' : t('正在生成...')),
         reasoningContent: latestStreamUpdate.reasoningContent,
         status: 'streaming',
-      });
+      }, { persist: false });
     };
 
     try {
@@ -453,7 +519,12 @@ export function AIChatPanel({
             type: 'error',
             title: t('请求失败'),
             content: errorMessage,
-            actions: [{ type: 'regenerate', label: t('重新生成'), primary: true }],
+            actions: [
+              { type: 'regenerate', label: t('重新生成'), primary: true },
+              { type: 'edit_retry', label: t('编辑后重试') },
+              { type: 'open_settings', label: t('打开模型设置') },
+              { type: 'copy', label: t('复制错误信息') },
+            ],
           },
         ],
       });
@@ -515,7 +586,7 @@ export function AIChatPanel({
     const command = commandId ? findCommand(commandId, allCommands) : undefined;
     const selectionSnapshot = override?.selection ?? editorBridge.getSelection();
     const hasSelection = Boolean(selectionSnapshot?.text.trim());
-    const strategy = override?.strategy || command?.contextStrategy || (hasSelection ? 'selection_with_cursor' : 'current_document');
+    const strategy = resolveInputStrategy(command, hasSelection, override?.strategy);
     const resultMode = override?.resultMode || command?.resultMode || 'markdown';
     const effectiveThinkingEnabled = Boolean(
       model?.thinkingSupported && (override?.deepThinkingEnabled ?? deepThinkingEnabled),
@@ -550,6 +621,7 @@ export function AIChatPanel({
     editorBridge,
     model?.thinkingBudget,
     model?.thinkingSupported,
+    resolveInputStrategy,
     sendWithContext,
     t,
   ]);
@@ -588,6 +660,24 @@ export function AIChatPanel({
     void sendMessage(previousUserMessage.content, previousUserMessage.commandId);
   }, [conversation, sendMessage, t]);
 
+  const editRetryFrom = useCallback((assistantMessage: AIMessage) => {
+    if (!conversation) return;
+    const index = conversation.messages.findIndex((item) => item.id === assistantMessage.id);
+    const previousUserMessage = conversation.messages
+      .slice(0, index)
+      .reverse()
+      .find((item) => item.role === 'user');
+    if (!previousUserMessage) {
+      message.warning(t('没有可重新生成的上一条请求'));
+      return;
+    }
+
+    setDraftValue(previousUserMessage.content);
+    setCollapsed(false);
+    focusAIInput();
+    message.info(t('已放回输入框，可修改后重试'));
+  }, [conversation, focusAIInput, t]);
+
   const handleRunCommand = useCallback((commandId: string) => {
     const command = findCommand(commandId, allCommands);
     const selectionSnapshot = selection?.text.trim() ? selection : editorBridge.getSelection();
@@ -596,6 +686,19 @@ export function AIChatPanel({
     }
     setSelection(null);
     void sendMessage(command?.userPromptTemplate || command?.name || '', commandId, {
+      selection: selectionSnapshot,
+    });
+  }, [allCommands, editorBridge, selection, sendMessage]);
+
+  const handleRunSelectionCommand = useCallback((commandId: string) => {
+    const command = findCommand(commandId, allCommands);
+    const selectionSnapshot = selection?.text.trim() ? selection : editorBridge.getSelection();
+    if (selectionSnapshot?.range) {
+      editorBridge.restoreSelection(selectionSnapshot.range);
+    }
+    setSelection(null);
+    void sendMessage(command?.userPromptTemplate || command?.name || '', commandId, {
+      strategy: command?.contextStrategy || 'selection_with_cursor',
       selection: selectionSnapshot,
     });
   }, [allCommands, editorBridge, selection, sendMessage]);
@@ -693,10 +796,33 @@ export function AIChatPanel({
     }
   }, [addMessage, conversation, convertingImport, language, pendingImportFile, t, updateMessage]);
 
+  const handleClearConversation = useCallback(async () => {
+    if (!conversation || messages.length === 0) return;
+    const confirmed = await confirmAction(
+      t('清空当前 AI 对话？'),
+      t('将清空当前文档的 AI 对话记录，不会影响正文。'),
+      { okText: t('清空'), cancelText: t('取消'), kind: 'warning' },
+    );
+    if (!confirmed) return;
+    clearConversation(conversation.id);
+  }, [clearConversation, conversation, messages.length, t]);
+
   const handleResultAction = useCallback(async (action: AIResultAction, card: AIResultCard, sourceMessage: AIMessage) => {
     const text = cardText(card);
     if (action.type === 'regenerate') {
       regenerateFrom(sourceMessage);
+      return;
+    }
+    if (action.type === 'edit_retry') {
+      editRetryFrom(sourceMessage);
+      return;
+    }
+    if (action.type === 'open_settings') {
+      if (onOpenSettings) {
+        onOpenSettings();
+      } else {
+        message.info(t('设置入口不可用'));
+      }
       return;
     }
 
@@ -712,13 +838,15 @@ export function AIChatPanel({
     }
 
     if (action.type === 'insert_at_cursor') {
-      editorBridge.insertAtCursor(text);
+      const range = editorBridge.insertAtCursor(text);
+      flashEditorRange(range);
       message.success(t('已插入光标处'));
       return;
     }
 
     if (action.type === 'append_to_document') {
-      editorBridge.appendToDocument(text);
+      const range = editorBridge.appendToDocument(text);
+      flashEditorRange(range);
       message.success(t('已追加到文末'));
       return;
     }
@@ -770,21 +898,21 @@ export function AIChatPanel({
         if (!confirmed) return;
       }
 
-      editorBridge.replaceRange(targetRange, text);
+      const range = editorBridge.replaceRange(targetRange, text);
+      flashEditorRange(range);
       updateMessage(sourceMessage.conversationId, sourceMessage.id, {
         resultCards: resultCardsWithAppliedChange(sourceMessage, card),
       });
       message.success(t('已应用修改'));
     }
-  }, [editorBridge, onCreateMarkdownFile, regenerateFrom, t, updateMessage]);
+  }, [editRetryFrom, editorBridge, flashEditorRange, onCreateMarkdownFile, onOpenSettings, regenerateFrom, t, updateMessage]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey;
       if (mod && event.key.toLowerCase() === 'j') {
         event.preventDefault();
-        const input = document.querySelector<HTMLTextAreaElement>('.ai-input-box textarea');
-        input?.focus();
+        focusAIInput();
       }
       if (mod && event.shiftKey && event.key.toLowerCase() === 'r') {
         const lastAssistant = messages.slice().reverse().find((item) => item.role === 'assistant');
@@ -794,14 +922,29 @@ export function AIChatPanel({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [messages, regenerateFrom]);
+  }, [focusAIInput, messages, regenerateFrom]);
 
-  const selectionPosition = selection?.rect
-    ? {
-        x: Math.min(window.innerWidth - 180, Math.max(180, selection.rect.left + selection.rect.width / 2)),
-        y: Math.max(72, selection.rect.top - 12),
-      }
-    : { x: window.innerWidth / 2, y: 120 };
+  const selectionLayout = selection?.rect
+    ? (() => {
+        const width = 280;
+        const margin = 14;
+        const minTop = 72;
+        const estimatedHeight = 150;
+        const rectBottom = selection.rect.top + selection.rect.height;
+        const spaceAbove = selection.rect.top - minTop;
+        const spaceBelow = window.innerHeight - rectBottom - margin;
+        const placement = spaceAbove < estimatedHeight && spaceBelow > spaceAbove ? 'below' as const : 'above' as const;
+        const x = Math.min(
+          window.innerWidth - margin - width / 2,
+          Math.max(margin + width / 2, selection.rect.left + selection.rect.width / 2),
+        );
+        const y = placement === 'below'
+          ? Math.min(window.innerHeight - estimatedHeight - margin, rectBottom + 12)
+          : Math.max(minTop, selection.rect.top - 12);
+
+        return { position: { x, y }, placement };
+      })()
+    : { position: { x: window.innerWidth / 2, y: 120 }, placement: 'below' as const };
   const selectionCommands = commands.filter((command) => command.contextStrategy !== 'current_document');
 
   if (collapsed) {
@@ -825,7 +968,7 @@ export function AIChatPanel({
     <aside className="ai-chat-panel">
       <AIChatHeader
         onOpenSettings={onOpenSettings}
-        onClear={conversation ? () => clearConversation(conversation.id) : undefined}
+        onClear={conversation && messages.length > 0 ? handleClearConversation : undefined}
         onClose={onClose || (() => setCollapsed(true))}
       />
       {!model && (
@@ -844,6 +987,8 @@ export function AIChatPanel({
       <AIInputBox
         sending={sending}
         disabled={!conversation || convertingImport}
+        value={draftValue}
+        onChangeValue={setDraftValue}
         modelLabel={modelLabel(model?.model, provider?.name, language)}
         agents={agents}
         currentAgent={currentAgent}
@@ -859,6 +1004,9 @@ export function AIChatPanel({
         thinkingEnabled={deepThinkingEnabled}
         thinkingBudget={thinkingBudget}
         onChangeThinking={setDeepThinkingEnabled}
+        contextMode={contextMode}
+        onChangeContextMode={setContextMode}
+        getContextPreview={getContextPreview}
         onCancel={cancelCurrentRequest}
         onSend={(value) => void sendMessage(value)}
       />
@@ -870,9 +1018,10 @@ export function AIChatPanel({
           && selectionCommands.length > 0,
         )}
         selectionText={selection?.text || ''}
-        position={selectionPosition}
+        position={selectionLayout.position}
+        placement={selectionLayout.placement}
         commands={selectionCommands}
-        onRunCommand={handleRunCommand}
+        onRunCommand={handleRunSelectionCommand}
         onSubmitCustomPrompt={(prompt) => {
           const selectionSnapshot = selection?.text.trim() ? selection : editorBridge.getSelection();
           if (selectionSnapshot?.range) {

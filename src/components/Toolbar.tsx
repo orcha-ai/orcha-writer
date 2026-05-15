@@ -30,6 +30,7 @@ import { getActiveEditorView, pasteClipboardImagesIntoActiveEditor } from './Edi
 import { effectiveViewModeForDocument, isMarkdownDocument, isMarkdownViewMode } from '../utils/documentCapabilities';
 import { basename, formatMarkdownImageUrl, markdownImagePathForDocument, stripExtension } from '../utils/markdownImages';
 import { renderMarkdownForExport } from '../utils/exportMarkdown';
+import { confirmCloseTabs } from '../utils/unsavedTabs';
 import {
   availableTextFilePath,
   decodeDialogPath,
@@ -616,6 +617,13 @@ ${htmlBody}
     dispatch({ type: 'SET_SIDEBAR_TAB', payload: 'recent' });
   }, [dispatch, setSidebarVisible, state.sidebarVisible]);
 
+  const handleCloseActiveTab = useCallback(async () => {
+    const tab = state.tabs.find(item => item.id === state.activeTabId);
+    if (!tab) return;
+    if (!(await confirmCloseTabs([tab], language))) return;
+    dispatch({ type: 'CLOSE_TAB', payload: tab.id });
+  }, [dispatch, language, state.activeTabId, state.tabs]);
+
   const handleCopy = useCallback(async () => {
     const text = selectedEditorText();
     if (!text) return;
@@ -845,7 +853,7 @@ ${htmlBody}
           handleSaveAs();
           break;
         case 'close_file':
-          if (state.activeTabId) dispatch({ type: 'CLOSE_TAB', payload: state.activeTabId });
+          await handleCloseActiveTab();
           break;
         case 'recent_files':
           handleRecentFilesMenu();
@@ -1007,6 +1015,7 @@ ${htmlBody}
     handleExportHTML,
     handleSaveAs,
     handleRecentFilesMenu,
+    handleCloseActiveTab,
     handleCopy,
     handleCut,
     handlePaste,

@@ -6,6 +6,7 @@ import { useSettingsStore } from '../store';
 import { X } from 'lucide-react';
 import { rename } from '../utils/fs';
 import { translateText } from '../i18n';
+import { confirmCloseTabs } from '../utils/unsavedTabs';
 
 function renamedPath(path: string, nextName: string): string {
   const separatorIndex = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
@@ -16,7 +17,7 @@ export default function TabBar() {
   const { state, dispatch } = useApp();
   const appearance = useSettingsStore(s => s.appearance);
   const language = useSettingsStore(s => s.general.language);
-  const t = (value: string) => translateText(language, value);
+  const t = useCallback((value: string) => translateText(language, value), [language]);
   const tabBarRef = useRef<HTMLDivElement | null>(null);
   const activeTabRef = useRef<HTMLDivElement | null>(null);
   const renameInFlightRef = useRef(false);
@@ -95,6 +96,24 @@ export default function TabBar() {
     }
   }, [cancelRename, dispatch, renameValue, renamingTabId, state.tabs]);
 
+  const closeTab = useCallback(async (tabId: string) => {
+    const tab = state.tabs.find(item => item.id === tabId);
+    if (!tab) return;
+    if (!(await confirmCloseTabs([tab], language))) return;
+    dispatch({ type: 'CLOSE_TAB', payload: tabId });
+  }, [dispatch, language, state.tabs]);
+
+  const closeOtherTabs = useCallback(async (tabId: string) => {
+    const tabsToClose = state.tabs.filter(item => item.id !== tabId);
+    if (!(await confirmCloseTabs(tabsToClose, language))) return;
+    dispatch({ type: 'CLOSE_OTHER_TABS', payload: tabId });
+  }, [dispatch, language, state.tabs]);
+
+  const closeAllTabs = useCallback(async () => {
+    if (!(await confirmCloseTabs(state.tabs, language))) return;
+    dispatch({ type: 'CLOSE_ALL_TABS' });
+  }, [dispatch, language, state.tabs]);
+
   const handleTabContextMenu = useCallback((event: React.MouseEvent<HTMLDivElement>, tabId: string) => {
     event.preventDefault();
     event.stopPropagation();
@@ -102,13 +121,13 @@ export default function TabBar() {
     setRenameValue('');
 
     const items: NonNullable<MenuOptions['items']> = [
-      { text: t('关闭'), action: () => dispatch({ type: 'CLOSE_TAB', payload: tabId }) },
+      { text: t('关闭'), action: () => { void closeTab(tabId); } },
       {
         text: t('关闭其他标签'),
         enabled: state.tabs.length > 1,
-        action: () => dispatch({ type: 'CLOSE_OTHER_TABS', payload: tabId }),
+        action: () => { void closeOtherTabs(tabId); },
       },
-      { text: t('关闭所有标签'), action: () => dispatch({ type: 'CLOSE_ALL_TABS' }) },
+      { text: t('关闭所有标签'), action: () => { void closeAllTabs(); } },
     ];
 
     void Menu
@@ -117,11 +136,11 @@ export default function TabBar() {
       .catch(error => {
         console.error('Failed to open tab context menu:', error);
       });
-  }, [dispatch, state.tabs.length, t]);
+  }, [closeAllTabs, closeOtherTabs, closeTab, state.tabs.length, t]);
 
   const handleCloseTab = useCallback((tabId: string) => {
-    dispatch({ type: 'CLOSE_TAB', payload: tabId });
-  }, [dispatch]);
+    void closeTab(tabId);
+  }, [closeTab]);
 
   if (state.tabs.length === 0) return null;
   if (!appearance.showTabs) return null;
