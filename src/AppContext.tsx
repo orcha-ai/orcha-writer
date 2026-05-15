@@ -6,6 +6,7 @@ import type {
 } from './types';
 import { defaultAppearanceSettings, defaultEditorSettings } from './types';
 import { readConfig, writeConfig } from './config';
+import { effectiveViewModeForDocument } from './utils/documentCapabilities';
 
 type AppAction =
   | { type: 'SET_VIEW_MODE'; payload: ViewMode }
@@ -90,10 +91,18 @@ function rebaseFileTree(nodes: FileNode[], oldPath: string, newPath: string, nam
   });
 }
 
+function activeTabForState(state: AppState, activeTabId = state.activeTabId): TabFile | null {
+  return activeTabId ? state.tabs.find(tab => tab.id === activeTabId) ?? null : null;
+}
+
+function viewModeForActiveTab(state: AppState, requestedMode = state.viewMode, activeTabId = state.activeTabId): ViewMode {
+  return effectiveViewModeForDocument(activeTabForState(state, activeTabId), requestedMode);
+}
+
 function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'SET_VIEW_MODE':
-      return { ...state, viewMode: action.payload };
+      return { ...state, viewMode: viewModeForActiveTab(state, action.payload) };
     case 'SET_THEME':
       return { ...state, theme: action.payload };
     case 'TOGGLE_SIDEBAR':
@@ -109,19 +118,28 @@ function appReducer(state: AppState, action: AppAction): AppState {
     case 'OPEN_TAB': {
       const existing = state.tabs.find(t => t.path === action.payload.path);
       if (existing) {
-        return { ...state, activeTabId: existing.id };
+        return {
+          ...state,
+          activeTabId: existing.id,
+          viewMode: effectiveViewModeForDocument(existing, state.viewMode),
+        };
       }
       const newTab: TabFile = {
         ...action.payload,
         saved: true,
         isDraft: action.payload.isDraft || false,
       };
-      return { ...state, tabs: [...state.tabs, newTab], activeTabId: newTab.id };
+      return {
+        ...state,
+        tabs: [...state.tabs, newTab],
+        activeTabId: newTab.id,
+        viewMode: effectiveViewModeForDocument(newTab, state.viewMode),
+      };
     }
     case 'SAVE_TAB_AS': {
       const existing = state.tabs.find(t => t.id === action.payload.id && t.id !== action.payload.oldId);
       if (existing) {
-        return {
+        const nextState = {
           ...state,
           tabs: state.tabs
             .filter(t => t.id !== action.payload.oldId)
@@ -139,9 +157,13 @@ function appReducer(state: AppState, action: AppAction): AppState {
             )),
           activeTabId: existing.id,
         };
+        return {
+          ...nextState,
+          viewMode: viewModeForActiveTab(nextState),
+        };
       }
 
-      return {
+      const nextState = {
         ...state,
         tabs: state.tabs.map(t => (
           t.id === action.payload.oldId
@@ -158,6 +180,10 @@ function appReducer(state: AppState, action: AppAction): AppState {
         )),
         activeTabId: action.payload.id,
       };
+      return {
+        ...nextState,
+        viewMode: viewModeForActiveTab(nextState),
+      };
     }
     case 'CLOSE_TAB': {
       const idx = state.tabs.findIndex(t => t.id === action.payload);
@@ -167,18 +193,32 @@ function appReducer(state: AppState, action: AppAction): AppState {
       if (state.activeTabId === action.payload) {
         newActive = newTabs.length > 0 ? newTabs[Math.min(idx, newTabs.length - 1)].id : null;
       }
-      return { ...state, tabs: newTabs, activeTabId: newActive };
-    }
-    case 'CLOSE_OTHER_TABS':
+      const nextState = { ...state, tabs: newTabs, activeTabId: newActive };
       return {
+        ...nextState,
+        viewMode: viewModeForActiveTab(nextState),
+      };
+    }
+    case 'CLOSE_OTHER_TABS': {
+      const nextTabs = state.tabs.filter(t => t.id === action.payload);
+      const nextState = {
         ...state,
-        tabs: state.tabs.filter(t => t.id === action.payload),
+        tabs: nextTabs,
         activeTabId: action.payload,
       };
+      return {
+        ...nextState,
+        viewMode: viewModeForActiveTab(nextState),
+      };
+    }
     case 'CLOSE_ALL_TABS':
       return { ...state, tabs: [], activeTabId: null };
     case 'SET_ACTIVE_TAB':
-      return { ...state, activeTabId: action.payload };
+      return {
+        ...state,
+        activeTabId: action.payload,
+        viewMode: viewModeForActiveTab(state, state.viewMode, action.payload),
+      };
     case 'UPDATE_TAB_CONTENT':
       return {
         ...state,
@@ -207,16 +247,21 @@ function appReducer(state: AppState, action: AppAction): AppState {
           t.id === action.payload ? { ...t, saved: false } : t
         ),
       };
-    case 'RENAME_TAB_TITLE':
-      return {
+    case 'RENAME_TAB_TITLE': {
+      const nextState = {
         ...state,
         tabs: state.tabs.map(tab =>
           tab.id === action.payload.id ? { ...tab, name: action.payload.name } : tab
         ),
       };
+      return {
+        ...nextState,
+        viewMode: viewModeForActiveTab(nextState),
+      };
+    }
     case 'RENAME_PATH': {
       const { oldPath, newPath, name } = action.payload;
-      return {
+      const nextState = {
         ...state,
         tabs: state.tabs.map(tab => {
           const nextPath = rebasePath(tab.path, oldPath, newPath);
@@ -236,6 +281,10 @@ function appReducer(state: AppState, action: AppAction): AppState {
             : { ...file, path: nextPath, name: file.path === oldPath ? name : file.name };
         }),
         workspaceTree: rebaseFileTree(state.workspaceTree, oldPath, newPath, name),
+      };
+      return {
+        ...nextState,
+        viewMode: viewModeForActiveTab(nextState),
       };
     }
     case 'SET_WORKSPACE':

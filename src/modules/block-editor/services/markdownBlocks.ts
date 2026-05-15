@@ -897,7 +897,9 @@ export function parseMarkdownToBlocks(markdown: string): BlockViewModel[] {
     blocks.push(createParsedBlock(blocks, 'paragraph', raw, raw, start, end, offsets, lines));
   }
 
-  return blocks.length > 0 ? blocks : [createBlock('empty')];
+  if (blocks.length === 0) return [createBlock('paragraph')];
+  if (/\n\s*\n\s*$/.test(normalized)) return [...blocks, createBlock('paragraph')];
+  return blocks;
 }
 
 export function serializeBlocks(blocks: BlockViewModel[]): string {

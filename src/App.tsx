@@ -13,6 +13,7 @@ import { AIChatPanel, createCodeMirrorEditorBridge } from './modules/ai-chat';
 import { BlockEditor } from './modules/block-editor';
 import { useApp } from './AppContext';
 import { writeTextFile } from './utils/fs';
+import { effectiveViewModeForDocument } from './utils/documentCapabilities';
 import { dirname } from './utils/markdownImages';
 import { useCallback, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -52,6 +53,7 @@ export default function WorkspaceContent() {
   const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId);
   const activeTabId = activeTab?.id;
   const activeFilePreview = Boolean(activeTab?.preview);
+  const effectiveViewMode = effectiveViewModeForDocument(activeTab, state.viewMode);
   const editorBridge = useMemo(() => createCodeMirrorEditorBridge(), []);
 
   const handleCreateMarkdownFile = useCallback(async (content: string) => {
@@ -103,7 +105,7 @@ export default function WorkspaceContent() {
                 <>
                   <BlockEditor />
                   <Editor />
-                  <div className={`resize-handle ${state.viewMode === 'split' ? '' : 'hidden'}`} />
+                  <div className={`resize-handle ${effectiveViewMode === 'split' ? '' : 'hidden'}`} />
                   <Preview />
                 </>
               )}

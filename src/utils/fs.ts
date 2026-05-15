@@ -61,3 +61,8 @@ export async function remove(path: string, options?: { recursive?: boolean }): P
 export async function rename(from: string, to: string): Promise<void> {
   await invoke('rename_path', { from, to });
 }
+
+/** Reveal a file or directory in Finder, File Explorer, or the platform file manager */
+export async function revealInFileManager(path: string): Promise<void> {
+  await invoke('reveal_path_in_file_manager', { path });
+}

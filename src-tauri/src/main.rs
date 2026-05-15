@@ -771,6 +771,57 @@ fn rename_path(from: String, to: String) -> Result<(), String> {
         .map_err(|e| format!("重命名失败: {}", e))
 }
 
+// ── Command: reveal file or directory in the native file manager ──
+#[command]
+fn reveal_path_in_file_manager(path: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    if !path_buf.exists() {
+        return Err(format!("路径不存在: {}", path));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg("-R")
+            .arg(&path_buf)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("无法在访达中显示: {}", e))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer.exe")
+            .arg(format!("/select,{}", path_buf.to_string_lossy()))
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("无法在文件资源管理器中显示: {}", e))
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let target = if path_buf.is_dir() {
+            path_buf
+        } else {
+            path_buf
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from(&path))
+        };
+
+        Command::new("xdg-open")
+            .arg(target)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("无法在文件管理器中显示: {}", e))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
+    {
+        Err("当前平台暂不支持在文件管理器中显示".to_string())
+    }
+}
+
 fn resolve_ai_credential(credential_ref: Option<&str>) -> Result<Option<String>, String> {
     let value = credential_ref.unwrap_or("").trim();
     if value.is_empty() {
@@ -1971,6 +2022,7 @@ fn main() {
             path_exists,
             delete_path,
             rename_path,
+            reveal_path_in_file_manager,
             ai_send_chat,
             ai_send_chat_stream,
             ai_cancel_chat_stream,

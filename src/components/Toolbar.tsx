@@ -15,9 +15,10 @@ import {
   Settings,
   ScrollText,
 } from 'lucide-react';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { open as openPath } from '@tauri-apps/plugin-shell';
 import { message } from 'antd';
@@ -26,6 +27,7 @@ import { EditorSelection } from '@codemirror/state';
 import { pathExists, readTextFile, writeTextFile } from '../utils/fs';
 import { findFirstMdFile, readFirstLevel } from '../utils/workspace';
 import { getActiveEditorView, pasteClipboardImagesIntoActiveEditor } from './Editor';
+import { effectiveViewModeForDocument, isMarkdownDocument, isMarkdownViewMode } from '../utils/documentCapabilities';
 import { basename, formatMarkdownImageUrl, markdownImagePathForDocument, stripExtension } from '../utils/markdownImages';
 import { renderMarkdownForExport } from '../utils/exportMarkdown';
 import {
@@ -33,11 +35,12 @@ import {
   decodeDialogPath,
   ensureTextFileExtension,
   fileNameFromPath,
+  getPreviewFileKind,
   getTextFileDialogFilters,
   normalizeTextFileName,
 } from '../utils/savePaths';
 import { useSettingsStore, useShortcutStore } from '../store';
-import type { ThemeMode } from '../types';
+import type { ThemeMode, ViewMode } from '../types';
 import { runUpdateCheckFlow } from '../utils/updateUi';
 import { isEnglishLanguage, translateText } from '../i18n';
 
@@ -89,6 +92,16 @@ function isPrimarySelectAllShortcut(event: KeyboardEvent): boolean {
     && !event.altKey
     && !event.shiftKey
     && normalizeShortcutKey(event.key) === 'A';
+}
+
+function hasFileDragData(dataTransfer: DataTransfer | null): boolean {
+  return Array.from(dataTransfer?.types ?? []).includes('Files');
+}
+
+function dataTransferFilePaths(dataTransfer: DataTransfer | null): string[] {
+  return Array.from(dataTransfer?.files ?? [])
+    .map(file => (file as File & { path?: string }).path || file.webkitRelativePath)
+    .filter((path): path is string => Boolean(path && /^(?:file:\/\/|\/|[A-Za-z]:[\\/])/.test(path)));
 }
 
 function selectedEditorText(): string {
@@ -164,14 +177,6 @@ function printHtmlDocument(html: string): Promise<void> {
   });
 }
 
-interface OpenedDocument {
-  path: string;
-  file_name: string;
-  content: string;
-  external: boolean;
-  readonly: boolean;
-}
-
 export default function Toolbar() {
   const { state, dispatch } = useApp();
   const navigate = useNavigate();
@@ -184,11 +189,27 @@ export default function Toolbar() {
   const themeColor = useSettingsStore(s => s.appearance.themeColor);
   const shortcuts = useShortcutStore(s => s.shortcuts);
   const [isDragging, setIsDragging] = useState(false);
+  const recentOpenedPathRef = useRef<Map<string, number>>(new Map());
   const t = useCallback((value: string, params?: Record<string, string | number>) => (
     translateText(language, value, params)
   ), [language]);
   const isEnglish = isEnglishLanguage(language);
   const textFileDialogFilters = useMemo(() => getTextFileDialogFilters(language), [language]);
+  const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
+  const markdownViewModesAvailable = !activeTab || isMarkdownDocument(activeTab);
+  const effectiveViewMode = effectiveViewModeForDocument(activeTab, state.viewMode);
+  const markdownOnlyViewTooltip = t('仅 Markdown 文档支持块编辑、预览和双栏');
+  const sourceModeTooltip = activeTab && !markdownViewModesAvailable ? t('源码模式') : t('MD 源码模式');
+  const sourceModeLabel = activeTab && !markdownViewModesAvailable ? t('源码') : t('MD 源码');
+
+  const setDocumentViewMode = useCallback((mode: ViewMode) => {
+    if (activeTab && isMarkdownViewMode(mode) && !isMarkdownDocument(activeTab)) {
+      dispatch({ type: 'SET_VIEW_MODE', payload: 'edit' });
+      message.info(markdownOnlyViewTooltip);
+      return;
+    }
+    dispatch({ type: 'SET_VIEW_MODE', payload: mode });
+  }, [activeTab, dispatch, markdownOnlyViewTooltip]);
 
   const setThemeMode = useCallback((themeMode: ThemeMode) => {
     dispatch({ type: 'SET_THEME', payload: themeMode });
@@ -316,6 +337,46 @@ export default function Toolbar() {
       console.error('Failed to open folder:', e);
     }
   }, [dispatch, fileSettings.hidePatterns, t]);
+
+  const openNativeFilePaths = useCallback(async (paths: string[], source: string) => {
+    const uniquePaths = [...new Set(paths.map(path => decodeDialogPath(path)).filter(Boolean))];
+    const now = Date.now();
+
+    for (const [path, openedAt] of recentOpenedPathRef.current) {
+      if (now - openedAt > 1500) recentOpenedPathRef.current.delete(path);
+    }
+
+    for (const path of uniquePaths) {
+      const openedAt = recentOpenedPathRef.current.get(path);
+      if (openedAt && now - openedAt < 800) continue;
+      recentOpenedPathRef.current.set(path, now);
+
+      const name = fileNameFromPath(path);
+      const previewKind = getPreviewFileKind(name);
+      if (previewKind) {
+        dispatch({
+          type: 'OPEN_TAB',
+          payload: { id: path, name, path, content: '', preview: { kind: previewKind } },
+        });
+        dispatch({ type: 'ADD_RECENT_FILE', payload: { path, name, lastOpened: Date.now() } });
+        continue;
+      }
+
+      try {
+        const doc = await invoke<{ path: string; file_name: string; content: string }>('open_markdown_file', { path });
+        dispatch({
+          type: 'OPEN_TAB',
+          payload: { id: doc.path, name: doc.file_name, path: doc.path, content: doc.content },
+        });
+        dispatch({
+          type: 'ADD_RECENT_FILE',
+          payload: { path: doc.path, name: doc.file_name, lastOpened: Date.now() },
+        });
+      } catch (error) {
+        console.error(`Failed to open ${source}:`, path, error);
+      }
+    }
+  }, [dispatch]);
 
   const handleSave = useCallback(async () => {
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
@@ -670,16 +731,16 @@ ${htmlBody}
         dispatch({ type: 'OPEN_SEARCH', payload: { replace: true } });
         break;
       case 'view.block':
-        dispatch({ type: 'SET_VIEW_MODE', payload: 'block' });
+        setDocumentViewMode('block');
         break;
       case 'view.edit':
-        dispatch({ type: 'SET_VIEW_MODE', payload: 'edit' });
+        setDocumentViewMode('edit');
         break;
       case 'view.preview':
-        dispatch({ type: 'SET_VIEW_MODE', payload: 'preview' });
+        setDocumentViewMode('preview');
         break;
       case 'view.split':
-        dispatch({ type: 'SET_VIEW_MODE', payload: 'split' });
+        setDocumentViewMode('split');
         break;
       case 'view.toggleSidebar':
         toggleSidebar();
@@ -688,7 +749,7 @@ ${htmlBody}
         toggleOutline();
         break;
       case 'view.togglePreview':
-        dispatch({ type: 'SET_VIEW_MODE', payload: state.viewMode === 'preview' ? 'edit' : 'preview' });
+        setDocumentViewMode(effectiveViewMode === 'preview' ? 'edit' : 'preview');
         break;
       case 'insert.image':
         void handleInsertImage();
@@ -753,7 +814,8 @@ ${htmlBody}
     handleOpenFolder,
     handleSave,
     navigate,
-    state.viewMode,
+    effectiveViewMode,
+    setDocumentViewMode,
     toggleOutline,
     toggleSidebar,
   ]);
@@ -820,16 +882,16 @@ ${htmlBody}
           selectAllEditorContent();
           break;
         case 'view_block':
-          dispatch({ type: 'SET_VIEW_MODE', payload: 'block' });
+          setDocumentViewMode('block');
           break;
         case 'view_edit':
-          dispatch({ type: 'SET_VIEW_MODE', payload: 'edit' });
+          setDocumentViewMode('edit');
           break;
         case 'view_preview':
-          dispatch({ type: 'SET_VIEW_MODE', payload: 'preview' });
+          setDocumentViewMode('preview');
           break;
         case 'view_split':
-          dispatch({ type: 'SET_VIEW_MODE', payload: 'split' });
+          setDocumentViewMode('split');
           break;
         case 'toggle_sidebar':
           toggleSidebar();
@@ -956,6 +1018,7 @@ ${htmlBody}
     handleInsertTable,
     handleInsertTask,
     handleCheckUpdate,
+    setDocumentViewMode,
     setThemeMode,
     toggleOutline,
     toggleSidebar,
@@ -966,78 +1029,115 @@ ${htmlBody}
     state.tabs,
   ]);
 
-  // Listen for file drops (from dock icon or window drag-and-drop)
+  // Listen for file drops over the webview content.
+  useEffect(() => {
+    if (!isTauri()) return undefined;
+
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    void getCurrentWebview().onDragDropEvent((event) => {
+      const payload = event.payload;
+      if (payload.type === 'enter' || payload.type === 'over') {
+        setIsDragging(true);
+        return;
+      }
+
+      if (payload.type === 'leave') {
+        setIsDragging(false);
+        return;
+      }
+
+      if (payload.type === 'drop') {
+        setIsDragging(false);
+        void openNativeFilePaths(payload.paths, 'dropped file');
+      }
+    }).then(fn => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    }).catch(error => {
+      console.error('Failed to bind file drop listener:', error);
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [openNativeFilePaths]);
+
+  // Prevent the webview from navigating away when files are dropped over editable surfaces.
+  useEffect(() => {
+    const onDragEnter = (event: DragEvent) => {
+      if (!hasFileDragData(event.dataTransfer)) return;
+      event.preventDefault();
+      setIsDragging(true);
+    };
+
+    const onDragOver = (event: DragEvent) => {
+      if (!hasFileDragData(event.dataTransfer)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    };
+
+    const onDragLeave = (event: DragEvent) => {
+      if (!hasFileDragData(event.dataTransfer)) return;
+      if (!event.relatedTarget) setIsDragging(false);
+    };
+
+    const onDrop = (event: DragEvent) => {
+      if (!hasFileDragData(event.dataTransfer)) return;
+      event.preventDefault();
+      setIsDragging(false);
+
+      const paths = dataTransferFilePaths(event.dataTransfer);
+      if (paths.length > 0) {
+        void openNativeFilePaths(paths, 'dropped file');
+      }
+    };
+
+    window.addEventListener('dragenter', onDragEnter, true);
+    window.addEventListener('dragover', onDragOver, true);
+    window.addEventListener('dragleave', onDragLeave, true);
+    window.addEventListener('drop', onDrop, true);
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter, true);
+      window.removeEventListener('dragover', onDragOver, true);
+      window.removeEventListener('dragleave', onDragLeave, true);
+      window.removeEventListener('drop', onDrop, true);
+    };
+  }, [openNativeFilePaths]);
+
+  // Keep compatibility with the Rust-side file-drop bridge.
   useEffect(() => {
     const unlisten = listen<string[]>('files-dropped', async (event) => {
-      const paths = event.payload;
-      for (const path of paths) {
-        try {
-          const doc = await invoke<OpenedDocument>('open_markdown_file', { path });
-          dispatch({
-            type: 'OPEN_TAB',
-            payload: { id: doc.path, name: doc.file_name, path: doc.path, content: doc.content },
-          });
-          dispatch({
-            type: 'ADD_RECENT_FILE',
-            payload: { path: doc.path, name: doc.file_name, lastOpened: Date.now() },
-          });
-        } catch (e) {
-          console.error('Failed to open dropped file:', path, e);
-        }
-      }
+      await openNativeFilePaths(event.payload, 'dropped file');
     });
 
     return () => {
       unlisten.then(fn => fn());
     };
-  }, [dispatch]);
+  }, [openNativeFilePaths]);
 
   // Listen for opened-files event (from macOS Opened or single-instance forwarding)
   useEffect(() => {
     const unlisten = listen<string[]>('opened-files', async (event) => {
-      const paths = event.payload;
-      for (const path of paths) {
-        try {
-          const doc = await invoke<OpenedDocument>('open_markdown_file', { path });
-          dispatch({
-            type: 'OPEN_TAB',
-            payload: { id: doc.path, name: doc.file_name, path: doc.path, content: doc.content },
-          });
-          dispatch({
-            type: 'ADD_RECENT_FILE',
-            payload: { path: doc.path, name: doc.file_name, lastOpened: Date.now() },
-          });
-        } catch (e) {
-          console.error('Failed to open file:', path, e);
-        }
-      }
+      await openNativeFilePaths(event.payload, 'file');
     });
 
     return () => {
       unlisten.then(fn => fn());
     };
-  }, [dispatch]);
+  }, [openNativeFilePaths]);
 
   // Fetch files that were opened at launch (cold start via right-click > Open With)
   useEffect(() => {
     invoke<string[]>('take_pending_open_files').then(async (paths) => {
-      for (const path of paths) {
-        try {
-          const doc = await invoke<OpenedDocument>('open_markdown_file', { path });
-          dispatch({
-            type: 'OPEN_TAB',
-            payload: { id: doc.path, name: doc.file_name, path: doc.path, content: doc.content },
-          });
-          dispatch({
-            type: 'ADD_RECENT_FILE',
-            payload: { path: doc.path, name: doc.file_name, lastOpened: Date.now() },
-          });
-        } catch (e) {
-          console.error('Failed to open file on launch:', path, e);
-        }
-      }
+      await openNativeFilePaths(paths, 'file on launch');
     }).catch(e => console.error('take_pending_open_files failed:', e));
-  }, [dispatch]);
+  }, [openNativeFilePaths]);
 
   // Commands dispatched by the command palette.
   useEffect(() => {
@@ -1083,23 +1183,6 @@ ${htmlBody}
     return () => window.removeEventListener('keydown', handler);
   }, [navigate, runShortcutAction, shortcuts]);
 
-  // Window drag events for overlay
-  useEffect(() => {
-    const onDragEnter = () => setIsDragging(true);
-    const onDragLeave = (e: DragEvent) => {
-      if (!e.relatedTarget) setIsDragging(false);
-    };
-    const onDrop = () => setIsDragging(false);
-    window.addEventListener('dragenter', onDragEnter);
-    window.addEventListener('dragleave', onDragLeave);
-    window.addEventListener('drop', onDrop);
-    return () => {
-      window.removeEventListener('dragenter', onDragEnter);
-      window.removeEventListener('dragleave', onDragLeave);
-      window.removeEventListener('drop', onDrop);
-    };
-  }, []);
-
   return (
     <>
       <div className="toolbar">
@@ -1133,36 +1216,39 @@ ${htmlBody}
         <div className="toolbar-section center">
           <div className="view-toggle">
             <button
-              className={`view-toggle-btn ${state.viewMode === 'block' ? 'active' : ''}`}
-              onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'block' })}
-              data-tooltip={t('块编辑模式')}
+              className={`view-toggle-btn ${effectiveViewMode === 'block' ? 'active' : ''}`}
+              onClick={() => setDocumentViewMode('block')}
+              disabled={!markdownViewModesAvailable}
+              data-tooltip={markdownViewModesAvailable ? t('块编辑模式') : markdownOnlyViewTooltip}
               aria-label={t('块编辑模式')}
             >
               <ScrollText size={14} />
               <span>{t('块编辑')}</span>
             </button>
             <button
-              className={`view-toggle-btn ${state.viewMode === 'edit' ? 'active' : ''}`}
-              onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'edit' })}
-              data-tooltip={t('MD 源码模式')}
-              aria-label={t('MD 源码模式')}
+              className={`view-toggle-btn ${effectiveViewMode === 'edit' ? 'active' : ''}`}
+              onClick={() => setDocumentViewMode('edit')}
+              data-tooltip={sourceModeTooltip}
+              aria-label={sourceModeTooltip}
             >
               <Edit3 size={14} />
-              <span>{t('MD 源码')}</span>
+              <span>{sourceModeLabel}</span>
             </button>
             <button
-              className={`view-toggle-btn ${state.viewMode === 'preview' ? 'active' : ''}`}
-              onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'preview' })}
-              data-tooltip={t('预览模式')}
+              className={`view-toggle-btn ${effectiveViewMode === 'preview' ? 'active' : ''}`}
+              onClick={() => setDocumentViewMode('preview')}
+              disabled={!markdownViewModesAvailable}
+              data-tooltip={markdownViewModesAvailable ? t('预览模式') : markdownOnlyViewTooltip}
               aria-label={t('预览模式')}
             >
               <Eye size={14} />
               <span>{t('预览')}</span>
             </button>
             <button
-              className={`view-toggle-btn ${state.viewMode === 'split' ? 'active' : ''}`}
-              onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'split' })}
-              data-tooltip={t('双栏模式')}
+              className={`view-toggle-btn ${effectiveViewMode === 'split' ? 'active' : ''}`}
+              onClick={() => setDocumentViewMode('split')}
+              disabled={!markdownViewModesAvailable}
+              data-tooltip={markdownViewModesAvailable ? t('双栏模式') : markdownOnlyViewTooltip}
               aria-label={t('双栏模式')}
             >
               <Columns size={14} />

@@ -205,6 +205,11 @@
   border-color: transparent;
 }
 
+.md-preview[class*="code-theme-"] .md-mermaid {
+  border-color: var(--code-theme-border);
+  background: color-mix(in srgb, var(--code-theme-bg) 72%, var(--bg-editor) 28%);
+}
+
 .md-preview[class*="code-theme-"] .md-code-language-select,
 .md-preview[class*="code-theme-"] .md-code-format,
 .md-preview[class*="code-theme-"] .md-code-copy {

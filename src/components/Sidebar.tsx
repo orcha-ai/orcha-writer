@@ -1,10 +1,13 @@
 import { useApp } from '../AppContext';
 import { useSettingsStore } from '../store';
-import { FolderOpen, Folder, File, ChevronRight, FilePlus, FolderPlus, Trash2, Pencil, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react';
+import { LogicalPosition } from '@tauri-apps/api/dpi';
+import { Menu, type MenuOptions } from '@tauri-apps/api/menu';
+import { ask, open } from '@tauri-apps/plugin-dialog';
+import { FolderOpen, Folder, File, ChevronRight, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import type { CSSProperties, DragEvent, KeyboardEvent, MouseEvent } from 'react';
 import { message } from 'antd';
-import { ensureDir, pathExists, readTextFile, rename, remove, writeTextFile } from '../utils/fs';
+import { ensureDir, pathExists, readTextFile, rename, remove, revealInFileManager, writeTextFile } from '../utils/fs';
 import { buildHidePatterns, readFirstLevel } from '../utils/workspace';
 import { getPreviewFileKind, isMarkdownFileName, isOpenableTextFileName } from '../utils/savePaths';
 import type { FileNode, RecentFile } from '../types';
@@ -59,6 +62,7 @@ interface TreeHandlers {
   onCreateFileCancel: () => void;
   draggingPath: string | null;
   dropTargetPath: string | null;
+  contextTargetPath: string | null;
   onDragStart: (event: DragEvent<HTMLDivElement>, node: FileNode) => void;
   onDragOver: (event: DragEvent<HTMLDivElement>, targetPath: string | null) => void;
   onDragLeave: (event: DragEvent<HTMLDivElement>) => void;
@@ -95,6 +99,10 @@ function parentPathOf(path: string): string {
 
 function normalizePathForCompare(path: string): string {
   return path.replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function samePath(left: string, right: string): boolean {
+  return normalizePathForCompare(left) === normalizePathForCompare(right);
 }
 
 function relativeWorkspacePath(path: string, workspacePath: string): string {
@@ -140,6 +148,32 @@ function hasFileExtension(name: string): boolean {
   return dotIndex > separatorIndex && dotIndex > 0 && dotIndex < name.length - 1;
 }
 
+function systemFileManagerName(language: string): string {
+  const platform = `${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase();
+  const isChinese = language.toLowerCase().startsWith('zh');
+  if (platform.includes('mac')) return isChinese ? '访达' : 'Finder';
+  if (platform.includes('win')) return isChinese ? '文件资源管理器' : 'File Explorer';
+  return isChinese ? '文件管理器' : 'File Manager';
+}
+
+async function writeClipboardText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('copy failed');
+}
+
 function withNameIndex(name: string, index: number): string {
   const dotIndex = name.lastIndexOf('.');
   if (dotIndex <= 0) return `${name} ${index}`;
@@ -159,7 +193,9 @@ function rebasePath(path: string, oldPath: string, newPath: string): string {
 }
 
 function isPathInside(path: string, parentPath: string): boolean {
-  return path.startsWith(`${parentPath}/`) || path.startsWith(`${parentPath}\\`);
+  const normalizedPath = normalizePathForCompare(path);
+  const normalizedParent = normalizePathForCompare(parentPath);
+  return normalizedPath.startsWith(`${normalizedParent}/`);
 }
 
 function dropTargetKey(targetPath: string | null): string {
@@ -250,8 +286,8 @@ export default function Sidebar() {
   const text = getLocaleText(general.language);
   const appLanguage = normalizeAppLanguage(general.language);
   const showOutlineTab = appearance.outlinePosition === 'left' && state.outlineVisible;
+  const fileManagerName = useMemo(() => systemFileManagerName(appLanguage), [appLanguage]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; item: FileNode | null } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [creatingFolder, setCreatingFolder] = useState<CreateFolderState | null>(null);
@@ -259,6 +295,7 @@ export default function Sidebar() {
   const [loadingFolders, setLoadingFolders] = useState<Set<string>>(new Set());
   const [draggingPath, setDraggingPath] = useState<string | null>(null);
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
+  const [contextTargetPath, setContextTargetPath] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => clampSidebarWidth(appearance.sidebarWidth));
   const [isResizing, setIsResizing] = useState(false);
   const [fileSearchQuery, setFileSearchQuery] = useState('');
@@ -281,9 +318,9 @@ export default function Sidebar() {
   const createFileInFlightRef = useRef(false);
   const refreshInFlightRef = useRef(false);
   const dragNodeRef = useRef<FileNode | null>(null);
-  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const sidebarContentRef = useRef<HTMLDivElement | null>(null);
   const pendingRevealPathRef = useRef<string | null>(null);
+  const contextTargetClearTimerRef = useRef<number | null>(null);
 
   const activeWorkspaceFilePath = useMemo(() => {
     if (!state.activeTabId || !state.workspacePath) return null;
@@ -297,6 +334,27 @@ export default function Sidebar() {
   useEffect(() => { workspacePathRef.current = state.workspacePath; }, [state.workspacePath]);
   useEffect(() => { hidePatternsRef.current = hidePatterns; }, [hidePatterns]);
   useEffect(() => { widthRef.current = sidebarWidth; }, [sidebarWidth]);
+
+  const cancelContextTargetClear = useCallback(() => {
+    if (contextTargetClearTimerRef.current === null) return;
+    window.clearTimeout(contextTargetClearTimerRef.current);
+    contextTargetClearTimerRef.current = null;
+  }, []);
+
+  const clearContextTarget = useCallback(() => {
+    cancelContextTargetClear();
+    setContextTargetPath(null);
+  }, [cancelContextTargetClear]);
+
+  const scheduleContextTargetClear = useCallback((delay = 0) => {
+    cancelContextTargetClear();
+    contextTargetClearTimerRef.current = window.setTimeout(() => {
+      contextTargetClearTimerRef.current = null;
+      setContextTargetPath(null);
+    }, delay);
+  }, [cancelContextTargetClear]);
+
+  useEffect(() => () => cancelContextTargetClear(), [cancelContextTargetClear]);
 
   useEffect(() => {
     const query = fileSearchQuery.trim();
@@ -516,13 +574,6 @@ export default function Sidebar() {
     }
   }, [dispatch, text.sidebar]);
 
-  const handleContextMenu = useCallback((e: React.MouseEvent, item: FileNode | null) => {
-    e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY, item });
-  }, []);
-
-  const closeContextMenu = useCallback(() => setContextMenu(null), []);
-
   const nextAvailableFolderName = useCallback(async (parentPath: string) => {
     const baseName = text.sidebar.newFolderDefaultName;
     let candidate: string = baseName;
@@ -545,29 +596,6 @@ export default function Sidebar() {
     return candidate;
   }, [text.sidebar.newFileDefaultName]);
 
-  useEffect(() => {
-    if (!contextMenu) return undefined;
-
-    const handlePointerDown = (event: globalThis.MouseEvent) => {
-      const target = event.target instanceof Node ? event.target : null;
-      if (target && contextMenuRef.current?.contains(target)) return;
-      closeContextMenu();
-    };
-
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') closeContextMenu();
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('scroll', closeContextMenu, true);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('scroll', closeContextMenu, true);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [closeContextMenu, contextMenu]);
-
   const handleRename = useCallback(async (item: FileNode) => {
     renameInFlightRef.current = false;
     renameCancelledRef.current = false;
@@ -575,7 +603,6 @@ export default function Sidebar() {
     setCreatingFile(null);
     setRenaming(item.path);
     setRenameValue(item.name);
-    setContextMenu(null);
   }, []);
 
   const handleRenameCancel = useCallback(() => {
@@ -632,7 +659,19 @@ export default function Sidebar() {
   }, [dispatch, handleRenameCancel, renameValue, renaming, state.workspacePath, state.workspaceTree]);
 
   const handleDelete = useCallback(async (item: FileNode) => {
-    setContextMenu(null);
+    const confirmed = await ask(
+      item.type === 'folder'
+        ? text.sidebar.confirmDeleteFolder(item.name)
+        : text.sidebar.confirmDeleteFile(item.name),
+      {
+        title: text.sidebar.confirmDeleteTitle,
+        kind: 'warning',
+        okLabel: text.contextMenu.delete,
+        cancelLabel: text.sidebar.cancelDelete,
+      },
+    );
+    if (!confirmed) return;
+
     try {
       await remove(item.path, { recursive: item.type === 'folder' });
       function removeFromTree(nodes: FileNode[]): FileNode[] {
@@ -647,7 +686,7 @@ export default function Sidebar() {
     } catch (e) {
       console.error('Failed to delete:', e);
     }
-  }, [dispatch, state.workspacePath, state.workspaceTree, state.tabs]);
+  }, [dispatch, state.workspacePath, state.workspaceTree, state.tabs, text.contextMenu.delete, text.sidebar]);
 
   const handleCreateFolderStart = useCallback(async (parentPath: string | null) => {
     const workspacePath = workspacePathRef.current;
@@ -656,7 +695,6 @@ export default function Sidebar() {
       return;
     }
 
-    setContextMenu(null);
     setRenaming(null);
     setCreatingFile(null);
 
@@ -729,7 +767,6 @@ export default function Sidebar() {
       return;
     }
 
-    setContextMenu(null);
     setRenaming(null);
     setCreatingFolder(null);
 
@@ -804,11 +841,200 @@ export default function Sidebar() {
     const workspacePath = workspacePathRef.current;
     if (!source || !workspacePath) return false;
     const targetDirectory = targetPath ?? workspacePath;
-    if (source.path === targetDirectory) return false;
+    if (samePath(source.path, targetDirectory)) return false;
     if (source.type === 'folder' && isPathInside(targetDirectory, source.path)) return false;
-    if (parentPathOf(source.path) === targetDirectory) return false;
+    if (samePath(parentPathOf(source.path), targetDirectory)) return false;
     return true;
   }, []);
+
+  const moveWorkspaceItem = useCallback(async (source: FileNode, targetDirectory: string) => {
+    const workspacePath = workspacePathRef.current;
+    if (!workspacePath) return false;
+
+    if (!isPathWithinWorkspace(targetDirectory, workspacePath)) {
+      message.warning(text.sidebar.moveTargetOutsideWorkspace);
+      return false;
+    }
+
+    const targetPath = samePath(targetDirectory, workspacePath) ? null : targetDirectory;
+    if (!canDropInto(source, targetPath)) {
+      message.warning(text.sidebar.moveTargetInvalid);
+      return false;
+    }
+
+    const nextPath = joinPath(targetDirectory, source.name);
+    try {
+      if (await pathExists(nextPath)) {
+        message.warning(text.sidebar.moveTargetExists(source.name));
+        return false;
+      }
+
+      await rename(source.path, nextPath);
+      const nextExpanded = rebaseExpandedFolders(expandedRef.current, source.path, nextPath);
+      if (targetPath) nextExpanded.add(targetPath);
+      setExpandedFolders(nextExpanded);
+      dispatch({ type: 'RENAME_PATH', payload: { oldPath: source.path, newPath: nextPath, name: source.name } });
+      await refreshWorkspaceTree(nextExpanded);
+      message.success(text.sidebar.itemMoved(source.name));
+      return true;
+    } catch (error) {
+      console.error('Failed to move workspace item:', error);
+      message.error(text.sidebar.moveItemFailed);
+      return false;
+    }
+  }, [canDropInto, dispatch, refreshWorkspaceTree, text.sidebar]);
+
+  const handleMoveToDirectory = useCallback(async (item: FileNode) => {
+    const workspacePath = workspacePathRef.current;
+    if (!workspacePath) return;
+
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: parentPathOf(item.path) || workspacePath,
+        title: text.sidebar.chooseMoveTarget,
+      });
+      if (!selected) return;
+
+      const targetDirectory = Array.isArray(selected) ? selected[0] : selected;
+      await moveWorkspaceItem(item, targetDirectory);
+    } catch (error) {
+      console.error('Failed to choose move target:', error);
+      message.error(text.sidebar.moveItemFailed);
+    }
+  }, [moveWorkspaceItem, text.sidebar.chooseMoveTarget, text.sidebar.moveItemFailed]);
+
+  const handleRevealInFileManager = useCallback(async (path: string) => {
+    try {
+      await revealInFileManager(path);
+    } catch (error) {
+      console.error('Failed to reveal path in file manager:', error);
+      message.error(text.sidebar.revealInFileManagerFailed(fileManagerName));
+    }
+  }, [fileManagerName, text.sidebar]);
+
+  const handleOpenContextItem = useCallback(async (item: FileNode) => {
+    if (item.type === 'folder') {
+      await toggleFolder(item.path);
+      return;
+    }
+    await openFile(item);
+  }, [openFile, toggleFolder]);
+
+  const handleCopyPath = useCallback(async (path: string, relative: boolean) => {
+    const workspacePath = workspacePathRef.current;
+    const value = relative && workspacePath ? relativeWorkspacePath(path, workspacePath) : path;
+    try {
+      await writeClipboardText(value);
+      message.success(relative ? text.sidebar.relativePathCopied : text.sidebar.pathCopied);
+    } catch (error) {
+      console.error('Failed to copy workspace path:', error);
+      message.error(text.sidebar.copyPathFailed);
+    }
+  }, [text.sidebar]);
+
+  const handleRefreshWorkspace = useCallback(async () => {
+    try {
+      await refreshWorkspaceTree();
+      message.success(text.sidebar.workspaceRefreshed);
+    } catch (error) {
+      console.error('Failed to refresh workspace:', error);
+      message.error(text.sidebar.refreshWorkspaceFailed);
+    }
+  }, [refreshWorkspaceTree, text.sidebar]);
+
+  const handleContextMenu = useCallback((event: React.MouseEvent, item: FileNode | null) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const workspacePath = workspacePathRef.current;
+    if (!item && !workspacePath) return;
+
+    cancelContextTargetClear();
+    setContextTargetPath(item?.path ?? null);
+
+    const items: NonNullable<MenuOptions['items']> = [];
+    const addSeparator = () => {
+      if (items.length > 0) items.push({ item: 'Separator' });
+    };
+    let menuActionStarted = false;
+    const runContextAction = (action: () => void | Promise<void>) => () => {
+      menuActionStarted = true;
+      cancelContextTargetClear();
+      void Promise.resolve(action()).finally(() => scheduleContextTargetClear(220));
+    };
+
+    if (item) {
+      items.push(
+        { text: text.contextMenu.open, action: runContextAction(() => handleOpenContextItem(item)) },
+        { text: text.contextMenu.rename, action: runContextAction(() => handleRename(item)) },
+      );
+
+      if (item.type === 'folder') {
+        items.push(
+          { text: text.contextMenu.newFolder, action: runContextAction(() => handleCreateFolderStart(item.path)) },
+          { text: text.contextMenu.newFile, action: runContextAction(() => handleCreateFileStart(item.path)) },
+        );
+      }
+
+      items.push({ text: text.contextMenu.moveToFolder, action: runContextAction(() => handleMoveToDirectory(item)) });
+
+      addSeparator();
+      items.push(
+        { text: text.contextMenu.copyPath, action: runContextAction(() => handleCopyPath(item.path, false)) },
+        { text: text.contextMenu.copyRelativePath, action: runContextAction(() => handleCopyPath(item.path, true)) },
+        { text: text.contextMenu.showInFileManager(fileManagerName), action: runContextAction(() => handleRevealInFileManager(item.path)) },
+      );
+
+      if (item.type === 'folder') {
+        items.push({ text: text.contextMenu.refresh, action: runContextAction(() => handleRefreshWorkspace()) });
+      }
+
+      addSeparator();
+      items.push({ text: text.contextMenu.delete, action: runContextAction(() => handleDelete(item)) });
+    } else if (workspacePath) {
+      items.push(
+        { text: text.contextMenu.newFolder, action: runContextAction(() => handleCreateFolderStart(null)) },
+        { text: text.contextMenu.newFile, action: runContextAction(() => handleCreateFileStart(null)) },
+      );
+
+      addSeparator();
+      items.push(
+        { text: text.contextMenu.refresh, action: runContextAction(() => handleRefreshWorkspace()) },
+        { text: text.contextMenu.copyPath, action: runContextAction(() => handleCopyPath(workspacePath, false)) },
+        { text: text.contextMenu.showInFileManager(fileManagerName), action: runContextAction(() => handleRevealInFileManager(workspacePath)) },
+      );
+    }
+
+    const openedAt = Date.now();
+    void Menu
+      .new({ items })
+      .then(menu => menu.popup(new LogicalPosition(event.clientX, event.clientY)))
+      .finally(() => {
+        if (menuActionStarted) return;
+        scheduleContextTargetClear(Date.now() - openedAt < 180 ? 3200 : 120);
+      })
+      .catch(error => {
+        console.error('Failed to open workspace context menu:', error);
+        clearContextTarget();
+      });
+  }, [
+    cancelContextTargetClear,
+    clearContextTarget,
+    fileManagerName,
+    handleCopyPath,
+    handleCreateFileStart,
+    handleCreateFolderStart,
+    handleDelete,
+    handleMoveToDirectory,
+    handleOpenContextItem,
+    handleRefreshWorkspace,
+    handleRename,
+    handleRevealInFileManager,
+    scheduleContextTargetClear,
+    text.contextMenu,
+  ]);
 
   const handleTreeDragStart = useCallback((event: DragEvent<HTMLDivElement>, node: FileNode) => {
     if (renaming || creatingFolder || creatingFile) {
@@ -856,27 +1082,12 @@ export default function Sidebar() {
     }
 
     const targetDirectory = targetPath ?? workspacePath;
-    const nextPath = joinPath(targetDirectory, source.name);
     try {
-      if (await pathExists(nextPath)) {
-        message.warning(text.sidebar.moveTargetExists(source.name));
-        return;
-      }
-
-      await rename(source.path, nextPath);
-      const nextExpanded = rebaseExpandedFolders(expandedRef.current, source.path, nextPath);
-      if (targetPath) nextExpanded.add(targetPath);
-      setExpandedFolders(nextExpanded);
-      dispatch({ type: 'RENAME_PATH', payload: { oldPath: source.path, newPath: nextPath, name: source.name } });
-      await refreshWorkspaceTree(nextExpanded);
-      message.success(text.sidebar.itemMoved(source.name));
-    } catch (error) {
-      console.error('Failed to move workspace item:', error);
-      message.error(text.sidebar.moveItemFailed);
+      await moveWorkspaceItem(source, targetDirectory);
     } finally {
       handleTreeDragEnd();
     }
-  }, [canDropInto, dispatch, handleTreeDragEnd, refreshWorkspaceTree, text.sidebar]);
+  }, [canDropInto, handleTreeDragEnd, moveWorkspaceItem]);
 
   useEffect(() => {
     if (!activeWorkspaceFilePath) {
@@ -980,7 +1191,7 @@ export default function Sidebar() {
           </button>
         </div>
 
-        <div ref={sidebarContentRef} className="sidebar-content" onClick={closeContextMenu}>
+        <div ref={sidebarContentRef} className="sidebar-content">
           {state.sidebarActiveTab === 'workspace' && (
             <>
               <div className="workspace-search-box" onClick={(event) => event.stopPropagation()}>
@@ -1046,6 +1257,7 @@ export default function Sidebar() {
                   onCreateFileCancel={handleCreateFileCancel}
                   draggingPath={draggingPath}
                   dropTargetPath={dropTargetPath}
+                  contextTargetPath={contextTargetPath}
                   onDragStart={handleTreeDragStart}
                   onDragOver={handleTreeDragOver}
                   onDragLeave={handleTreeDragLeave}
@@ -1098,47 +1310,6 @@ export default function Sidebar() {
         />
       </div>
 
-      {contextMenu && (contextMenu.item || state.workspacePath) && (
-        <div
-          ref={contextMenuRef}
-          className="context-menu"
-          style={{ top: contextMenu.y, left: contextMenu.x }}
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {contextMenu.item && (
-            <>
-              <div className="context-menu-item" onClick={() => handleRename(contextMenu.item!)}>
-                <Pencil size={14} /> {text.contextMenu.rename}
-              </div>
-              {contextMenu.item.type === 'folder' && (
-                <>
-                  <div className="context-menu-item" onClick={() => void handleCreateFolderStart(contextMenu.item!.path)}>
-                    <FolderPlus size={14} /> {text.contextMenu.newFolder}
-                  </div>
-                  <div className="context-menu-item" onClick={() => void handleCreateFileStart(contextMenu.item!.path)}>
-                    <FilePlus size={14} /> {text.contextMenu.newFile}
-                  </div>
-                </>
-              )}
-              <div className="context-menu-divider" />
-              <div className="context-menu-item danger" onClick={() => handleDelete(contextMenu.item!)}>
-                <Trash2 size={14} /> {text.contextMenu.delete}
-              </div>
-            </>
-          )}
-          {!contextMenu.item && state.workspacePath && (
-            <>
-              <div className="context-menu-item" onClick={() => void handleCreateFolderStart(null)}>
-                <FolderPlus size={14} /> {text.contextMenu.newFolder}
-              </div>
-              <div className="context-menu-item" onClick={() => void handleCreateFileStart(null)}>
-                <FilePlus size={14} /> {text.contextMenu.newFile}
-              </div>
-            </>
-          )}
-        </div>
-      )}
     </>
   );
 }
@@ -1148,7 +1319,7 @@ function WorkspaceTree({
   onContextMenu, renaming, renameValue, onRenameChange, onRenameSubmit, onRenameCancel, onRename,
   creatingFolder, onCreateFolderStart, onCreateFolderChange, onCreateFolderSubmit, onCreateFolderCancel,
   creatingFile, onCreateFileStart, onCreateFileChange, onCreateFileSubmit, onCreateFileCancel,
-  draggingPath, dropTargetPath, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd, text
+  draggingPath, dropTargetPath, contextTargetPath, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd, text
 }: WorkspaceTreeProps) {
   const hasWorkspace = Boolean(workspacePath);
   const isRootDropTarget = dropTargetPath === ROOT_DROP_TARGET;
@@ -1251,6 +1422,7 @@ function WorkspaceTree({
           onCreateFileCancel={onCreateFileCancel}
           draggingPath={draggingPath}
           dropTargetPath={dropTargetPath}
+          contextTargetPath={contextTargetPath}
           onDragStart={onDragStart}
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
@@ -1268,7 +1440,7 @@ function TreeNode({
   renaming, renameValue, onRenameChange, onRenameSubmit, onRenameCancel, onRename, creatingFolder,
   onCreateFolderStart, onCreateFolderChange, onCreateFolderSubmit, onCreateFolderCancel,
   creatingFile, onCreateFileStart, onCreateFileChange, onCreateFileSubmit, onCreateFileCancel,
-  draggingPath, dropTargetPath, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd, text,
+  draggingPath, dropTargetPath, contextTargetPath, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd, text,
 }: TreeNodeProps) {
   const isExpanded = expandedFolders.has(node.path);
   const isLoading = loadingFolders?.has(node.path);
@@ -1276,6 +1448,7 @@ function TreeNode({
   const isRenaming = renaming === node.path;
   const isDragging = draggingPath === node.path;
   const isDropTarget = dropTargetPath === node.path;
+  const isContextTarget = contextTargetPath === node.path;
   const depthStyle: DepthStyle = { '--depth': depth };
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'F2' || isRenaming) return;
@@ -1313,7 +1486,7 @@ function TreeNode({
     return (
       <div>
         <div
-          className={`file-tree-item ${isActive ? 'active' : ''} ${isDragging ? 'dragging' : ''} ${isDropTarget ? 'drop-target' : ''}`}
+          className={`file-tree-item ${isActive ? 'active' : ''} ${isDragging ? 'dragging' : ''} ${isDropTarget ? 'drop-target' : ''} ${isContextTarget ? 'context-target' : ''}`}
           style={depthStyle}
           tabIndex={0}
           draggable={!isRenaming}
@@ -1384,6 +1557,7 @@ function TreeNode({
             onCreateFileCancel={onCreateFileCancel}
             draggingPath={draggingPath}
             dropTargetPath={dropTargetPath}
+            contextTargetPath={contextTargetPath}
             onDragStart={onDragStart}
             onDragOver={onDragOver}
             onDragLeave={onDragLeave}
@@ -1398,7 +1572,7 @@ function TreeNode({
 
   return (
     <div
-      className={`file-tree-item ${isActive ? 'active' : ''} ${isDragging ? 'dragging' : ''}`}
+      className={`file-tree-item ${isActive ? 'active' : ''} ${isDragging ? 'dragging' : ''} ${isContextTarget ? 'context-target' : ''}`}
       style={depthStyle}
       tabIndex={0}
       draggable={!isRenaming}

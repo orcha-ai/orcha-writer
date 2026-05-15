@@ -13,6 +13,7 @@ import { autocompletion, closeBrackets } from '@codemirror/autocomplete';
 import { message } from 'antd';
 import type { TabFile } from '../types';
 import { copyFile, ensureDir, readClipboardFileUrls, readClipboardImage, writeBinaryFile } from '../utils/fs';
+import { effectiveViewModeForDocument } from '../utils/documentCapabilities';
 import { basename, dirname, formatMarkdownImageUrl, markdownImagePathForDocument, stripExtension } from '../utils/markdownImages';
 import type { EditorSelection } from '../modules/ai-chat/types/editor-bridge';
 import { getDocumentLanguage, translateText } from '../i18n';
@@ -363,9 +364,10 @@ export default function Editor() {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const activeTab = state.tabs.find(t => t.id === state.activeTabId);
+  const effectiveViewMode = effectiveViewModeForDocument(activeTab, state.viewMode);
 
   const syncEnabled = useRef(state.editorSettings.syncScroll);
-  const mode = useRef(state.viewMode);
+  const mode = useRef(effectiveViewMode);
   const tabIdRef = useRef(activeTab?.id ?? '');
   const activeTabRef = useRef(activeTab);
   const workspacePathRef = useRef(state.workspacePath);
@@ -377,7 +379,7 @@ export default function Editor() {
   useEffect(() => { workspacePathRef.current = state.workspacePath; }, [state.workspacePath]);
   useEffect(() => { pasteImageActionRef.current = editor.pasteImageAction; }, [editor.pasteImageAction]);
   useEffect(() => { syncEnabled.current = state.editorSettings.syncScroll; }, [state.editorSettings.syncScroll]);
-  useEffect(() => { mode.current = state.viewMode; }, [state.viewMode]);
+  useEffect(() => { mode.current = effectiveViewMode; }, [effectiveViewMode]);
 
   // rAF-based scroll handler for smooth sync
   let rafId = 0;
@@ -719,7 +721,7 @@ export default function Editor() {
   useEffect(() => {
     const view = viewRef.current;
     if (!view || !activeTab) return;
-    if (state.viewMode === 'block') return;
+    if (effectiveViewMode === 'block') return;
     const currentContent = view.state.doc.toString();
     if (currentContent === activeTab.content) return;
 
@@ -735,19 +737,19 @@ export default function Editor() {
       changes: { from: 0, to: view.state.doc.length, insert: activeTab.content },
     });
     updateEditorStatus(view, true);
-  }, [activeTab?.content, activeTab?.id, state.viewMode, updateEditorStatus]);
+  }, [activeTab?.content, activeTab?.id, effectiveViewMode, updateEditorStatus]);
 
   // Sync viewMode changes
   useEffect(() => {
     if (viewRef.current) {
       viewRef.current.requestMeasure();
     }
-  }, [state.viewMode]);
+  }, [effectiveViewMode]);
 
   if (!activeTab) return null;
 
   return (
-    <div className={`editor-panel ${state.viewMode === 'preview' || state.viewMode === 'block' ? 'hidden' : ''}`}>
+    <div className={`editor-panel ${effectiveViewMode === 'preview' || effectiveViewMode === 'block' ? 'hidden' : ''}`}>
       <div ref={editorRef} style={{ flex: 1, overflow: 'hidden' }} />
     </div>
   );

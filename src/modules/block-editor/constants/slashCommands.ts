@@ -3,6 +3,14 @@ import { translateText } from '../../../i18n';
 
 const SLASH_COMMAND_SOURCES: SlashCommand[] = [
   {
+    id: 'paragraph',
+    label: '段落',
+    description: '开始普通正文',
+    shortcutLabel: '文本',
+    keywords: ['paragraph', 'text', 'p', '正文', '段落', '文本'],
+    type: 'paragraph',
+  },
+  {
     id: 'heading_1',
     label: '一级标题',
     description: '用于章节主标题',

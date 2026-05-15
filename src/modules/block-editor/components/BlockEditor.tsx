@@ -405,6 +405,19 @@ function textareaClassName(block: BlockViewModel): string {
   ].filter(Boolean).join(' ');
 }
 
+function keepsEnterInsideBlock(block: BlockViewModel): boolean {
+  return ['code_block', 'frontmatter', 'html_block', 'math_block', 'table'].includes(block.type);
+}
+
+function isPlainEnter(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
+  return event.key === 'Enter'
+    && !event.shiftKey
+    && !event.metaKey
+    && !event.ctrlKey
+    && !event.altKey
+    && !event.nativeEvent.isComposing;
+}
+
 function supportsInlineMarkdownPreview(block: BlockViewModel): boolean {
   return !['code_block', 'frontmatter', 'html_block', 'math_block', 'table', 'image', 'horizontal_rule'].includes(block.type);
 }
@@ -853,6 +866,35 @@ export default function BlockEditor() {
     window.setTimeout(() => textareasRef.current[block.id]?.focus(), 0);
   }, [blocks, syncBlocks]);
 
+  const insertParagraphAfter = useCallback((blockIndex: number, textarea: HTMLTextAreaElement) => {
+    const block = blocks[blockIndex];
+    if (!block) return;
+
+    let currentBlock = block;
+    let nextBlock = createBlock('paragraph');
+
+    if (block.type === 'paragraph' || block.type === 'empty') {
+      const before = textarea.value.slice(0, textarea.selectionStart);
+      const after = textarea.value.slice(textarea.selectionEnd);
+      currentBlock = block.type === 'empty'
+        ? { ...createBlock('paragraph', before), id: block.id, sourceRange: block.sourceRange }
+        : updateBlockContent(block, before);
+      nextBlock = createBlock('paragraph', after);
+    }
+
+    const targetIndex = Math.max(0, Math.min(blockIndex + 1, blocks.length));
+    const nextBlocks = [...blocks];
+    nextBlocks[blockIndex] = currentBlock;
+    nextBlocks.splice(targetIndex, 0, nextBlock);
+
+    syncBlocks(nextBlocks, targetIndex, { selectedIndices: [targetIndex] });
+    window.setTimeout(() => {
+      const nextTextarea = textareasRef.current[nextBlock.id];
+      nextTextarea?.focus();
+      nextTextarea?.setSelectionRange(0, 0);
+    }, 0);
+  }, [blocks, syncBlocks]);
+
   const getSelectionForBlock = useCallback((blockIndex?: number | null) => {
     const fallbackIndex = blockIndex ?? selectedIndex;
     const base = selectedIndices.length > 0
@@ -865,7 +907,7 @@ export default function BlockEditor() {
     const targets = normalizeIndices(indices, blocks.length);
     if (targets.length === 0) return;
     if (blocks.length <= targets.length) {
-      syncBlocks([createBlock('empty')], 0, { selectedIndices: [0] });
+      syncBlocks([createBlock('paragraph')], 0, { selectedIndices: [0] });
       return;
     }
     const targetSet = new Set(targets);
@@ -1345,6 +1387,16 @@ export default function BlockEditor() {
       }
     }
 
+    if (isPlainEnter(event)) {
+      const block = blocks[blockIndex];
+      if (block && !keepsEnterInsideBlock(block)) {
+        event.preventDefault();
+        setSlash(null);
+        insertParagraphAfter(blockIndex, event.currentTarget);
+        return;
+      }
+    }
+
     if ((event.key === 'Backspace' || event.key === 'Delete') && !event.currentTarget.value && blocks.length > 1) {
       event.preventDefault();
       const nextFocusBlockId = nextFocusBlockIdAfterDelete(blocks, blockIndex, event.key === 'Backspace' ? 'previous' : 'next');
@@ -1359,7 +1411,7 @@ export default function BlockEditor() {
       event.preventDefault();
       duplicateBlocksAt(getSelectionForBlock(blockIndex));
     }
-  }, [applySlashCommand, blocks, deleteBlocksAt, duplicateBlocksAt, filteredCommands, getSelectionForBlock, replaceBlock, slash]);
+  }, [applySlashCommand, blocks, deleteBlocksAt, duplicateBlocksAt, filteredCommands, getSelectionForBlock, insertParagraphAfter, replaceBlock, slash]);
 
   const handlePlusClick = useCallback((event: MouseEvent<HTMLButtonElement>, blockIndex: number) => {
     event.preventDefault();

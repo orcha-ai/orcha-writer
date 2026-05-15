@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { useApp } from '../AppContext';
 import { useSettingsStore } from '../store';
 import MarkdownIt from 'markdown-it';
@@ -9,8 +9,10 @@ import type { MarkdownSettings, PreviewSettings, SecuritySettings } from '../typ
 import { getPreviewThemeClassName } from '../previewThemes';
 import { getPreviewCodeThemeClassName } from '../codeThemes';
 import { pathExists } from '../utils/fs';
+import { effectiveViewModeForDocument, isMarkdownDocument } from '../utils/documentCapabilities';
 import { normalizeMarkdownImageSyntax, resolveMarkdownImageSource } from '../utils/markdownImages';
 import { getLocaleText, normalizeAppLanguage } from '../i18n';
+import { isMermaidLanguage, nextMermaidRenderId, renderMermaidSvg, resolveMermaidTheme } from '../utils/mermaid';
 
 interface HeadingInfo {
   level: number;
@@ -44,6 +46,8 @@ const CODE_LANGUAGE_LABELS: Record<string, string> = {
   jsx: 'JSX',
   markdown: 'Markdown',
   md: 'Markdown',
+  mermaid: 'Mermaid',
+  mmd: 'Mermaid',
   php: 'PHP',
   python: 'Python',
   py: 'Python',
@@ -74,6 +78,7 @@ const CODE_LANGUAGE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'go', label: 'Go' },
   { value: 'rust', label: 'Rust' },
   { value: 'markdown', label: 'Markdown' },
+  { value: 'mermaid', label: 'Mermaid' },
 ];
 
 function escapeHtml(content: string): string {
@@ -134,6 +139,23 @@ function renderCodeLanguageOptions(language: string, plainTextLabel: string): st
     const selected = option.value === normalizedLanguage ? ' selected' : '';
     return `<option value="${escapeHtml(option.value)}"${selected}>${escapeHtml(label)}</option>`;
   }).join('');
+}
+
+function encodeMermaidSource(source: string): string {
+  return encodeURIComponent(source);
+}
+
+function decodeMermaidSource(source: string): string {
+  try {
+    return decodeURIComponent(source);
+  } catch {
+    return source;
+  }
+}
+
+function readMermaidSource(container: Element): string {
+  const source = container.querySelector<HTMLElement>('.md-mermaid-source');
+  return source?.textContent || decodeMermaidSource((container as HTMLElement).dataset.mermaidSourceEncoded || '');
 }
 
 function normalizeTabSize(value: number): number {
@@ -394,7 +416,18 @@ function createMd(markdown: MarkdownSettings, preview: PreviewSettings, security
 
   md.renderer.rules.fence = (tokens: Token[], idx: number, options, env) => {
     const token = tokens[idx];
-    return renderCodeBlock(token, token.content, extractCodeLanguage(token.info), options, env as MarkdownRenderEnv);
+    const codeLanguage = extractCodeLanguage(token.info);
+
+    if (isMermaidLanguage(codeLanguage)) {
+      return [
+        `<figure class="md-mermaid" data-mermaid-source-encoded="${escapeHtml(encodeMermaidSource(token.content))}" role="img">`,
+        `<pre class="md-mermaid-source" aria-hidden="true">${escapeHtml(token.content)}</pre>`,
+        `<figcaption class="md-mermaid-loading">${escapeHtml(text.preview.mermaidLoading)}</figcaption>`,
+        '</figure>',
+      ].join('');
+    }
+
+    return renderCodeBlock(token, token.content, codeLanguage, options, env as MarkdownRenderEnv);
   };
 
   md.renderer.rules.code_block = (tokens: Token[], idx: number, options, env) => {
@@ -427,6 +460,46 @@ function renderMarkdown(content: string, markdown: MarkdownSettings, preview: Pr
   const md = createMd(markdown, preview, security, language, documentPath);
   const raw = frontMatter.html + md.render(normalizeMarkdownImageSyntax(frontMatter.body), env);
   return injectToc(raw, markdown, env.headings, getLocaleText(language).preview.tocTitle);
+}
+
+async function renderMermaidDiagramsInHtml(html: string, themeMode: 'light' | 'dark' | 'system', text: ReturnType<typeof getLocaleText>['preview']): Promise<string> {
+  if (!html.includes('md-mermaid')) return html;
+  if (typeof document === 'undefined') return html;
+
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const diagrams = Array.from(template.content.querySelectorAll<HTMLElement>('.md-mermaid'));
+  if (diagrams.length === 0) return html;
+
+  const mermaidTheme = resolveMermaidTheme(themeMode);
+  for (const diagram of diagrams) {
+    const source = readMermaidSource(diagram);
+    if (!source.trim()) {
+      diagram.classList.add('is-error');
+      diagram.innerHTML = `<div class="md-mermaid-error">${escapeHtml(text.mermaidEmpty)}</div>`;
+      continue;
+    }
+
+    try {
+      const { svg, bindFunctions } = await renderMermaidSvg(source, nextMermaidRenderId(), mermaidTheme);
+      diagram.innerHTML = svg;
+      bindFunctions?.(diagram);
+      diagram.classList.remove('is-loading', 'is-error');
+      diagram.dataset.mermaidRendered = 'true';
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      diagram.classList.remove('is-loading');
+      diagram.classList.add('is-error');
+      diagram.innerHTML = [
+        '<div class="md-mermaid-error">',
+        `<strong>${escapeHtml(text.mermaidRenderFailed)}</strong>`,
+        `<code>${escapeHtml(message)}</code>`,
+        '</div>',
+      ].join('');
+    }
+  }
+
+  return template.innerHTML;
 }
 
 function replaceFenceLanguage(content: string, lineStart: number, language: string): string {
@@ -473,17 +546,44 @@ export default function Preview() {
   const markdown = useSettingsStore(s => s.markdown);
   const preview = useSettingsStore(s => s.preview);
   const security = useSettingsStore(s => s.security);
+  const themeMode = useSettingsStore(s => s.appearance.themeMode);
   const activeTab = state.tabs.find(t => t.id === state.activeTabId);
   const previewRef = useRef<HTMLDivElement>(null);
+  const [html, setHtml] = useState('');
   const appLanguage = normalizeAppLanguage(general.language);
   const text = getLocaleText(appLanguage);
-  const isHidden = state.viewMode === 'edit' || state.viewMode === 'block';
+  const effectiveViewMode = effectiveViewModeForDocument(activeTab, state.viewMode);
+  const isHidden = effectiveViewMode === 'edit' || effectiveViewMode === 'block';
+  const canPreviewMarkdown = isMarkdownDocument(activeTab);
 
-  const html = useMemo(() => {
-    if (!activeTab || isHidden) return '';
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!activeTab || !canPreviewMarkdown || isHidden) {
+      setHtml('');
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const raw = renderMarkdown(activeTab.content, markdown, preview, security, appLanguage, activeTab.path);
-    return highlightSearch(applySecurity(raw, security, appLanguage), state.searchQuery);
-  }, [activeTab, appLanguage, isHidden, markdown, preview, security, state.searchQuery]);
+    const secured = applySecurity(raw, security, appLanguage);
+    setHtml(highlightSearch(secured, state.searchQuery));
+
+    void renderMermaidDiagramsInHtml(secured, themeMode, text.preview)
+      .then(rendered => {
+        if (!cancelled) setHtml(highlightSearch(rendered, state.searchQuery));
+      })
+      .catch(error => {
+        if (!cancelled) {
+          console.warn('[Preview] Failed to render Mermaid diagrams:', error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, appLanguage, canPreviewMarkdown, isHidden, markdown, preview, security, state.searchQuery, text.preview, themeMode]);
 
   // Highlight active match when searchMatchIndex changes
   useEffect(() => {
@@ -659,7 +759,7 @@ export default function Preview() {
 
   return (
     <div className={`preview-panel ${isHidden ? 'hidden' : ''}`}>
-      {activeTab ? (
+      {activeTab && canPreviewMarkdown ? (
         <div
           ref={previewRef}
           className={`md-preview ${previewThemeClassName} ${codeThemeClassName}`}

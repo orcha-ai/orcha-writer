@@ -2,13 +2,24 @@ import { useApp } from '../AppContext';
 import { Save } from 'lucide-react';
 import { useSettingsStore } from '../store';
 import { translateText } from '../i18n';
+import { fileExtensionFromName, isMarkdownFileName } from '../utils/savePaths';
+import { effectiveViewModeForDocument } from '../utils/documentCapabilities';
+
+function documentTypeLabel(name: string | undefined, textLabel: string): string {
+  if (!name) return textLabel;
+  if (isMarkdownFileName(name)) return 'Markdown';
+  const extension = fileExtensionFromName(name);
+  return extension ? extension.toUpperCase() : textLabel;
+}
 
 export default function StatusBar() {
   const { state } = useApp();
   const language = useSettingsStore(s => s.general.language);
   const t = (value: string, params?: Record<string, string | number>) => translateText(language, value, params);
   const activeTab = state.tabs.find(t => t.id === state.activeTabId);
-  const blockStatus = state.viewMode === 'block' ? state.blockSelectionStatus : null;
+  const effectiveViewMode = effectiveViewModeForDocument(activeTab, state.viewMode);
+  const blockStatus = effectiveViewMode === 'block' ? state.blockSelectionStatus : null;
+  const fileTypeLabel = documentTypeLabel(activeTab?.name || activeTab?.path, t('文本'));
   const previewLabel = activeTab?.preview?.kind === 'image'
     ? t('图片预览')
     : activeTab?.preview?.kind === 'pdf'
@@ -44,7 +55,7 @@ export default function StatusBar() {
             <span>{blockStatus.sourceLabel}</span>
             <span>{t('{count} 字', { count: blockStatus.characterCount })}</span>
           </div>
-        ) : state.viewMode === 'block' && activeTab ? (
+        ) : effectiveViewMode === 'block' && activeTab ? (
           <div className="statusbar-item">
             <span>{t('未选中块')}</span>
           </div>
@@ -62,7 +73,7 @@ export default function StatusBar() {
               <span>UTF-8</span>
             </div>
             <div className="statusbar-item">
-              <span>Markdown</span>
+              <span>{fileTypeLabel}</span>
             </div>
             {activeTab && (
               <>
