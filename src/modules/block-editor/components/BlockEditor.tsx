@@ -1,6 +1,8 @@
 import {
   CheckSquare,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   Code2,
   Copy,
@@ -18,6 +20,8 @@ import {
   Send,
   Sparkles,
   Table2,
+  TableColumnsSplit,
+  TableRowsSplit,
   Trash2,
   X,
 } from 'lucide-react';
@@ -88,6 +92,17 @@ interface BlockAISelectionPayload {
       to: number;
     };
   };
+}
+
+type TableCellSection = 'header' | 'body';
+type TableRowInsertPosition = 'above' | 'below';
+type TableColumnInsertPosition = 'left' | 'right';
+
+interface TableCellSelection {
+  blockId: string;
+  section: TableCellSection;
+  rowIndex: number;
+  columnIndex: number;
 }
 
 interface SyncBlocksOptions {
@@ -262,6 +277,41 @@ function cloneTableModel(table: MarkdownTableModel): MarkdownTableModel {
     alignments: [...table.alignments],
     rows: table.rows.map(row => [...row]),
   };
+}
+
+function tableCellInputKey(cell: TableCellSelection): string {
+  return `${cell.blockId}:${cell.section}:${cell.rowIndex}:${cell.columnIndex}`;
+}
+
+function isTableCellInModel(cell: TableCellSelection, blockId: string, table: MarkdownTableModel): boolean {
+  if (cell.blockId !== blockId) return false;
+  if (cell.columnIndex < 0 || cell.columnIndex >= table.headers.length) return false;
+  if (cell.section === 'header') return true;
+  return cell.rowIndex >= 0 && cell.rowIndex < table.rows.length;
+}
+
+function defaultTableCell(blockId: string, table: MarkdownTableModel): TableCellSelection | null {
+  if (table.headers.length === 0) return null;
+  return table.rows.length > 0
+    ? { blockId, section: 'body', rowIndex: 0, columnIndex: 0 }
+    : { blockId, section: 'header', rowIndex: 0, columnIndex: 0 };
+}
+
+function tableCellForBlock(
+  blockId: string,
+  table: MarkdownTableModel,
+  selectedCell: TableCellSelection | null,
+): TableCellSelection | null {
+  if (selectedCell && isTableCellInModel(selectedCell, blockId, table)) return selectedCell;
+  return defaultTableCell(blockId, table);
+}
+
+function isSameTableCell(cell: TableCellSelection | null, target: TableCellSelection): boolean {
+  return Boolean(cell
+    && cell.blockId === target.blockId
+    && cell.section === target.section
+    && cell.rowIndex === target.rowIndex
+    && cell.columnIndex === target.columnIndex);
 }
 
 function escapeSearchQuery(value: string): string {
@@ -561,7 +611,11 @@ export default function BlockEditor() {
   const [blockMenu, setBlockMenu] = useState<BlockContextMenuState | null>(null);
   const [blockAI, setBlockAI] = useState<BlockAIPopoverState | null>(null);
   const [blockAIPrompt, setBlockAIPrompt] = useState('');
+  const [selectedTableCell, setSelectedTableCell] = useState<TableCellSelection | null>(null);
   const textareasRef = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  const tableInputsRef = useRef<Record<string, HTMLInputElement | null>>({});
+  const selectedTableCellRef = useRef<TableCellSelection | null>(null);
+  const pendingTableFocusRef = useRef<TableCellSelection | null>(null);
   const documentRef = useRef<HTMLDivElement | null>(null);
   const blockMenuRef = useRef<HTMLDivElement | null>(null);
   const blockAIRef = useRef<HTMLDivElement | null>(null);
@@ -592,6 +646,42 @@ export default function BlockEditor() {
     });
     return models;
   }, [blocks]);
+
+  const setCurrentTableCell = useCallback((cell: TableCellSelection | null) => {
+    selectedTableCellRef.current = cell;
+    setSelectedTableCell(cell);
+  }, []);
+
+  useEffect(() => {
+    setSelectedTableCell((current) => {
+      if (!current) {
+        selectedTableCellRef.current = null;
+        return current;
+      }
+      const block = blocks.find(item => item.id === current.blockId);
+      if (!block || block.type !== 'table') {
+        selectedTableCellRef.current = null;
+        return null;
+      }
+      const table = tableModels.get(block.id);
+      if (!table || !isTableCellInModel(current, block.id, table)) {
+        selectedTableCellRef.current = null;
+        return null;
+      }
+      selectedTableCellRef.current = current;
+      return current;
+    });
+  }, [blocks, tableModels]);
+
+  useLayoutEffect(() => {
+    const cell = pendingTableFocusRef.current;
+    if (!cell) return;
+    const input = tableInputsRef.current[tableCellInputKey(cell)];
+    if (!input) return;
+    pendingTableFocusRef.current = null;
+    input.focus();
+    input.setSelectionRange(0, input.value.length);
+  }, [blocks, selectedTableCell]);
 
   const resizeBlockTextareas = useCallback(() => {
     Object.values(textareasRef.current).forEach(resizeTextarea);
@@ -629,10 +719,11 @@ export default function BlockEditor() {
     setBlockMenu(null);
     setBlockAI(null);
     setBlockAIPrompt('');
+    setCurrentTableCell(null);
     historyPastRef.current = [];
     historyFutureRef.current = [];
     textEditHistoryRef.current = null;
-  }, [activeTab?.id, setBlockDragTarget]);
+  }, [activeTab?.id, setBlockDragTarget, setCurrentTableCell]);
 
   useEffect(() => {
     const nextTabId = activeTab?.id ?? null;
@@ -1108,6 +1199,7 @@ export default function BlockEditor() {
   const selectBlock = useCallback((blockIndex: number, event?: MouseEvent<HTMLElement>) => {
     setBlockMenu(null);
     if (event?.shiftKey) {
+      setCurrentTableCell(null);
       const anchor = selectedIndex ?? selectedIndices[0] ?? blockIndex;
       const nextSelection = normalizeIndices(rangeIndices(anchor, blockIndex), blocks.length);
       setSelectedIndex(blockIndex);
@@ -1116,6 +1208,7 @@ export default function BlockEditor() {
     }
 
     if (event && isPrimaryShortcut(event)) {
+      setCurrentTableCell(null);
       const base = selectedIndices.length > 0
         ? selectedIndices
         : (selectedIndex == null ? [] : [selectedIndex]);
@@ -1128,9 +1221,10 @@ export default function BlockEditor() {
       return;
     }
 
+    if (blocks[blockIndex]?.type !== 'table') setCurrentTableCell(null);
     setSelectedIndex(blockIndex);
     setSelectedIndices([blockIndex]);
-  }, [blocks.length, selectedIndex, selectedIndices]);
+  }, [blocks, selectedIndex, selectedIndices, setCurrentTableCell]);
 
   const selectedMarkdown = useCallback((indices: number[]) => (
     normalizeIndices(indices, blocks.length)
@@ -1286,6 +1380,10 @@ export default function BlockEditor() {
     updateSlashQuery(blockIndex, value);
   }, [blocks, recordTextEditHistory, replaceBlock, updateSlashQuery]);
 
+  const queueTableCellFocus = useCallback((cell: TableCellSelection) => {
+    pendingTableFocusRef.current = cell;
+  }, []);
+
   const updateTableBlock = useCallback((
     blockIndex: number,
     updater: (table: MarkdownTableModel) => MarkdownTableModel,
@@ -1301,7 +1399,7 @@ export default function BlockEditor() {
 
   const updateTableCell = useCallback((
     blockIndex: number,
-    section: 'header' | 'body',
+    section: TableCellSection,
     rowIndex: number,
     columnIndex: number,
     value: string,
@@ -1318,21 +1416,72 @@ export default function BlockEditor() {
     }, { recordHistory: false });
   }, [blocks, recordTextEditHistory, updateTableBlock]);
 
-  const addTableRow = useCallback((blockIndex: number) => {
-    updateTableBlock(blockIndex, (table) => {
-      table.rows.push(Array.from({ length: table.headers.length }, () => ''));
-      return table;
-    });
-  }, [updateTableBlock]);
+  const insertTableRow = useCallback((
+    blockIndex: number,
+    position: TableRowInsertPosition,
+  ) => {
+    const block = blocks[blockIndex];
+    if (!block || block.type !== 'table') return;
+    const table = parseMarkdownTable(tableMarkdownFromBlock(block));
+    if (!table) return;
+    const referenceCell = tableCellForBlock(block.id, table, selectedTableCellRef.current);
+    if (!referenceCell) return;
 
-  const addTableColumn = useCallback((blockIndex: number) => {
-    updateTableBlock(blockIndex, (table) => {
-      table.headers.push(t('列 {count}', { count: table.headers.length + 1 }));
-      table.alignments.push('default');
-      table.rows = table.rows.map(row => [...row, '']);
-      return table;
+    const nextTable = cloneTableModel(table);
+    const width = Math.max(1, nextTable.headers.length);
+    const columnIndex = Math.max(0, Math.min(referenceCell.columnIndex, width - 1));
+    const referenceRowIndex = referenceCell.section === 'body'
+      ? Math.max(0, Math.min(referenceCell.rowIndex, nextTable.rows.length - 1))
+      : 0;
+    const insertionIndex = referenceCell.section === 'header'
+      ? 0
+      : referenceRowIndex + (position === 'below' ? 1 : 0);
+    const nextCell: TableCellSelection = { blockId: block.id, section: 'body', rowIndex: insertionIndex, columnIndex };
+
+    nextTable.rows.splice(insertionIndex, 0, Array.from({ length: width }, () => ''));
+    replaceBlock(blockIndex, updateBlockContent(block, serializeMarkdownTable(nextTable)));
+    setCurrentTableCell(nextCell);
+    queueTableCellFocus(nextCell);
+  }, [blocks, queueTableCellFocus, replaceBlock, setCurrentTableCell]);
+
+  const insertTableColumn = useCallback((
+    blockIndex: number,
+    position: TableColumnInsertPosition,
+  ) => {
+    const block = blocks[blockIndex];
+    if (!block || block.type !== 'table') return;
+    const table = parseMarkdownTable(tableMarkdownFromBlock(block));
+    if (!table) return;
+    const referenceCell = tableCellForBlock(block.id, table, selectedTableCellRef.current);
+    if (!referenceCell) return;
+
+    const nextTable = cloneTableModel(table);
+    const width = Math.max(1, nextTable.headers.length);
+    const referenceColumnIndex = Math.max(0, Math.min(referenceCell.columnIndex, width - 1));
+    const insertionIndex = referenceColumnIndex + (position === 'right' ? 1 : 0);
+
+    nextTable.headers.splice(insertionIndex, 0, t('列 {count}', { count: nextTable.headers.length + 1 }));
+    nextTable.alignments.splice(insertionIndex, 0, 'default');
+    nextTable.rows = nextTable.rows.map((row) => {
+      const nextRow = [...row];
+      nextRow.splice(insertionIndex, 0, '');
+      return nextRow;
     });
-  }, [t, updateTableBlock]);
+
+    const rowIndex = referenceCell.section === 'body'
+      ? Math.max(0, Math.min(referenceCell.rowIndex, nextTable.rows.length - 1))
+      : 0;
+    const nextCell: TableCellSelection = {
+      blockId: block.id,
+      section: referenceCell.section === 'body' && nextTable.rows[rowIndex] ? 'body' : 'header',
+      rowIndex,
+      columnIndex: insertionIndex,
+    };
+
+    replaceBlock(blockIndex, updateBlockContent(block, serializeMarkdownTable(nextTable)));
+    setCurrentTableCell(nextCell);
+    queueTableCellFocus(nextCell);
+  }, [blocks, queueTableCellFocus, replaceBlock, setCurrentTableCell, t]);
 
   const removeTableRow = useCallback((blockIndex: number, rowIndex: number) => {
     updateTableBlock(blockIndex, (table) => {
@@ -1460,7 +1609,8 @@ export default function BlockEditor() {
     setSlash(null);
     setBlockMenu(null);
     setBlockAI(null);
-  }, []);
+    setCurrentTableCell(null);
+  }, [setCurrentTableCell]);
 
   const handleShellMouseDown = useCallback((event: MouseEvent<HTMLElement>) => {
     if (event.button !== 0 || isBlockEditorContentTarget(event.target)) return;
@@ -1646,6 +1796,9 @@ export default function BlockEditor() {
                 ? ({ '--block-list-indent': `${listIndentPx(block)}px` } as CSSProperties)
                 : undefined;
               const tableModel = block.type === 'table' ? tableModels.get(block.id) || null : null;
+              const activeTableCell = isPrimarySelected && tableModel
+                ? tableCellForBlock(block.id, tableModel, selectedTableCell)
+                : null;
               const inlineMarkdownPreview = shouldRenderInlineMarkdownPreview(block, textareaValue);
               return (
                 <div
@@ -1785,63 +1938,101 @@ export default function BlockEditor() {
                               <table className="block-table-grid">
                                 <thead>
                                   <tr>
-                                    {tableModel.headers.map((cell, columnIndex) => (
-                                      <th key={`header-${columnIndex}`}>
-                                        <div className="block-table-cell-wrap">
-                                          {blockSearchQuery && (
-                                            <div className="block-table-input-highlight" aria-hidden="true">
-                                              {renderSearchHighlight(cell, blockSearchQuery)}
-                                            </div>
-                                          )}
-                                          <input
-                                            value={cell}
-                                            aria-label={t('表头 {count}', { count: columnIndex + 1 })}
-                                            onFocus={() => {
-                                              setSelectedIndex(index);
-                                              setSelectedIndices([index]);
-                                            }}
-                                            onBlur={endTextEditHistory}
-                                            onChange={(event) => updateTableCell(index, 'header', 0, columnIndex, event.target.value)}
-                                          />
-                                          <button
-                                            type="button"
-                                            className="block-table-cell-action"
-                                            aria-label={t('删除列')}
-                                            disabled={tableModel.headers.length <= 1}
-                                            onClick={() => removeTableColumn(index, columnIndex)}
+                                    {tableModel.headers.map((cell, columnIndex) => {
+                                      const headerCell: TableCellSelection = {
+                                        blockId: block.id,
+                                        section: 'header',
+                                        rowIndex: 0,
+                                        columnIndex,
+                                      };
+                                      return (
+                                        <th key={`header-${columnIndex}`}>
+                                          <div
+                                            className={[
+                                              'block-table-cell-wrap',
+                                              isSameTableCell(activeTableCell, headerCell) ? 'is-selected' : '',
+                                            ].filter(Boolean).join(' ')}
                                           >
-                                            <Trash2 size={12} />
-                                          </button>
-                                        </div>
-                                      </th>
-                                    ))}
+                                            {blockSearchQuery && (
+                                              <div className="block-table-input-highlight" aria-hidden="true">
+                                                {renderSearchHighlight(cell, blockSearchQuery)}
+                                              </div>
+                                            )}
+                                            <input
+                                              ref={(node) => {
+                                                const key = tableCellInputKey(headerCell);
+                                                if (node) tableInputsRef.current[key] = node;
+                                                else delete tableInputsRef.current[key];
+                                              }}
+                                              value={cell}
+                                              aria-label={t('表头 {count}', { count: columnIndex + 1 })}
+                                              onFocus={() => {
+                                                setSelectedIndex(index);
+                                                setSelectedIndices([index]);
+                                                setCurrentTableCell(headerCell);
+                                              }}
+                                              onBlur={endTextEditHistory}
+                                              onChange={(event) => updateTableCell(index, 'header', 0, columnIndex, event.target.value)}
+                                            />
+                                            <button
+                                              type="button"
+                                              className="block-table-cell-action"
+                                              aria-label={t('删除列')}
+                                              disabled={tableModel.headers.length <= 1}
+                                              onClick={() => removeTableColumn(index, columnIndex)}
+                                            >
+                                              <Trash2 size={12} />
+                                            </button>
+                                          </div>
+                                        </th>
+                                      );
+                                    })}
                                     <th className="block-table-row-tools" aria-hidden="true" />
                                   </tr>
                                 </thead>
                                 <tbody>
                                   {tableModel.rows.map((row, rowIndex) => (
                                     <tr key={`row-${rowIndex}`}>
-                                      {tableModel.headers.map((_, columnIndex) => (
-                                        <td key={`cell-${rowIndex}-${columnIndex}`}>
-                                          <div className="block-table-cell-wrap">
-                                            {blockSearchQuery && (
-                                              <div className="block-table-input-highlight" aria-hidden="true">
-                                                {renderSearchHighlight(row[columnIndex] ?? '', blockSearchQuery)}
-                                              </div>
-                                            )}
-                                            <input
-                                              value={row[columnIndex] ?? ''}
-                                              aria-label={t('第 {row} 行第 {column} 列', { row: rowIndex + 1, column: columnIndex + 1 })}
-                                              onFocus={() => {
-                                                setSelectedIndex(index);
-                                                setSelectedIndices([index]);
-                                              }}
-                                              onBlur={endTextEditHistory}
-                                              onChange={(event) => updateTableCell(index, 'body', rowIndex, columnIndex, event.target.value)}
-                                            />
-                                          </div>
-                                        </td>
-                                      ))}
+                                      {tableModel.headers.map((_, columnIndex) => {
+                                        const bodyCell: TableCellSelection = {
+                                          blockId: block.id,
+                                          section: 'body',
+                                          rowIndex,
+                                          columnIndex,
+                                        };
+                                        return (
+                                          <td key={`cell-${rowIndex}-${columnIndex}`}>
+                                            <div
+                                              className={[
+                                                'block-table-cell-wrap',
+                                                isSameTableCell(activeTableCell, bodyCell) ? 'is-selected' : '',
+                                              ].filter(Boolean).join(' ')}
+                                            >
+                                              {blockSearchQuery && (
+                                                <div className="block-table-input-highlight" aria-hidden="true">
+                                                  {renderSearchHighlight(row[columnIndex] ?? '', blockSearchQuery)}
+                                                </div>
+                                              )}
+                                              <input
+                                                ref={(node) => {
+                                                  const key = tableCellInputKey(bodyCell);
+                                                  if (node) tableInputsRef.current[key] = node;
+                                                  else delete tableInputsRef.current[key];
+                                                }}
+                                                value={row[columnIndex] ?? ''}
+                                                aria-label={t('第 {row} 行第 {column} 列', { row: rowIndex + 1, column: columnIndex + 1 })}
+                                                onFocus={() => {
+                                                  setSelectedIndex(index);
+                                                  setSelectedIndices([index]);
+                                                  setCurrentTableCell(bodyCell);
+                                                }}
+                                                onBlur={endTextEditHistory}
+                                                onChange={(event) => updateTableCell(index, 'body', rowIndex, columnIndex, event.target.value)}
+                                              />
+                                            </div>
+                                          </td>
+                                        );
+                                      })}
                                       <td className="block-table-row-tools">
                                         <button
                                           type="button"
@@ -1856,16 +2047,6 @@ export default function BlockEditor() {
                                   ))}
                                 </tbody>
                               </table>
-                            </div>
-                            <div className="block-table-actions">
-                              <button type="button" onClick={() => addTableRow(index)}>
-                                <Plus size={13} />
-                                <span>{t('行')}</span>
-                              </button>
-                              <button type="button" onClick={() => addTableColumn(index)}>
-                                <Plus size={13} />
-                                <span>{t('列')}</span>
-                              </button>
                             </div>
                             <textarea
                               className="block-textarea block-table-source"
@@ -1946,6 +2127,92 @@ export default function BlockEditor() {
                             <option key={option.type} value={option.type}>{t(option.label)}</option>
                           ))}
                         </select>
+                        {block.type === 'table' && activeTableCell && (
+                          <>
+                            <span className="block-toolbar-divider" />
+                            <button
+                              type="button"
+                              className="block-table-insert-btn"
+                              onMouseDown={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                              }}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                insertTableRow(index, 'above');
+                              }}
+                              title={t('在上方插入行')}
+                              aria-label={t('在上方插入行')}
+                            >
+                              <span className="block-table-insert-icon">
+                                <TableRowsSplit size={14} />
+                                <ChevronUp className="block-table-insert-direction" size={10} />
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              className="block-table-insert-btn"
+                              onMouseDown={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                              }}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                insertTableRow(index, 'below');
+                              }}
+                              title={t('在下方插入行')}
+                              aria-label={t('在下方插入行')}
+                            >
+                              <span className="block-table-insert-icon">
+                                <TableRowsSplit size={14} />
+                                <ChevronDown className="block-table-insert-direction" size={10} />
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              className="block-table-insert-btn"
+                              onMouseDown={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                              }}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                insertTableColumn(index, 'left');
+                              }}
+                              title={t('在左侧插入列')}
+                              aria-label={t('在左侧插入列')}
+                            >
+                              <span className="block-table-insert-icon">
+                                <TableColumnsSplit size={14} />
+                                <ChevronLeft className="block-table-insert-direction" size={10} />
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              className="block-table-insert-btn"
+                              onMouseDown={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                              }}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                insertTableColumn(index, 'right');
+                              }}
+                              title={t('在右侧插入列')}
+                              aria-label={t('在右侧插入列')}
+                            >
+                              <span className="block-table-insert-icon">
+                                <TableColumnsSplit size={14} />
+                                <ChevronRight className="block-table-insert-direction" size={10} />
+                              </span>
+                            </button>
+                          </>
+                        )}
+                        <span className="block-toolbar-divider" />
                         <button
                           type="button"
                           onClick={() => moveSelectedBlocksBy(-1)}
