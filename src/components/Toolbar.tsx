@@ -14,6 +14,7 @@ import {
   Monitor,
   Settings,
   ScrollText,
+  Download,
 } from 'lucide-react';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
@@ -40,7 +41,7 @@ import {
   getTextFileDialogFilters,
   normalizeTextFileName,
 } from '../utils/savePaths';
-import { useSettingsStore, useShortcutStore } from '../store';
+import { useSettingsStore, useShortcutStore, useUpdateStore } from '../store';
 import type { ThemeMode, ViewMode } from '../types';
 import { runUpdateCheckFlow } from '../utils/updateUi';
 import { isEnglishLanguage, translateText } from '../i18n';
@@ -189,7 +190,11 @@ export default function Toolbar() {
   const language = useSettingsStore(s => s.general.language);
   const themeColor = useSettingsStore(s => s.appearance.themeColor);
   const shortcuts = useShortcutStore(s => s.shortcuts);
+  const availableUpdate = useUpdateStore(s => s.availableUpdate);
+  const checkingUpdate = useUpdateStore(s => s.checking);
+  const checkLatestUpdate = useUpdateStore(s => s.checkLatest);
   const [isDragging, setIsDragging] = useState(false);
+  const [updateFlowRunning, setUpdateFlowRunning] = useState(false);
   const recentOpenedPathRef = useRef<Map<string, number>>(new Map());
   const t = useCallback((value: string, params?: Record<string, string | number>) => (
     translateText(language, value, params)
@@ -608,7 +613,18 @@ ${htmlBody}
 
   const handleCheckUpdate = useCallback(async () => {
     await runUpdateCheckFlow();
-  }, []);
+    void checkLatestUpdate();
+  }, [checkLatestUpdate]);
+
+  const handleToolbarUpdate = useCallback(async () => {
+    setUpdateFlowRunning(true);
+    try {
+      await runUpdateCheckFlow();
+      void checkLatestUpdate();
+    } finally {
+      setUpdateFlowRunning(false);
+    }
+  }, [checkLatestUpdate]);
 
   const handleRecentFilesMenu = useCallback(() => {
     if (!state.sidebarVisible) {
@@ -1316,6 +1332,18 @@ ${htmlBody}
           >
             <Settings size={16} />
           </button>
+
+          {availableUpdate && (
+            <button
+              className="toolbar-btn toolbar-update-btn active"
+              onClick={handleToolbarUpdate}
+              disabled={checkingUpdate || updateFlowRunning}
+              data-tooltip={t('更新到 {version}', { version: availableUpdate.latestVersion })}
+              aria-label={t('更新到 {version}', { version: availableUpdate.latestVersion })}
+            >
+              <Download size={16} />
+            </button>
+          )}
 
         </div>
       </div>

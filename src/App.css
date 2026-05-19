@@ -233,6 +233,27 @@
   color: var(--accent);
 }
 
+.toolbar-btn:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.toolbar-update-btn {
+  position: relative;
+}
+
+.toolbar-update-btn::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #ff453a;
+  box-shadow: 0 0 0 1px var(--bg-toolbar);
+}
+
 .toolbar-btn svg {
   width: 16px;
   height: 16px;

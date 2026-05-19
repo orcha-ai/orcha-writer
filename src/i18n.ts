@@ -232,6 +232,7 @@ const enTextByZh: Record<string, string> = {
   '下载安装更新失败': 'Failed to download and install update',
   '下载并安装': 'Download and Install',
   '检查更新失败': 'Failed to check for updates',
+  '更新到 {version}': 'Update to {version}',
   '隐藏大纲': 'Hide Outline',
   '大纲': 'Outline',
   '无标题': 'No headings',
@@ -798,7 +799,7 @@ export const localeText = {
         startupBlank: '空白页',
         startupSpecificWorkspace: '指定工作区',
         autoUpdate: '自动检查更新',
-        autoUpdateTooltip: '启动时自动检查并尝试下载安装；更新安装后提示重启，自动通道不可用时提示手动下载',
+        autoUpdateTooltip: '启动时自动检查；有新版本时在工具栏设置按钮右侧显示更新按钮',
         recentFileCount: '最近文件数量',
       },
       menu: {
@@ -930,7 +931,7 @@ export const localeText = {
         startupBlank: 'Blank Page',
         startupSpecificWorkspace: 'Specific Workspace',
         autoUpdate: 'Check For Updates',
-        autoUpdateTooltip: 'Automatically check for updates on startup, prompt to restart after installation, and suggest manual download if auto update is unavailable.',
+        autoUpdateTooltip: 'Automatically check for updates on startup and show an update button next to Settings when a new version is available.',
         recentFileCount: 'Recent Files',
       },
       menu: {
