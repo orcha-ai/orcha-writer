@@ -616,6 +616,16 @@ ${htmlBody}
     void checkLatestUpdate();
   }, [checkLatestUpdate]);
 
+  const handleOpenTerminal = useCallback(async () => {
+    try {
+      await invoke('open_terminal_at', { path: state.workspacePath });
+      message.success(t('已打开终端'));
+    } catch (e) {
+      console.error('Failed to open terminal:', e);
+      message.error(`${t('打开终端失败')}: ${String(e)}`);
+    }
+  }, [state.workspacePath, t]);
+
   const handleToolbarUpdate = useCallback(async () => {
     setUpdateFlowRunning(true);
     try {
@@ -811,6 +821,9 @@ ${htmlBody}
       case 'settings.export':
         navigate('/settings/export');
         break;
+      case 'system.openTerminal':
+        void handleOpenTerminal();
+        break;
       case 'app.checkUpdate':
         void handleCheckUpdate();
         break;
@@ -836,6 +849,7 @@ ${htmlBody}
     handleNewTextFile,
     handleOpenFile,
     handleOpenFolder,
+    handleOpenTerminal,
     handleSave,
     navigate,
     effectiveViewMode,
@@ -975,6 +989,9 @@ ${htmlBody}
           if (el) el.style.transform = '';
           break;
         }
+        case 'open_terminal':
+          void handleOpenTerminal();
+          break;
         case 'insert_date': {
           handleInsertDate();
           break;
@@ -1026,6 +1043,7 @@ ${htmlBody}
     handleNewTextFile,
     handleOpenFile,
     handleOpenFolder,
+    handleOpenTerminal,
     handleSave,
     handleExportPDF,
     handleExportHTML,

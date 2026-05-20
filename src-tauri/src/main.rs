@@ -822,6 +822,105 @@ fn reveal_path_in_file_manager(path: String) -> Result<(), String> {
     }
 }
 
+fn terminal_working_dir(path: Option<String>) -> Result<PathBuf, String> {
+    let path_buf = match path {
+        Some(value) if !value.trim().is_empty() => PathBuf::from(value),
+        _ => user_home_dir()?,
+    };
+
+    if path_buf.is_dir() {
+        return Ok(path_buf);
+    }
+
+    if path_buf.is_file() {
+        return path_buf
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| "无法获取文件所在目录".to_string());
+    }
+
+    Err(format!("终端路径不存在: {}", path_buf.to_string_lossy()))
+}
+
+// ── Command: open a native terminal at the workspace or selected directory ──
+#[command]
+fn open_terminal_at(path: Option<String>) -> Result<(), String> {
+    let dir = terminal_working_dir(path)?;
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .args(["-a", "Terminal"])
+            .arg(&dir)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("无法打开终端: {}", e))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        match Command::new("wt")
+            .arg("-d")
+            .arg(&dir)
+            .spawn()
+        {
+            Ok(_) => Ok(()),
+            Err(wt_error) => match Command::new("powershell.exe")
+                .args(["-NoExit", "-Command", "Set-Location -LiteralPath $args[0]"])
+                .arg(&dir)
+                .spawn()
+            {
+                Ok(_) => Ok(()),
+                Err(power_shell_error) => Command::new("cmd.exe")
+                    .args(["/K", "cd", "/d"])
+                    .arg(&dir)
+                    .spawn()
+                    .map(|_| ())
+                    .map_err(|cmd_error| {
+                        format!(
+                            "无法打开终端: wt: {}; PowerShell: {}; cmd: {}",
+                            wt_error, power_shell_error, cmd_error
+                        )
+                    }),
+            },
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let attempts: [(&str, &[&str]); 4] = [
+            ("gnome-terminal", &["--working-directory"]),
+            ("konsole", &["--workdir"]),
+            ("xfce4-terminal", &["--working-directory"]),
+            ("x-terminal-emulator", &["--working-directory"]),
+        ];
+        let mut last_error = None;
+
+        for (program, args) in attempts {
+            let result = Command::new(program)
+                .args(args)
+                .arg(&dir)
+                .spawn();
+            match result {
+                Ok(_) => return Ok(()),
+                Err(e) => last_error = Some(e),
+            }
+        }
+
+        Err(format!(
+            "无法打开终端: {}",
+            last_error
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "未找到可用终端".to_string())
+        ))
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
+    {
+        Err("当前平台暂不支持打开终端".to_string())
+    }
+}
+
 fn resolve_ai_credential(credential_ref: Option<&str>) -> Result<Option<String>, String> {
     let value = credential_ref.unwrap_or("").trim();
     if value.is_empty() {
@@ -1955,6 +2054,7 @@ fn set_native_menu(handle: &AppHandle, language: &str) -> tauri::Result<()> {
         .build()?;
 
     let system_menu = SubmenuBuilder::new(handle, t("系统", "System"))
+        .item(&MenuItemBuilder::new(t("打开终端", "Open Terminal")).id("open_terminal").build(handle)?)
         .item(&MenuItemBuilder::new(t("调试模式", "Debug Mode")).id("toggle_debug_mode").accelerator("CmdOrCtrl+Alt+I").build(handle)?)
         .build()?;
 
@@ -2023,6 +2123,7 @@ fn main() {
             delete_path,
             rename_path,
             reveal_path_in_file_manager,
+            open_terminal_at,
             ai_send_chat,
             ai_send_chat_stream,
             ai_cancel_chat_stream,
@@ -2104,6 +2205,7 @@ fn main() {
                 "zoom_in" => { window.emit("menu-action", "zoom_in").ok(); }
                 "zoom_out" => { window.emit("menu-action", "zoom_out").ok(); }
                 "reset_zoom" => { window.emit("menu-action", "reset_zoom").ok(); }
+                "open_terminal" => { window.emit("menu-action", "open_terminal").ok(); }
                 "toggle_debug_mode" => {
                     if window.is_devtools_open() {
                         window.close_devtools();

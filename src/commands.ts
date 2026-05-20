@@ -35,6 +35,7 @@ const APP_COMMAND_SOURCES: CommandDefinition[] = [
   { id: 'settings.preview', title: '打开预览设置', category: '设置', keywords: ['code theme', 'preview'] },
   { id: 'settings.shortcuts', title: '打开快捷键设置', category: '设置', keywords: ['shortcut', 'keymap'] },
   { id: 'settings.export', title: '打开导出设置', category: '设置', keywords: ['export'] },
+  { id: 'system.openTerminal', title: '打开终端', category: '系统', keywords: ['terminal', 'shell', 'cli', 'workspace'] },
   { id: 'app.checkUpdate', title: '检查更新', category: '系统', keywords: ['update'] },
   { id: 'app.about', title: '关于 Orcha Writer', category: '系统', keywords: ['about'] },
 ];

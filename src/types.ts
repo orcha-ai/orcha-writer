@@ -463,4 +463,5 @@ export const defaultShortcuts: ShortcutConfig[] = [
   { id: 'view.togglePreview', name: '切换预览', category: 'view', keys: 'Meta+Shift+V', defaultKeys: 'Meta+Shift+V', enabled: true, source: 'core' },
   { id: 'export.pdf', name: '导出 PDF', category: 'export', keys: 'Meta+Shift+E', defaultKeys: 'Meta+Shift+E', enabled: true, source: 'core' },
   { id: 'app.commandPalette', name: '命令面板', category: 'system', keys: 'Meta+Shift+P', defaultKeys: 'Meta+Shift+P', enabled: true, source: 'core' },
+  { id: 'system.openTerminal', name: '打开终端', category: 'system', keys: '', defaultKeys: '', enabled: false, source: 'core' },
 ];
