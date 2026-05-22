@@ -9,6 +9,7 @@ import StatusBar from './components/StatusBar';
 import SearchPanel from './components/SearchPanel';
 import CommandPalette from './components/CommandPalette';
 import GlobalContextMenu from './components/GlobalContextMenu';
+import TerminalPanel from './components/TerminalPanel';
 import { AIChatPanel, createCodeMirrorEditorBridge } from './modules/ai-chat';
 import { BlockEditor } from './modules/block-editor';
 import { useApp } from './AppContext';
@@ -123,6 +124,7 @@ export default function WorkspaceContent() {
           onCreateMarkdownFile={handleCreateMarkdownFile}
         />
       </div>
+      <TerminalPanel />
       <StatusBar />
       <CommandPalette />
       <GlobalContextMenu />

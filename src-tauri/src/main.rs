@@ -3,11 +3,16 @@
     windows_subsystem = "windows"
 )]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
+use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use tauri::{AppHandle, Emitter, Manager, WebviewEvent, DragDropEvent};
 use tauri::menu::{MenuBuilder, SubmenuBuilder, MenuItemBuilder};
 use tauri::command;
@@ -20,6 +25,19 @@ struct PendingOpenFiles(Mutex<Vec<String>>);
 
 #[derive(Default)]
 struct CancelledAiStreams(Mutex<HashSet<String>>);
+
+static TERMINAL_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+struct TerminalSession {
+    master: Box<dyn MasterPty + Send>,
+    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+}
+
+#[derive(Default)]
+struct TerminalManager {
+    sessions: Arc<Mutex<HashMap<String, TerminalSession>>>,
+}
 
 fn non_empty_env_path(name: &str) -> Option<PathBuf> {
     std::env::var_os(name)
@@ -919,6 +937,343 @@ fn open_terminal_at(path: Option<String>) -> Result<(), String> {
     {
         Err("当前平台暂不支持打开终端".to_string())
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalCreateResult {
+    id: String,
+    cwd: String,
+    shell: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalOutputEvent {
+    id: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalExitEvent {
+    id: String,
+    code: Option<u32>,
+}
+
+fn next_terminal_id() -> String {
+    let counter = TERMINAL_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_millis())
+        .unwrap_or(0);
+    format!("terminal-{}-{}", timestamp, counter)
+}
+
+fn default_terminal_shell() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(comspec) = std::env::var_os("COMSPEC").filter(|value| !value.is_empty()) {
+            return comspec.to_string_lossy().to_string();
+        }
+        "powershell.exe".to_string()
+    }
+
+    #[cfg(all(unix, not(target_os = "windows")))]
+    {
+        if let Some(shell) = std::env::var_os("SHELL").filter(|value| !value.is_empty()) {
+            return shell.to_string_lossy().to_string();
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            "/bin/zsh".to_string()
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            "/bin/bash".to_string()
+        }
+    }
+
+    #[cfg(not(any(unix, target_os = "windows")))]
+    {
+        "sh".to_string()
+    }
+}
+
+fn push_terminal_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if path.as_os_str().is_empty() || paths.iter().any(|existing| existing == &path) {
+        return;
+    }
+    paths.push(path);
+}
+
+fn push_existing_terminal_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if path.is_dir() {
+        push_terminal_path(paths, path);
+    }
+}
+
+fn terminal_path_env() -> Option<OsString> {
+    let mut paths = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        for path in [
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ] {
+            push_existing_terminal_path(&mut paths, PathBuf::from(path));
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        if let Some(home) = std::env::var_os("HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+        {
+            push_existing_terminal_path(&mut paths, home.join(".local").join("bin"));
+            push_existing_terminal_path(&mut paths, home.join(".cargo").join("bin"));
+
+            let gem_ruby_dir = home.join(".gem").join("ruby");
+            if let Ok(entries) = fs::read_dir(gem_ruby_dir) {
+                for entry in entries.flatten() {
+                    push_existing_terminal_path(&mut paths, entry.path().join("bin"));
+                }
+            }
+        }
+    }
+
+    if let Some(existing) = std::env::var_os("PATH").filter(|value| !value.is_empty()) {
+        for path in std::env::split_paths(&existing) {
+            push_terminal_path(&mut paths, path);
+        }
+    }
+
+    if paths.is_empty() {
+        None
+    } else {
+        std::env::join_paths(paths).ok()
+    }
+}
+
+fn terminal_env_is_utf8(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            let value = value.to_ascii_uppercase();
+            value.contains("UTF-8") || value.contains("UTF8")
+        })
+        .unwrap_or(false)
+}
+
+fn configure_terminal_env(command: &mut CommandBuilder, shell: &str, cwd: &Path) {
+    command.env("SHELL", shell);
+    command.env("PWD", cwd.as_os_str());
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    command.env("TERM_PROGRAM", "Orcha Writer");
+
+    if let Some(path) = terminal_path_env() {
+        command.env("PATH", path);
+    }
+
+    if std::env::var_os("LC_ALL").is_some() && !terminal_env_is_utf8("LC_ALL") {
+        command.env_remove("LC_ALL");
+    }
+    if !terminal_env_is_utf8("LC_CTYPE") {
+        command.env("LC_CTYPE", "UTF-8");
+    }
+    if !terminal_env_is_utf8("LANG") {
+        command.env("LANG", "en_US.UTF-8");
+    }
+}
+
+fn terminal_command(shell: &str, cwd: &Path) -> CommandBuilder {
+    let mut command = CommandBuilder::new(shell);
+
+    command.cwd(cwd);
+    configure_terminal_env(&mut command, shell, cwd);
+    command
+}
+
+fn terminal_exit_code(status: portable_pty::ExitStatus) -> Option<u32> {
+    #[allow(deprecated)]
+    Some(status.exit_code())
+}
+
+// ── Command: create an embedded PTY terminal session ──
+#[command]
+fn terminal_create(
+    app: AppHandle,
+    manager: tauri::State<TerminalManager>,
+    cwd: Option<String>,
+    cols: u16,
+    rows: u16,
+) -> Result<TerminalCreateResult, String> {
+    let dir = terminal_working_dir(cwd)?;
+    let shell = default_terminal_shell();
+    let pty_system = native_pty_system();
+    let size = PtySize {
+        rows: rows.max(2),
+        cols: cols.max(20),
+        pixel_width: 0,
+        pixel_height: 0,
+    };
+    let pair = pty_system
+        .openpty(size)
+        .map_err(|e| format!("创建终端失败: {}", e))?;
+    let command = terminal_command(&shell, &dir);
+    let child = pair
+        .slave
+        .spawn_command(command)
+        .map_err(|e| format!("启动 shell 失败: {}", e))?;
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| format!("读取终端输出失败: {}", e))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| format!("写入终端失败: {}", e))?;
+    drop(pair.slave);
+
+    let id = next_terminal_id();
+    let child = Arc::new(Mutex::new(child));
+    let writer = Arc::new(Mutex::new(writer));
+    let session = TerminalSession {
+        master: pair.master,
+        child: Arc::clone(&child),
+        writer,
+    };
+
+    {
+        let mut sessions = manager
+            .sessions
+            .lock()
+            .map_err(|_| "终端会话已被锁定".to_string())?;
+        sessions.insert(id.clone(), session);
+    }
+
+    let sessions = Arc::clone(&manager.sessions);
+    let app_handle = app.clone();
+    let output_id = id.clone();
+    std::thread::spawn(move || {
+        let mut buffer = [0u8; 8192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(size) => {
+                    let _ = app_handle.emit("terminal-output", TerminalOutputEvent {
+                        id: output_id.clone(),
+                        bytes: buffer[..size].to_vec(),
+                    });
+                }
+                Err(_) => break,
+            }
+        }
+
+        let code = child
+            .lock()
+            .ok()
+            .and_then(|mut child| child.wait().ok())
+            .and_then(terminal_exit_code);
+
+        if let Ok(mut sessions) = sessions.lock() {
+            sessions.remove(&output_id);
+        }
+
+        let _ = app_handle.emit("terminal-exit", TerminalExitEvent {
+            id: output_id,
+            code,
+        });
+    });
+
+    Ok(TerminalCreateResult {
+        id,
+        cwd: dir.to_string_lossy().to_string(),
+        shell,
+    })
+}
+
+// ── Command: write user input to an embedded terminal ──
+#[command]
+fn terminal_write(
+    manager: tauri::State<TerminalManager>,
+    id: String,
+    data: String,
+) -> Result<(), String> {
+    let writer = {
+        let sessions = manager
+            .sessions
+            .lock()
+            .map_err(|_| "终端会话已被锁定".to_string())?;
+        sessions
+            .get(&id)
+            .map(|session| Arc::clone(&session.writer))
+            .ok_or_else(|| "终端会话不存在".to_string())?
+    };
+
+    let mut writer = writer
+        .lock()
+        .map_err(|_| "终端输入已被锁定".to_string())?;
+    writer
+        .write_all(data.as_bytes())
+        .and_then(|_| writer.flush())
+        .map_err(|e| format!("写入终端失败: {}", e))
+}
+
+// ── Command: resize an embedded terminal PTY ──
+#[command]
+fn terminal_resize(
+    manager: tauri::State<TerminalManager>,
+    id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let sessions = manager
+        .sessions
+        .lock()
+        .map_err(|_| "终端会话已被锁定".to_string())?;
+    let session = sessions
+        .get(&id)
+        .ok_or_else(|| "终端会话不存在".to_string())?;
+    session
+        .master
+        .resize(PtySize {
+            rows: rows.max(2),
+            cols: cols.max(20),
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| format!("调整终端大小失败: {}", e))
+}
+
+// ── Command: kill an embedded terminal session ──
+#[command]
+fn terminal_kill(manager: tauri::State<TerminalManager>, id: String) -> Result<(), String> {
+    let session = {
+        let mut sessions = manager
+            .sessions
+            .lock()
+            .map_err(|_| "终端会话已被锁定".to_string())?;
+        sessions.remove(&id)
+    };
+
+    if let Some(session) = session {
+        if let Ok(mut child) = session.child.lock() {
+            let _ = child.kill();
+        }
+    }
+
+    Ok(())
 }
 
 fn resolve_ai_credential(credential_ref: Option<&str>) -> Result<Option<String>, String> {
@@ -2096,6 +2451,7 @@ fn main() {
     tauri::Builder::default()
         .manage(PendingOpenFiles(Mutex::new(initial_paths)))
         .manage(CancelledAiStreams::default())
+        .manage(TerminalManager::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -2124,6 +2480,10 @@ fn main() {
             rename_path,
             reveal_path_in_file_manager,
             open_terminal_at,
+            terminal_create,
+            terminal_write,
+            terminal_resize,
+            terminal_kill,
             ai_send_chat,
             ai_send_chat_stream,
             ai_cancel_chat_stream,

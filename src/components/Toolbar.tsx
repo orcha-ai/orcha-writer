@@ -15,6 +15,7 @@ import {
   Settings,
   ScrollText,
   Download,
+  SquareTerminal,
 } from 'lucide-react';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
@@ -617,14 +618,8 @@ ${htmlBody}
   }, [checkLatestUpdate]);
 
   const handleOpenTerminal = useCallback(async () => {
-    try {
-      await invoke('open_terminal_at', { path: state.workspacePath });
-      message.success(t('已打开终端'));
-    } catch (e) {
-      console.error('Failed to open terminal:', e);
-      message.error(`${t('打开终端失败')}: ${String(e)}`);
-    }
-  }, [state.workspacePath, t]);
+    dispatch({ type: 'SET_TERMINAL_OPEN', payload: true });
+  }, [dispatch]);
 
   const handleToolbarUpdate = useCallback(async () => {
     setUpdateFlowRunning(true);
@@ -1340,6 +1335,15 @@ ${htmlBody}
             aria-label={t('同屏滚动')}
           >
             <ScrollText size={16} />
+          </button>
+
+          <button
+            className={`toolbar-btn ${state.terminalOpen ? 'active' : ''}`}
+            onClick={handleOpenTerminal}
+            data-tooltip={t('打开终端')}
+            aria-label={t('打开终端')}
+          >
+            <SquareTerminal size={16} />
           </button>
 
           <button

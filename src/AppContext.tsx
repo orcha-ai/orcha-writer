@@ -42,6 +42,8 @@ type AppAction =
   | { type: 'SET_SEARCH_MATCH_INDEX'; payload: number }
   | { type: 'TOGGLE_COMMAND_PALETTE' }
   | { type: 'SET_COMMAND_PALETTE_OPEN'; payload: boolean }
+  | { type: 'TOGGLE_TERMINAL' }
+  | { type: 'SET_TERMINAL_OPEN'; payload: boolean }
   | { type: 'TOGGLE_SETTINGS' }
   | { type: 'UPDATE_SETTINGS'; payload: Partial<EditorSettings> }
   | { type: 'SET_BLOCK_SELECTION_STATUS'; payload: BlockSelectionStatus | null };
@@ -64,6 +66,7 @@ const initialState: AppState = {
   searchMatchIndex: 0,
   replaceOpen: false,
   commandPaletteOpen: false,
+  terminalOpen: false,
   settingsOpen: false,
   editorSettings: defaultEditorSettings,
   blockSelectionStatus: null,
@@ -325,6 +328,10 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, commandPaletteOpen: !state.commandPaletteOpen };
     case 'SET_COMMAND_PALETTE_OPEN':
       return { ...state, commandPaletteOpen: action.payload };
+    case 'TOGGLE_TERMINAL':
+      return { ...state, terminalOpen: !state.terminalOpen };
+    case 'SET_TERMINAL_OPEN':
+      return { ...state, terminalOpen: action.payload };
     case 'TOGGLE_SETTINGS':
       return { ...state, settingsOpen: !state.settingsOpen };
     case 'UPDATE_SETTINGS':
