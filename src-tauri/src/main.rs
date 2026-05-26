@@ -7,6 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -790,6 +792,12 @@ fn rename_path(from: String, to: String) -> Result<(), String> {
 }
 
 // ── Command: reveal file or directory in the native file manager ──
+#[cfg(any(target_os = "windows", test))]
+fn explorer_select_arg(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace("/", "\\");
+    format!("/select,\"{}\"", normalized)
+}
+
 #[command]
 fn reveal_path_in_file_manager(path: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
@@ -810,7 +818,7 @@ fn reveal_path_in_file_manager(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         Command::new("explorer.exe")
-            .arg(format!("/select,{}", path_buf.to_string_lossy()))
+            .raw_arg(explorer_select_arg(&path_buf))
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("无法在文件资源管理器中显示: {}", e))
@@ -837,6 +845,25 @@ fn reveal_path_in_file_manager(path: String) -> Result<(), String> {
     #[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
     {
         Err("当前平台暂不支持在文件管理器中显示".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explorer_select_arg_quotes_and_normalizes_windows_paths() {
+        let arg = explorer_select_arg(Path::new(r"C:\Users/alice/My Docs/note.md"));
+
+        assert_eq!(arg, "/select,\"C:\\Users\\alice\\My Docs\\note.md\"");
+    }
+
+    #[test]
+    fn explorer_select_arg_preserves_unc_prefix() {
+        let arg = explorer_select_arg(Path::new("//server/share/folder/note.md"));
+
+        assert_eq!(arg, "/select,\"\\\\server\\share\\folder\\note.md\"");
     }
 }
 
