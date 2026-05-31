@@ -83,6 +83,12 @@ interface BlockAIPopoverState {
   blockIndex: number;
 }
 
+interface BlockToolbarLayout {
+  left: number;
+  top: number;
+  maxWidth: number;
+}
+
 interface BlockAISelectionPayload {
   targetBlocks: BlockViewModel[];
   selection: {
@@ -156,6 +162,7 @@ const BLOCK_AI_POPOVER_WIDTH = 360;
 const BLOCK_AI_POPOVER_HEIGHT = 292;
 const INITIAL_RENDERED_BLOCK_COUNT = 140;
 const RENDER_BLOCK_BATCH_SIZE = 240;
+const IME_COMPOSITION_END_GRACE_MS = 50;
 
 function initialRenderedBlockCount(length: number): number {
   return Math.min(length, INITIAL_RENDERED_BLOCK_COUNT);
@@ -459,13 +466,20 @@ function keepsEnterInsideBlock(block: BlockViewModel): boolean {
   return ['code_block', 'frontmatter', 'html_block', 'math_block', 'table'].includes(block.type);
 }
 
-function isPlainEnter(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
+function isComposingKeyboardEvent(event: KeyboardEvent<HTMLTextAreaElement>, isComposingInput: boolean): boolean {
+  return isComposingInput
+    || event.nativeEvent.isComposing
+    || event.nativeEvent.keyCode === 229
+    || event.keyCode === 229;
+}
+
+function isPlainEnter(event: KeyboardEvent<HTMLTextAreaElement>, isComposingInput: boolean): boolean {
   return event.key === 'Enter'
     && !event.shiftKey
     && !event.metaKey
     && !event.ctrlKey
     && !event.altKey
-    && !event.nativeEvent.isComposing;
+    && !isComposingKeyboardEvent(event, isComposingInput);
 }
 
 function supportsInlineMarkdownPreview(block: BlockViewModel): boolean {
@@ -612,11 +626,13 @@ export default function BlockEditor() {
   const [blockAI, setBlockAI] = useState<BlockAIPopoverState | null>(null);
   const [blockAIPrompt, setBlockAIPrompt] = useState('');
   const [selectedTableCell, setSelectedTableCell] = useState<TableCellSelection | null>(null);
+  const [blockToolbarLayout, setBlockToolbarLayout] = useState<BlockToolbarLayout | null>(null);
   const textareasRef = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const tableInputsRef = useRef<Record<string, HTMLInputElement | null>>({});
   const selectedTableCellRef = useRef<TableCellSelection | null>(null);
   const pendingTableFocusRef = useRef<TableCellSelection | null>(null);
   const documentRef = useRef<HTMLDivElement | null>(null);
+  const blockToolbarRef = useRef<HTMLDivElement | null>(null);
   const blockMenuRef = useRef<HTMLDivElement | null>(null);
   const blockAIRef = useRef<HTMLDivElement | null>(null);
   const blockAIPromptRef = useRef<HTMLTextAreaElement | null>(null);
@@ -628,6 +644,8 @@ export default function BlockEditor() {
   const currentTabIdRef = useRef<string | null>(activeTab?.id ?? null);
   const syncedContentRef = useRef(activeTab?.content || '');
   const textEditHistoryRef = useRef<{ tabId: string; blockId: string } | null>(null);
+  const textInputComposingRef = useRef(false);
+  const textInputCompositionEndTimerRef = useRef<number | null>(null);
   const selectedBlock = selectedIndex == null ? null : blocks[selectedIndex] || null;
   const blockSearchQuery = state.searchQuery.trim();
   const selectedIndicesSet = useMemo(() => new Set(selectedIndices), [selectedIndices]);
@@ -651,6 +669,32 @@ export default function BlockEditor() {
     selectedTableCellRef.current = cell;
     setSelectedTableCell(cell);
   }, []);
+
+  const clearTextInputCompositionEndTimer = useCallback(() => {
+    if (textInputCompositionEndTimerRef.current == null) return;
+    window.clearTimeout(textInputCompositionEndTimerRef.current);
+    textInputCompositionEndTimerRef.current = null;
+  }, []);
+
+  const handleTextInputCompositionStart = useCallback(() => {
+    clearTextInputCompositionEndTimer();
+    textInputComposingRef.current = true;
+  }, [clearTextInputCompositionEndTimer]);
+
+  const handleTextInputCompositionEnd = useCallback(() => {
+    clearTextInputCompositionEndTimer();
+    textInputCompositionEndTimerRef.current = window.setTimeout(() => {
+      textInputComposingRef.current = false;
+      textInputCompositionEndTimerRef.current = null;
+    }, IME_COMPOSITION_END_GRACE_MS);
+  }, [clearTextInputCompositionEndTimer]);
+
+  const resetTextInputComposition = useCallback(() => {
+    clearTextInputCompositionEndTimer();
+    textInputComposingRef.current = false;
+  }, [clearTextInputCompositionEndTimer]);
+
+  useEffect(() => resetTextInputComposition, [resetTextInputComposition]);
 
   useEffect(() => {
     setSelectedTableCell((current) => {
@@ -687,6 +731,52 @@ export default function BlockEditor() {
     Object.values(textareasRef.current).forEach(resizeTextarea);
   }, []);
 
+  const updateBlockToolbarLayout = useCallback(() => {
+    if (state.viewMode !== 'block' || selectedIndex == null) {
+      setBlockToolbarLayout(null);
+      return;
+    }
+
+    const row = documentRef.current?.querySelector<HTMLElement>(`.block-row[data-block-index="${selectedIndex}"]`);
+    const scroller = row?.closest<HTMLElement>('.block-document-scroll');
+    const toolbar = blockToolbarRef.current;
+    if (!row || !scroller || !toolbar) {
+      setBlockToolbarLayout(null);
+      return;
+    }
+
+    const scrollerRect = scroller.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const contentRect = row.querySelector<HTMLElement>('.block-content-wrap')?.getBoundingClientRect() ?? rowRect;
+    const maxWidth = Math.max(120, Math.min(420, scrollerRect.width - 16));
+    const toolbarRect = toolbar.getBoundingClientRect();
+    const toolbarWidth = Math.min(toolbarRect.width || maxWidth, maxWidth);
+    const toolbarHeight = toolbarRect.height || 36;
+    const minLeft = scrollerRect.left + 8;
+    const maxLeft = scrollerRect.right - 8 - toolbarWidth;
+    const left = Math.max(minLeft, Math.min(contentRect.left, maxLeft >= minLeft ? maxLeft : minLeft));
+    const aboveTop = rowRect.top - toolbarHeight - 8;
+    const belowTop = rowRect.bottom + 8;
+    const minTop = scrollerRect.top + 8;
+    const maxTop = scrollerRect.bottom - toolbarHeight - 8;
+    const top = aboveTop >= minTop
+      ? aboveTop
+      : Math.max(minTop, Math.min(belowTop, maxTop));
+
+    setBlockToolbarLayout((current) => {
+      const next = { left, top, maxWidth };
+      if (
+        current
+        && Math.abs(current.left - next.left) < 0.5
+        && Math.abs(current.top - next.top) < 0.5
+        && Math.abs(current.maxWidth - next.maxWidth) < 0.5
+      ) {
+        return current;
+      }
+      return next;
+    });
+  }, [selectedIndex, state.viewMode]);
+
   const setBlockDragTarget = useCallback((target: DragTargetState | null) => {
     dragTargetRef.current = target;
     setDragTarget((current) => {
@@ -719,6 +809,7 @@ export default function BlockEditor() {
     setBlockMenu(null);
     setBlockAI(null);
     setBlockAIPrompt('');
+    setBlockToolbarLayout(null);
     setCurrentTableCell(null);
     historyPastRef.current = [];
     historyFutureRef.current = [];
@@ -785,6 +876,39 @@ export default function BlockEditor() {
     state.editorSettings.lineHeight,
     state.viewMode,
   ]);
+
+  useLayoutEffect(() => {
+    updateBlockToolbarLayout();
+  }, [
+    activeTab?.id,
+    blockToolbarLayout?.maxWidth,
+    blocks.length,
+    renderedBlockCount,
+    selectedIndex,
+    selectedIndices,
+    state.viewMode,
+    updateBlockToolbarLayout,
+  ]);
+
+  useEffect(() => {
+    if (state.viewMode !== 'block' || selectedIndex == null) return undefined;
+    const scroller = documentRef.current?.closest<HTMLElement>('.block-document-scroll');
+    let frame = 0;
+    const requestUpdate = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(updateBlockToolbarLayout);
+    };
+
+    window.addEventListener('resize', requestUpdate);
+    scroller?.addEventListener('scroll', requestUpdate, { passive: true });
+    requestUpdate();
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', requestUpdate);
+      scroller?.removeEventListener('scroll', requestUpdate);
+    };
+  }, [selectedIndex, state.viewMode, updateBlockToolbarLayout]);
 
   useEffect(() => {
     if (state.viewMode !== 'block') return undefined;
@@ -1525,6 +1649,7 @@ export default function BlockEditor() {
         return;
       }
       if (event.key === 'Enter') {
+        if (isComposingKeyboardEvent(event, textInputComposingRef.current)) return;
         event.preventDefault();
         applySlashCommand(filteredCommands[slash.activeIndex] || filteredCommands[0]);
         return;
@@ -1536,7 +1661,7 @@ export default function BlockEditor() {
       }
     }
 
-    if (isPlainEnter(event)) {
+    if (isPlainEnter(event, textInputComposingRef.current)) {
       const block = blocks[blockIndex];
       if (block && !keepsEnterInsideBlock(block)) {
         event.preventDefault();
@@ -1616,6 +1741,13 @@ export default function BlockEditor() {
     if (event.button !== 0 || isBlockEditorContentTarget(event.target)) return;
     clearBlockEditorFloatingState();
   }, [clearBlockEditorFloatingState]);
+
+  const handleBlockToolbarMouseDown = useCallback((event: MouseEvent<HTMLElement>) => {
+    event.stopPropagation();
+    if (event.target instanceof HTMLElement && event.target.closest('button')) {
+      event.preventDefault();
+    }
+  }, []);
 
   const handleShellContextMenuCapture = useCallback((event: MouseEvent<HTMLElement>) => {
     event.preventDefault();
@@ -1749,6 +1881,15 @@ export default function BlockEditor() {
       document.removeEventListener('scroll', closePopover, true);
     };
   }, [blockAI]);
+
+  const blockToolbarStyle = blockToolbarLayout
+    ? ({
+        position: 'fixed',
+        left: blockToolbarLayout.left,
+        top: blockToolbarLayout.top,
+        maxWidth: blockToolbarLayout.maxWidth,
+      } as CSSProperties)
+    : ({ visibility: 'hidden' } as CSSProperties);
 
   if (state.viewMode !== 'block') return null;
 
@@ -2055,7 +2196,12 @@ export default function BlockEditor() {
                               tabIndex={-1}
                               aria-hidden="true"
                               onChange={(event) => handleTextChange(index, event.target.value)}
-                              onBlur={endTextEditHistory}
+                              onBlur={() => {
+                                resetTextInputComposition();
+                                endTextEditHistory();
+                              }}
+                              onCompositionStart={handleTextInputCompositionStart}
+                              onCompositionEnd={handleTextInputCompositionEnd}
                               onKeyDown={(event) => handleTextareaKeyDown(event, index)}
                             />
                           </div>
@@ -2099,11 +2245,16 @@ export default function BlockEditor() {
                               spellCheck
                               onChange={(event) => handleTextChange(index, event.target.value)}
                               onInput={(event) => resizeTextarea(event.currentTarget)}
+                              onCompositionStart={handleTextInputCompositionStart}
+                              onCompositionEnd={handleTextInputCompositionEnd}
                               onFocus={() => {
                                 setSelectedIndex(index);
                                 setSelectedIndices([index]);
                               }}
-                              onBlur={endTextEditHistory}
+                              onBlur={() => {
+                                resetTextInputComposition();
+                                endTextEditHistory();
+                              }}
                               onKeyDown={(event) => handleTextareaKeyDown(event, index)}
                               onClick={(event) => event.stopPropagation()}
                             />
@@ -2113,7 +2264,13 @@ export default function BlockEditor() {
                     )}
 
                     {isPrimarySelected && (
-                      <div className="block-toolbar" onClick={(event) => event.stopPropagation()}>
+                      <div
+                        ref={blockToolbarRef}
+                        className="block-toolbar"
+                        style={blockToolbarStyle}
+                        onMouseDown={handleBlockToolbarMouseDown}
+                        onClick={(event) => event.stopPropagation()}
+                      >
                         <button type="button" onClick={(event) => openBlockAIPopover(event, index)} title={t('AI 处理')}>
                           <Sparkles size={14} />
                           <span>AI</span>
