@@ -6,14 +6,16 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
+use std::net::{TcpListener, TcpStream};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use base64::{engine::general_purpose, Engine as _};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use tauri::{AppHandle, Emitter, Manager, WebviewEvent, DragDropEvent};
 use tauri::menu::{MenuBuilder, SubmenuBuilder, MenuItemBuilder};
@@ -2164,6 +2166,51 @@ struct PdfExportResult {
     error: Option<String>,
 }
 
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PdfChromeExportOptions {
+    page: PdfChromePageOptions,
+    header_template: Option<String>,
+    footer_template: Option<String>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PdfChromePageOptions {
+    format: String,
+    orientation: String,
+    margin: PdfChromePageMargin,
+    print_background: bool,
+}
+
+#[derive(Deserialize, Clone)]
+struct PdfChromePageMargin {
+    top: String,
+    right: String,
+    bottom: String,
+    left: String,
+}
+
+impl Default for PdfChromeExportOptions {
+    fn default() -> Self {
+        Self {
+            page: PdfChromePageOptions {
+                format: "A4".to_string(),
+                orientation: "portrait".to_string(),
+                margin: PdfChromePageMargin {
+                    top: "20mm".to_string(),
+                    right: "18mm".to_string(),
+                    bottom: "20mm".to_string(),
+                    left: "18mm".to_string(),
+                },
+                print_background: true,
+            },
+            header_template: None,
+            footer_template: None,
+        }
+    }
+}
+
 // ── Command: detect PDF engines ──
 #[command]
 fn detect_pdf_engines() -> Vec<PdfEngineStatus> {
@@ -2282,9 +2329,482 @@ fn get_chrome_version(chrome_path: String) -> Option<String> {
     }
 }
 
+fn unique_temp_name(prefix: &str, suffix: &str) -> PathBuf {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!("{}-{}-{}{}", prefix, std::process::id(), millis, suffix))
+}
+
+fn allocate_loopback_port() -> Result<u16, String> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| format!("分配 Chrome 调试端口失败: {}", e))?;
+    listener
+        .local_addr()
+        .map(|addr| addr.port())
+        .map_err(|e| format!("读取 Chrome 调试端口失败: {}", e))
+}
+
+fn http_get_loopback(port: u16, path: &str) -> Result<String, String> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .map_err(|e| format!("连接 Chrome 调试端口失败: {}", e))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .map_err(|e| format!("设置 Chrome 调试读取超时失败: {}", e))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .map_err(|e| format!("设置 Chrome 调试写入超时失败: {}", e))?;
+
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+        path, port
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| format!("请求 Chrome 调试接口失败: {}", e))?;
+
+    let mut response_bytes = Vec::new();
+    let mut buffer = [0u8; 4096];
+    loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => response_bytes.extend_from_slice(&buffer[..count]),
+            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
+                if response_bytes.is_empty() {
+                    return Err(format!("读取 Chrome 调试接口失败: {}", e));
+                }
+                break;
+            }
+            Err(e) => return Err(format!("读取 Chrome 调试接口失败: {}", e)),
+        }
+    }
+
+    let response = String::from_utf8_lossy(&response_bytes);
+
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body.to_string())
+        .unwrap_or_default();
+
+    if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
+        return Err(format!("Chrome 调试接口返回异常: {}", response.lines().next().unwrap_or("unknown")));
+    }
+
+    Ok(body)
+}
+
+fn wait_for_chrome_page_ws_url(port: u16, file_url: &str, child: &mut std::process::Child) -> Result<String, String> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last_error = String::new();
+
+    while Instant::now() < deadline {
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(format!("Chrome 过早退出，状态: {}", status));
+        }
+
+        match http_get_loopback(port, "/json/list") {
+            Ok(body) => {
+                match serde_json::from_str::<Value>(&body) {
+                    Ok(Value::Array(targets)) => {
+                        let fallback = targets
+                            .iter()
+                            .find(|target| target.get("type").and_then(Value::as_str) == Some("page"));
+                        let matching = targets.iter().find(|target| {
+                            target.get("type").and_then(Value::as_str) == Some("page")
+                                && target
+                                    .get("url")
+                                    .and_then(Value::as_str)
+                                    .map(|url| url == file_url)
+                                    .unwrap_or(false)
+                        });
+                        if let Some(ws_url) = matching
+                            .or(fallback)
+                            .and_then(|target| target.get("webSocketDebuggerUrl"))
+                            .and_then(Value::as_str)
+                        {
+                            return Ok(ws_url.to_string());
+                        }
+                    }
+                    Ok(_) => {
+                        last_error = "Chrome 调试接口未返回页面列表".to_string();
+                    }
+                    Err(e) => {
+                        last_error = format!("解析 Chrome 调试页面列表失败: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                last_error = e;
+            }
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    Err(if last_error.is_empty() {
+        "等待 Chrome 调试页面超时".to_string()
+    } else {
+        format!("等待 Chrome 调试页面超时: {}", last_error)
+    })
+}
+
+fn parse_ws_url(url: &str) -> Result<(String, u16, String), String> {
+    let without_scheme = url
+        .strip_prefix("ws://")
+        .ok_or_else(|| format!("不支持的 Chrome WebSocket 地址: {}", url))?;
+    let (host_port, path) = without_scheme
+        .split_once('/')
+        .ok_or_else(|| format!("Chrome WebSocket 地址缺少路径: {}", url))?;
+    let (host, port_text) = host_port
+        .rsplit_once(':')
+        .ok_or_else(|| format!("Chrome WebSocket 地址缺少端口: {}", url))?;
+    let port = port_text
+        .parse::<u16>()
+        .map_err(|e| format!("解析 Chrome WebSocket 端口失败: {}", e))?;
+    Ok((host.to_string(), port, format!("/{}", path)))
+}
+
+fn websocket_connect(url: &str) -> Result<TcpStream, String> {
+    let (host, port, path) = parse_ws_url(url)?;
+    let mut stream = TcpStream::connect((host.as_str(), port))
+        .map_err(|e| format!("连接 Chrome WebSocket 失败: {}", e))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .map_err(|e| format!("设置 Chrome WebSocket 读取超时失败: {}", e))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(30)))
+        .map_err(|e| format!("设置 Chrome WebSocket 写入超时失败: {}", e))?;
+
+    let mut key_seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
+        .to_be_bytes();
+    for (index, byte) in std::process::id().to_be_bytes().iter().enumerate() {
+        key_seed[index] ^= byte;
+    }
+    let key = general_purpose::STANDARD.encode(key_seed);
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: {}:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {}\r\n\r\n",
+        path, host, port, key
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| format!("发送 Chrome WebSocket 握手失败: {}", e))?;
+
+    let mut response = Vec::new();
+    let mut buffer = [0u8; 1];
+    while !response.ends_with(b"\r\n\r\n") {
+        stream
+            .read_exact(&mut buffer)
+            .map_err(|e| format!("读取 Chrome WebSocket 握手失败: {}", e))?;
+        response.push(buffer[0]);
+        if response.len() > 8192 {
+            return Err("Chrome WebSocket 握手响应过大".to_string());
+        }
+    }
+
+    let response_text = String::from_utf8_lossy(&response);
+    if !response_text.starts_with("HTTP/1.1 101") && !response_text.starts_with("HTTP/1.0 101") {
+        return Err(format!(
+            "Chrome WebSocket 握手失败: {}",
+            response_text.lines().next().unwrap_or("unknown")
+        ));
+    }
+
+    Ok(stream)
+}
+
+fn websocket_send_frame(stream: &mut TcpStream, opcode: u8, payload: &[u8]) -> Result<(), String> {
+    let mut frame = Vec::new();
+    frame.push(0x80 | (opcode & 0x0f));
+
+    let len = payload.len();
+    if len <= 125 {
+        frame.push(0x80 | len as u8);
+    } else if len <= u16::MAX as usize {
+        frame.push(0x80 | 126);
+        frame.extend_from_slice(&(len as u16).to_be_bytes());
+    } else {
+        frame.push(0x80 | 127);
+        frame.extend_from_slice(&(len as u64).to_be_bytes());
+    }
+
+    let mask_seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.subsec_nanos())
+        .unwrap_or(0)
+        ^ std::process::id();
+    let mask = mask_seed.to_be_bytes();
+    frame.extend_from_slice(&mask);
+    frame.extend(payload.iter().enumerate().map(|(index, byte)| byte ^ mask[index % 4]));
+
+    stream
+        .write_all(&frame)
+        .map_err(|e| format!("发送 Chrome WebSocket 消息失败: {}", e))
+}
+
+fn websocket_send_text(stream: &mut TcpStream, text: &str) -> Result<(), String> {
+    websocket_send_frame(stream, 0x1, text.as_bytes())
+}
+
+fn websocket_read_message(stream: &mut TcpStream) -> Result<String, String> {
+    let mut message = Vec::new();
+
+    loop {
+        let mut header = [0u8; 2];
+        stream
+            .read_exact(&mut header)
+            .map_err(|e| format!("读取 Chrome WebSocket 消息头失败: {}", e))?;
+        let fin = header[0] & 0x80 != 0;
+        let opcode = header[0] & 0x0f;
+        let masked = header[1] & 0x80 != 0;
+        let mut len = (header[1] & 0x7f) as u64;
+
+        if len == 126 {
+            let mut extended = [0u8; 2];
+            stream
+                .read_exact(&mut extended)
+                .map_err(|e| format!("读取 Chrome WebSocket 消息长度失败: {}", e))?;
+            len = u16::from_be_bytes(extended) as u64;
+        } else if len == 127 {
+            let mut extended = [0u8; 8];
+            stream
+                .read_exact(&mut extended)
+                .map_err(|e| format!("读取 Chrome WebSocket 消息长度失败: {}", e))?;
+            len = u64::from_be_bytes(extended);
+        }
+
+        if len > 512 * 1024 * 1024 {
+            return Err("Chrome WebSocket 消息过大".to_string());
+        }
+
+        let mut mask = [0u8; 4];
+        if masked {
+            stream
+                .read_exact(&mut mask)
+                .map_err(|e| format!("读取 Chrome WebSocket 掩码失败: {}", e))?;
+        }
+
+        let mut payload = vec![0u8; len as usize];
+        stream
+            .read_exact(&mut payload)
+            .map_err(|e| format!("读取 Chrome WebSocket 消息内容失败: {}", e))?;
+        if masked {
+            for (index, byte) in payload.iter_mut().enumerate() {
+                *byte ^= mask[index % 4];
+            }
+        }
+
+        match opcode {
+            0x0 | 0x1 => {
+                message.extend_from_slice(&payload);
+                if fin {
+                    return String::from_utf8(message)
+                        .map_err(|e| format!("Chrome WebSocket 返回非 UTF-8 消息: {}", e));
+                }
+            }
+            0x8 => return Err("Chrome WebSocket 已关闭".to_string()),
+            0x9 => {
+                websocket_send_frame(stream, 0xA, &payload)?;
+            }
+            0xA => {}
+            _ => return Err(format!("Chrome WebSocket 返回不支持的消息类型: {}", opcode)),
+        }
+    }
+}
+
+struct CdpClient {
+    stream: TcpStream,
+    next_id: u64,
+}
+
+impl CdpClient {
+    fn connect(ws_url: &str) -> Result<Self, String> {
+        Ok(Self {
+            stream: websocket_connect(ws_url)?,
+            next_id: 1,
+        })
+    }
+
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let message = json!({
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+        websocket_send_text(&mut self.stream, &message.to_string())?;
+
+        loop {
+            let raw = websocket_read_message(&mut self.stream)?;
+            let value: Value = serde_json::from_str(&raw)
+                .map_err(|e| format!("解析 Chrome CDP 响应失败: {}", e))?;
+            if value.get("id").and_then(Value::as_u64) != Some(id) {
+                continue;
+            }
+            if let Some(error) = value.get("error") {
+                return Err(format!("Chrome CDP 调用 {} 失败: {}", method, error));
+            }
+            return Ok(value.get("result").cloned().unwrap_or(Value::Null));
+        }
+    }
+}
+
+fn parse_css_length_to_inches(value: &str, fallback: f64) -> f64 {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return fallback;
+    }
+
+    let mut number_part = String::new();
+    let mut unit_part = String::new();
+    for ch in trimmed.chars() {
+        if ch.is_ascii_digit() || ch == '.' || ch == '-' || ch == '+' {
+            if unit_part.is_empty() {
+                number_part.push(ch);
+            } else {
+                return fallback;
+            }
+        } else if !ch.is_whitespace() {
+            unit_part.push(ch.to_ascii_lowercase());
+        }
+    }
+
+    let number = match number_part.parse::<f64>() {
+        Ok(value) if value >= 0.0 => value,
+        _ => return fallback,
+    };
+
+    match unit_part.as_str() {
+        "" | "in" => number,
+        "mm" => number / 25.4,
+        "cm" => number / 2.54,
+        "px" => number / 96.0,
+        "pt" => number / 72.0,
+        _ => fallback,
+    }
+}
+
+fn paper_size_inches(format: &str) -> (f64, f64) {
+    match format {
+        "A5" => (5.83, 8.27),
+        "Letter" => (8.5, 11.0),
+        "Legal" => (8.5, 14.0),
+        _ => (8.27, 11.69),
+    }
+}
+
+fn wait_for_document_ready(client: &mut CdpClient) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let result = client.call("Runtime.evaluate", json!({
+            "expression": "document.readyState",
+            "returnByValue": true
+        }))?;
+        let state = result
+            .get("result")
+            .and_then(|result| result.get("value"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if state == "complete" {
+            let _ = client.call("Runtime.evaluate", json!({
+                "expression": "document.fonts ? document.fonts.ready.then(() => true) : true",
+                "awaitPromise": true,
+                "returnByValue": true
+            }));
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err("等待导出页面加载完成超时".to_string())
+}
+
+fn print_pdf_with_chrome_cdp(
+    chrome: &str,
+    html_content: &str,
+    output_path: &str,
+    options: PdfChromeExportOptions,
+) -> Result<(), String> {
+    let temp_html = unique_temp_name("orcha-pdf-export", ".html");
+    let user_data_dir = unique_temp_name("orcha-pdf-chrome-profile", "");
+    fs::create_dir_all(&user_data_dir)
+        .map_err(|e| format!("创建 Chrome 临时配置目录失败: {}", e))?;
+    fs::write(&temp_html, html_content)
+        .map_err(|e| format!("创建临时 HTML 文件失败: {}", e))?;
+
+    let port = allocate_loopback_port()?;
+    let file_url = format!("file://{}", temp_html.to_string_lossy());
+    let mut child = Command::new(chrome)
+        .args([
+            "--headless",
+            "--disable-gpu",
+            "--no-first-run",
+            "--disable-background-networking",
+            "--remote-debugging-address=127.0.0.1",
+        ])
+        .arg(format!("--remote-debugging-port={}", port))
+        .arg(format!("--user-data-dir={}", user_data_dir.to_string_lossy()))
+        .arg(&file_url)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("启动 Chrome 失败: {}", e))?;
+
+    let result = (|| {
+        let ws_url = wait_for_chrome_page_ws_url(port, &file_url, &mut child)?;
+        let mut client = CdpClient::connect(&ws_url)?;
+        client.call("Page.enable", json!({}))?;
+        wait_for_document_ready(&mut client)?;
+
+        let (paper_width, paper_height) = paper_size_inches(&options.page.format);
+        let header_template = options.header_template.unwrap_or_default();
+        let footer_template = options.footer_template.unwrap_or_default();
+        let display_header_footer = !header_template.trim().is_empty() || !footer_template.trim().is_empty();
+        let print_result = client.call("Page.printToPDF", json!({
+            "landscape": options.page.orientation == "landscape",
+            "displayHeaderFooter": display_header_footer,
+            "printBackground": options.page.print_background,
+            "paperWidth": paper_width,
+            "paperHeight": paper_height,
+            "marginTop": parse_css_length_to_inches(&options.page.margin.top, 20.0 / 25.4),
+            "marginRight": parse_css_length_to_inches(&options.page.margin.right, 18.0 / 25.4),
+            "marginBottom": parse_css_length_to_inches(&options.page.margin.bottom, 20.0 / 25.4),
+            "marginLeft": parse_css_length_to_inches(&options.page.margin.left, 18.0 / 25.4),
+            "headerTemplate": header_template,
+            "footerTemplate": footer_template,
+            "preferCSSPageSize": false,
+        }))?;
+        let data = print_result
+            .get("data")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Chrome 未返回 PDF 数据".to_string())?;
+        let bytes = general_purpose::STANDARD
+            .decode(data)
+            .map_err(|e| format!("解析 Chrome PDF 数据失败: {}", e))?;
+        fs::write(output_path, bytes)
+            .map_err(|e| format!("写入 PDF 文件失败: {}", e))?;
+        Ok(())
+    })();
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_file(&temp_html);
+    let _ = fs::remove_dir_all(&user_data_dir);
+
+    result
+}
+
 // ── Command: export PDF using system Chrome (headless) ──
 #[command]
-fn export_pdf_chrome(html_content: String, output_path: String, chrome_path: Option<String>) -> PdfExportResult {
+fn export_pdf_chrome(
+    html_content: String,
+    output_path: String,
+    chrome_path: Option<String>,
+    options: Option<PdfChromeExportOptions>,
+) -> PdfExportResult {
     let chrome = match chrome_path {
         Some(p) => p,
         None => detect_chrome_path().into_iter().next().unwrap_or_default(),
@@ -2298,52 +2818,21 @@ fn export_pdf_chrome(html_content: String, output_path: String, chrome_path: Opt
         };
     }
 
-    // Create temp HTML file
-    let temp_dir = std::env::temp_dir();
-    let temp_html = temp_dir.join("orcha-pdf-export.html");
-    if let Err(e) = std::fs::write(&temp_html, &html_content) {
-        return PdfExportResult {
+    match print_pdf_with_chrome_cdp(&chrome, &html_content, &output_path, options.unwrap_or_default()) {
+        Ok(()) if PathBuf::from(&output_path).exists() => PdfExportResult {
+            success: true,
+            output_path: Some(output_path),
+            error: None,
+        },
+        Ok(()) => PdfExportResult {
             success: false,
             output_path: None,
-            error: Some(format!("创建临时文件失败: {}", e)),
-        };
-    }
-
-    // Run Chrome headless to generate PDF
-    let output = std::process::Command::new(&chrome)
-        .args([
-            "--headless",
-            "--disable-gpu",
-            "--no-pdf-header-footer",
-            "--no-first-run",
-            &format!("--print-to-pdf={}", output_path),
-            &format!("file://{}", temp_html.to_string_lossy()),
-        ])
-        .output();
-
-    // Clean up temp file
-    let _ = std::fs::remove_file(&temp_html);
-
-    match output {
-        Ok(out) => {
-            if out.status.success() && PathBuf::from(&output_path).exists() {
-                PdfExportResult {
-                    success: true,
-                    output_path: Some(output_path),
-                    error: None,
-                }
-            } else {
-                PdfExportResult {
-                    success: false,
-                    output_path: None,
-                    error: Some(format!("Chrome 导出失败: {}", String::from_utf8_lossy(&out.stderr))),
-                }
-            }
-        }
+            error: Some("Chrome 导出完成但未找到 PDF 文件".to_string()),
+        },
         Err(e) => PdfExportResult {
             success: false,
             output_path: None,
-            error: Some(format!("启动 Chrome 失败: {}", e)),
+            error: Some(format!("Chrome 原生 PDF 导出失败: {}", e)),
         },
     }
 }

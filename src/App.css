@@ -238,6 +238,132 @@
   opacity: 0.58;
 }
 
+/* ===== PDF Export Dialog ===== */
+.pdf-export-dialog-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 16px;
+  min-height: 360px;
+}
+
+.pdf-template-editor {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pdf-template-document {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-template-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pdf-template-label,
+.pdf-template-preview-title,
+.pdf-template-variables-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pdf-template-field textarea {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.pdf-template-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  padding: 12px;
+}
+
+.pdf-template-preview-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.pdf-template-preview-row strong {
+  min-width: 0;
+  color: var(--text-primary);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.pdf-template-variables {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-left: 1px solid var(--border-secondary);
+  padding-left: 16px;
+}
+
+.pdf-template-variable-button.ant-btn {
+  width: 100%;
+  height: auto;
+  min-height: 48px;
+  justify-content: flex-start;
+  padding: 7px 9px;
+  text-align: left;
+}
+
+.pdf-template-variable-button .ant-btn-icon {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.pdf-template-variable-button > span:not(.ant-btn-icon) {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.pdf-template-variable-label {
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.pdf-template-variable-button code {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .pdf-export-dialog-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pdf-template-variables {
+    border-left: 0;
+    border-top: 1px solid var(--border-secondary);
+    padding-top: 14px;
+    padding-left: 0;
+  }
+}
+
 .toolbar-update-btn {
   position: relative;
 }

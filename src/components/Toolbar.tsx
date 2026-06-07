@@ -33,6 +33,7 @@ import { effectiveViewModeForDocument, isMarkdownDocument, isMarkdownViewMode } 
 import { basename, formatMarkdownImageUrl, markdownImagePathForDocument, stripExtension } from '../utils/markdownImages';
 import { renderMarkdownForExport } from '../utils/exportMarkdown';
 import { confirmCloseTabs } from '../utils/unsavedTabs';
+import PdfExportDialog, { type PdfTemplateDraft } from './PdfExportDialog';
 import {
   availableTextFilePath,
   decodeDialogPath,
@@ -42,6 +43,7 @@ import {
   getTextFileDialogFilters,
   normalizeTextFileName,
 } from '../utils/savePaths';
+import { buildChromePdfTemplate, buildPdfDocumentHtml } from '../utils/pdfExport';
 import { useSettingsStore, useShortcutStore, useUpdateStore } from '../store';
 import type { ThemeMode, ViewMode } from '../types';
 import { runUpdateCheckFlow } from '../utils/updateUi';
@@ -172,6 +174,8 @@ export default function Toolbar() {
   const clearAvailableUpdate = useUpdateStore(s => s.clearAvailableUpdate);
   const [isDragging, setIsDragging] = useState(false);
   const [updateFlowRunning, setUpdateFlowRunning] = useState(false);
+  const [pdfExportDialogOpen, setPdfExportDialogOpen] = useState(false);
+  const [pdfExporting, setPdfExporting] = useState(false);
   const recentOpenedPathRef = useRef<Map<string, number>>(new Map());
   const t = useCallback((value: string, params?: Record<string, string | number>) => (
     translateText(language, value, params)
@@ -471,47 +475,41 @@ ${htmlBody}
     } catch (e) { console.error('Failed to export HTML:', e); }
   }, [state.tabs, state.activeTabId, exportSettings.defaultExportDir, exportSettings.openAfterExport, exportSettings.overwriteExisting, isEnglish, t, themeColor]);
 
-  const handleExportPDF = useCallback(async () => {
-    console.log('handleExportPDF called');
+  const handleExportPDF = useCallback(() => {
+    if (!activeTab) {
+      message.warning(t('请先打开或新建一个文档'));
+      return;
+    }
+    if (activeTab.preview) {
+      message.warning(t('当前预览文件不能导出为 PDF，请打开文档后再导出'));
+      return;
+    }
+    setPdfExportDialogOpen(true);
+  }, [activeTab, t]);
+
+  const handleConfirmExportPDF = useCallback(async ({ headerTemplate, footerTemplate }: PdfTemplateDraft) => {
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
     if (!activeTab) return;
+    setPdfExporting(true);
+    setPdfExportDialogOpen(false);
     try {
       const htmlBody = await renderMarkdownForExport(activeTab.content, activeTab.path);
       const defaultFileName = activeTab.name.replace(/\.md$/, '') + (isEnglish ? '_print.html' : '_打印版.html');
       const defaultPath = exportSettings.defaultExportDir
         ? `${exportSettings.defaultExportDir}/${defaultFileName.replace(/\.html$/, '.pdf')}`
         : defaultFileName.replace(/\.html$/, '.pdf');
-      const page = exportSettings.page;
-      const pageSize = page.format === 'custom' ? '' : `${page.format} ${page.orientation}`;
-      const pageMargin = `${page.margin.top} ${page.margin.right} ${page.margin.bottom} ${page.margin.left}`;
-      const headerFooter = exportSettings.headerFooter.enabled
-        ? `<div class="print-footer"><span>${exportSettings.headerFooter.showDocumentTitle ? activeTab.name : ''}</span>${exportSettings.headerFooter.showPageNumber ? (isEnglish ? '<span>Page <span class="page-number"></span></span>' : '<span>第 <span class="page-number"></span> 页</span>') : '<span></span>'}</div>`
-        : '';
-      const fullHTML = `<!DOCTYPE html><html><head><title>${activeTab.name}</title><style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { max-width: 700px; margin: 40px auto; padding: 0 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.7; color: #1a1a1a; }
-        h1, h2 { border-bottom: 1px solid #e0e0e0; padding-bottom: 0.3em; margin: 1.5em 0 0.8em; page-break-after: avoid; }
-        h1 { font-size: 1.8em; } h2 { font-size: 1.5em; } h3 { font-size: 1.25em; } h4 { font-size: 1.1em; }
-        code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 0.88em; font-family: SFMono-Regular, Consolas, monospace; }
-        pre { background: #f8f8f8; border: 1px solid #e0e0e0; border-radius: 6px; padding: 14px 16px; overflow-x: auto; margin: 1em 0; page-break-inside: avoid; }
-        pre code { background: none; padding: 0; }
-        blockquote { border-left: 3px solid ${normalizeThemeColor(themeColor)}; padding-left: 16px; color: #666; margin: 1em 0; }
-        img { max-width: 100%; border-radius: 6px; margin: 1em 0; }
-        table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-        th, td { border: 1px solid #e0e0e0; padding: 8px 12px; }
-        th { background: #f5f5f5; }
-        a { color: ${normalizeThemeColor(themeColor)}; }
-        hr { border: none; border-top: 1px solid #e0e0e0; margin: 1.5em 0; }
-        ul, ol { padding-left: 24px; }
-        .print-footer { display: none; }
-        .page-number::after { content: counter(page); }
-        @page { ${pageSize ? `size: ${pageSize};` : ''} margin: ${pageMargin}; }
-        @media print {
-          body { max-width: none; margin: 0; }
-          .print-footer { display: flex; justify-content: space-between; position: fixed; bottom: 0; left: 0; right: 0; font-size: 10px; color: #666; }
-          ${page.printBackground ? '' : '* { background: transparent !important; }'}
-        }
-      </style></head><body>${htmlBody}${headerFooter}</body></html>`;
+      const locale = isEnglish ? 'en-US' : 'zh-CN';
+      const fullHTML = buildPdfDocumentHtml({
+        htmlBody,
+        documentName: activeTab.name,
+        page: exportSettings.page,
+        themeColor,
+      });
+      const pdfOptions = {
+        page: exportSettings.page,
+        headerTemplate: buildChromePdfTemplate(headerTemplate, activeTab.name, locale),
+        footerTemplate: buildChromePdfTemplate(footerTemplate, activeTab.name, locale),
+      };
       // Detect available engines
       const engines: Array<{ engine: string; available: boolean; path?: string }> = await invoke('detect_pdf_engines');
       const chromeEngine = engines.find(e => e.engine === 'system_chrome');
@@ -533,6 +531,7 @@ ${htmlBody}
           chromePath: exportSettings.systemChrome.detectMode === 'custom'
             ? exportSettings.systemChrome.customPath || null
             : chromeEngine?.path || null,
+          options: pdfOptions,
         });
         if (!result.success) {
           console.error('Chrome PDF export failed:', result.error);
@@ -549,8 +548,12 @@ ${htmlBody}
         }
         await printHtmlDocument(fullHTML);
       }
-    } catch (e) { console.error('Failed to export PDF:', e); }
-  }, [state.tabs, state.activeTabId, exportSettings, isEnglish, t, themeColor]);
+    } catch (e) {
+      console.error('Failed to export PDF:', e);
+    } finally {
+      setPdfExporting(false);
+    }
+  }, [exportSettings, isEnglish, state.activeTabId, state.tabs, t, themeColor]);
 
   const handleSaveAs = useCallback(async () => {
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
@@ -1347,6 +1350,17 @@ ${htmlBody}
 
         </div>
       </div>
+
+      <PdfExportDialog
+        open={pdfExportDialogOpen}
+        documentName={activeTab?.name || t('未命名.md')}
+        headerFooter={exportSettings.headerFooter}
+        isEnglish={isEnglish}
+        exporting={pdfExporting}
+        onCancel={() => setPdfExportDialogOpen(false)}
+        onExport={(draft) => { void handleConfirmExportPDF(draft); }}
+        t={t}
+      />
 
       {/* Drag overlay */}
       <div className={`drag-overlay ${isDragging ? '' : 'hidden'}`}>
