@@ -194,6 +194,7 @@ export default function Toolbar() {
   const availableUpdate = useUpdateStore(s => s.availableUpdate);
   const checkingUpdate = useUpdateStore(s => s.checking);
   const checkLatestUpdate = useUpdateStore(s => s.checkLatest);
+  const clearAvailableUpdate = useUpdateStore(s => s.clearAvailableUpdate);
   const [isDragging, setIsDragging] = useState(false);
   const [updateFlowRunning, setUpdateFlowRunning] = useState(false);
   const recentOpenedPathRef = useRef<Map<string, number>>(new Map());
@@ -613,9 +614,9 @@ ${htmlBody}
   }, [dispatch, fileSettings.hidePatterns, state.activeTabId, state.tabs, state.workspacePath, t, textFileDialogFilters]);
 
   const handleCheckUpdate = useCallback(async () => {
-    await runUpdateCheckFlow();
+    await runUpdateCheckFlow({ onInstallStart: clearAvailableUpdate });
     void checkLatestUpdate();
-  }, [checkLatestUpdate]);
+  }, [checkLatestUpdate, clearAvailableUpdate]);
 
   const handleOpenTerminal = useCallback(async () => {
     dispatch({ type: 'SET_TERMINAL_OPEN', payload: true });
@@ -624,12 +625,11 @@ ${htmlBody}
   const handleToolbarUpdate = useCallback(async () => {
     setUpdateFlowRunning(true);
     try {
-      await runUpdateCheckFlow();
-      void checkLatestUpdate();
+      await runUpdateCheckFlow({ onInstallStart: clearAvailableUpdate });
     } finally {
       setUpdateFlowRunning(false);
     }
-  }, [checkLatestUpdate]);
+  }, [clearAvailableUpdate]);
 
   const handleRecentFilesMenu = useCallback(() => {
     if (!state.sidebarVisible) {

@@ -4,13 +4,14 @@ import { useEffect, useState } from 'react';
 import aboutLogo from '../../../assets/brand/orcha-writer-about-logo.png';
 import { getCurrentVersion } from '../../../utils/update';
 import { runUpdateCheckFlow } from '../../../utils/updateUi';
-import { useSettingsStore } from '../../../store';
+import { useSettingsStore, useUpdateStore } from '../../../store';
 import { translateText } from '../../../i18n';
 
 const { Paragraph, Text } = Typography;
 
 export default function AboutPage() {
   const language = useSettingsStore(s => s.general.language);
+  const clearAvailableUpdate = useUpdateStore(s => s.clearAvailableUpdate);
   const [checking, setChecking] = useState(false);
   const [currentVersion, setCurrentVersion] = useState(__APP_VERSION__);
   const t = (value: string, params?: Record<string, string | number>) => translateText(language, value, params);
@@ -33,7 +34,7 @@ export default function AboutPage() {
   const handleCheckUpdates = async () => {
     setChecking(true);
     try {
-      await runUpdateCheckFlow();
+      await runUpdateCheckFlow({ onInstallStart: clearAvailableUpdate });
     } finally {
       setChecking(false);
     }
