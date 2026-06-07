@@ -1,7 +1,7 @@
 {
   "name": "orcha-writer",
   "private": true,
-  "version": "0.1.15",
+  "version": "0.1.16",
   "packageManager": "pnpm@10.12.1",
   "license": "MIT",
   "repository": {
