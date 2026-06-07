@@ -8,6 +8,7 @@ import enUS from 'antd/locale/en_US';
 import { useState, useMemo, useEffect } from 'react';
 import { useSettingsStore } from '../../store';
 import { isEnglishLanguage } from '../../i18n';
+import GlobalFileSearch from '../../components/GlobalFileSearch';
 
 function normalizeThemeColor(color: string | undefined): string {
   const value = color?.trim();
@@ -60,6 +61,7 @@ export function MainLayout() {
         <AntThemeProvider>
           <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg-primary)' }}>
             <Outlet />
+            <GlobalFileSearch />
           </div>
         </AntThemeProvider>
       </ScrollSyncProvider>

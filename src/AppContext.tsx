@@ -8,7 +8,7 @@ import { defaultAppearanceSettings, defaultEditorSettings } from './types';
 import { readConfig, writeConfig } from './config';
 import { effectiveViewModeForDocument } from './utils/documentCapabilities';
 
-type AppAction =
+export type AppAction =
   | { type: 'SET_VIEW_MODE'; payload: ViewMode }
   | { type: 'SET_THEME'; payload: ThemeMode }
   | { type: 'TOGGLE_SIDEBAR' }
@@ -42,6 +42,8 @@ type AppAction =
   | { type: 'SET_SEARCH_MATCH_INDEX'; payload: number }
   | { type: 'TOGGLE_COMMAND_PALETTE' }
   | { type: 'SET_COMMAND_PALETTE_OPEN'; payload: boolean }
+  | { type: 'TOGGLE_GLOBAL_SEARCH' }
+  | { type: 'SET_GLOBAL_SEARCH_OPEN'; payload: boolean }
   | { type: 'TOGGLE_TERMINAL' }
   | { type: 'SET_TERMINAL_OPEN'; payload: boolean }
   | { type: 'TOGGLE_SETTINGS' }
@@ -66,6 +68,7 @@ const initialState: AppState = {
   searchMatchIndex: 0,
   replaceOpen: false,
   commandPaletteOpen: false,
+  globalSearchOpen: false,
   terminalOpen: false,
   settingsOpen: false,
   editorSettings: defaultEditorSettings,
@@ -325,9 +328,13 @@ function appReducer(state: AppState, action: AppAction): AppState {
     case 'SET_SEARCH_MATCH_INDEX':
       return { ...state, searchMatchIndex: action.payload };
     case 'TOGGLE_COMMAND_PALETTE':
-      return { ...state, commandPaletteOpen: !state.commandPaletteOpen };
+      return { ...state, commandPaletteOpen: !state.commandPaletteOpen, globalSearchOpen: false };
     case 'SET_COMMAND_PALETTE_OPEN':
-      return { ...state, commandPaletteOpen: action.payload };
+      return { ...state, commandPaletteOpen: action.payload, globalSearchOpen: action.payload ? false : state.globalSearchOpen };
+    case 'TOGGLE_GLOBAL_SEARCH':
+      return { ...state, globalSearchOpen: !state.globalSearchOpen, commandPaletteOpen: false };
+    case 'SET_GLOBAL_SEARCH_OPEN':
+      return { ...state, globalSearchOpen: action.payload, commandPaletteOpen: action.payload ? false : state.commandPaletteOpen };
     case 'TOGGLE_TERMINAL':
       return { ...state, terminalOpen: !state.terminalOpen };
     case 'SET_TERMINAL_OPEN':

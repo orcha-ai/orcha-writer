@@ -7,12 +7,13 @@ import { FolderOpen, Folder, File, ChevronRight, PanelLeftClose, PanelLeftOpen, 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import type { CSSProperties, DragEvent, KeyboardEvent, MouseEvent } from 'react';
 import { message } from 'antd';
-import { ensureDir, pathExists, readTextFile, rename, remove, revealInFileManager, writeTextFile } from '../utils/fs';
+import { ensureDir, pathExists, rename, remove, revealInFileManager, writeTextFile } from '../utils/fs';
 import { buildHidePatterns, readFirstLevel } from '../utils/workspace';
-import { getPreviewFileKind, isMarkdownFileName, isOpenableTextFileName } from '../utils/savePaths';
 import type { FileNode, RecentFile } from '../types';
 import { getLocaleText, normalizeAppLanguage } from '../i18n';
 import { OutlineContent } from './Outline';
+import { searchWorkspaceFiles, type FileSearchResult } from '../utils/fileSearch';
+import { initialContentForFile, openFileInEditor, openRecentFileInEditor } from '../utils/openFileInEditor';
 
 const SIDEBAR_MIN_WIDTH = 180;
 const SIDEBAR_MAX_WIDTH = 420;
@@ -30,11 +31,6 @@ interface CreateFolderState {
 interface CreateFileState {
   parentPath: string | null;
   value: string;
-}
-
-interface FileSearchResult {
-  node: FileNode;
-  relativePath: string;
 }
 
 interface TreeHandlers {
@@ -180,10 +176,6 @@ function withNameIndex(name: string, index: number): string {
   return `${name.slice(0, dotIndex)} ${index}${name.slice(dotIndex)}`;
 }
 
-function initialContentForFile(fileName: string): string {
-  return isMarkdownFileName(fileName) ? `# ${fileName.replace(/\.\w+$/, '')}\n\n` : '';
-}
-
 function rebasePath(path: string, oldPath: string, newPath: string): string {
   if (path === oldPath) return newPath;
   if (path.startsWith(`${oldPath}/`) || path.startsWith(`${oldPath}\\`)) {
@@ -235,49 +227,6 @@ async function readVisibleTree(
   };
 
   return load(rootPath);
-}
-
-function matchesFileSearch(node: FileNode, relativePath: string, query: string): boolean {
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (terms.length === 0) return false;
-  const haystack = `${node.name} ${relativePath}`.toLowerCase();
-  return terms.every(term => haystack.includes(term));
-}
-
-async function searchWorkspaceFiles(
-  workspacePath: string,
-  query: string,
-  hidePatterns: string[],
-  limit = FILE_SEARCH_RESULT_LIMIT,
-  shouldCancel?: () => boolean,
-): Promise<FileSearchResult[]> {
-  const results: FileSearchResult[] = [];
-
-  const visit = async (directoryPath: string) => {
-    if (results.length >= limit || shouldCancel?.()) return;
-    let nodes: FileNode[];
-    try {
-      nodes = await readFirstLevel(directoryPath, hidePatterns);
-    } catch (error) {
-      console.warn('[Sidebar] Failed to search folder:', directoryPath, error);
-      return;
-    }
-    if (shouldCancel?.()) return;
-
-    for (const node of nodes) {
-      if (results.length >= limit || shouldCancel?.()) return;
-      const relativePath = relativeWorkspacePath(node.path, workspacePath);
-      if (node.type === 'file' && matchesFileSearch(node, relativePath, query)) {
-        results.push({ node, relativePath });
-      }
-      if (node.type === 'folder') {
-        await visit(node.path);
-      }
-    }
-  };
-
-  await visit(workspacePath);
-  return results;
 }
 
 export default function Sidebar() {
@@ -547,31 +496,9 @@ export default function Sidebar() {
 
   const openFile = useCallback(async (node: FileNode) => {
     if (node.type !== 'file') return;
-    const id = node.path;
-    const ext = node.name.split('.').pop()?.toLowerCase() || '';
-    const previewKind = getPreviewFileKind(node.name);
-
-    if (previewKind) {
-      dispatch({
-        type: 'OPEN_TAB',
-        payload: { id, name: node.name, path: node.path, content: '', preview: { kind: previewKind } },
-      });
-      dispatch({ type: 'ADD_RECENT_FILE', payload: { path: node.path, name: node.name, lastOpened: Date.now() } });
-      return;
-    }
-
-    if (!isOpenableTextFileName(node.name)) {
-      dispatch({ type: 'OPEN_TAB', payload: { id, name: node.name, path: node.path, content: `# ${node.name}\n\n${text.sidebar.unsupportedFile(ext)}\n` } });
-      return;
-    }
-
-    try {
-      const content = await readTextFile(node.path);
-      dispatch({ type: 'OPEN_TAB', payload: { id, name: node.name, path: node.path, content } });
-      dispatch({ type: 'ADD_RECENT_FILE', payload: { path: node.path, name: node.name, lastOpened: Date.now() } });
-    } catch {
-      dispatch({ type: 'OPEN_TAB', payload: { id, name: node.name, path: node.path, content: initialContentForFile(node.name) } });
-    }
+    await openFileInEditor(dispatch, node, {
+      unsupportedFileContent: (extension) => `# ${node.name}\n\n${text.sidebar.unsupportedFile(extension)}\n`,
+    });
   }, [dispatch, text.sidebar]);
 
   const nextAvailableFolderName = useCallback(async (parentPath: string) => {
@@ -1276,28 +1203,11 @@ export default function Sidebar() {
           )}
 
           {state.sidebarActiveTab === 'recent' && (
-            <RecentFiles recentFiles={state.recentFiles} language={appLanguage} text={text} openFile={async (rf) => {
-              const previewKind = getPreviewFileKind(rf.name);
-              if (previewKind) {
-                dispatch({
-                  type: 'OPEN_TAB',
-                  payload: { id: rf.path, name: rf.name, path: rf.path, content: '', preview: { kind: previewKind } },
-                });
-                dispatch({ type: 'ADD_RECENT_FILE', payload: { path: rf.path, name: rf.name, lastOpened: Date.now() } });
-                return;
-              }
-
-              let content: string;
-              try {
-                content = await readTextFile(rf.path);
-              } catch {
-                content = initialContentForFile(rf.name);
-              }
-              dispatch({
-                type: 'OPEN_TAB',
-                payload: { id: rf.path, name: rf.name, path: rf.path, content },
-              });
-            }} />
+            <RecentFiles recentFiles={state.recentFiles} language={appLanguage} text={text} openFile={(rf) => (
+              openRecentFileInEditor(dispatch, rf, {
+                unsupportedFileContent: (extension) => `# ${rf.name}\n\n${text.sidebar.unsupportedFile(extension)}\n`,
+              })
+            )} />
           )}
         </div>
 

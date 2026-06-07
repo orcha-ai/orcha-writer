@@ -56,6 +56,7 @@ export interface AppState {
   searchMatchIndex: number;
   replaceOpen: boolean;
   commandPaletteOpen: boolean;
+  globalSearchOpen: boolean;
   terminalOpen: boolean;
   settingsOpen: boolean;
   editorSettings: EditorSettings;
