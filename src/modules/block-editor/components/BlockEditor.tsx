@@ -26,11 +26,26 @@ import {
   X,
 } from 'lucide-react';
 import { message } from 'antd';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useApp } from '../../../AppContext';
 import { useSettingsStore } from '../../../store';
 import { translateText } from '../../../i18n';
 import { resolveMarkdownImageSource } from '../../../utils/markdownImages';
+import {
+  dataImageUrlsFromClipboardData,
+  dataUrlToFile,
+  extractImagePathsFromText,
+  hasClipboardFileUrlHint,
+  hasNativeClipboardImageHint,
+  imageFilesFromClipboardData,
+  imagePathsFromClipboardData,
+  readClipboardImageFiles,
+  readClipboardImagePaths,
+  writePastedMarkdownImageFile,
+  writePastedMarkdownImagePath,
+  type PastedMarkdownImage,
+} from '../../../utils/markdownImagePaste';
+import { registerActiveClipboardImagePasteHandler } from '../../../components/Editor';
 import { getSlashCommands } from '../constants/slashCommands';
 import {
   blockToMarkdown,
@@ -128,10 +143,14 @@ const CONVERT_OPTIONS: Array<{ type: BlockType; label: string }> = [
   { type: 'todo_item', label: '待办' },
   { type: 'blockquote', label: '引用' },
   { type: 'callout', label: 'Callout' },
+  { type: 'image', label: '图片' },
   { type: 'code_block', label: '代码' },
+  { type: 'frontmatter', label: 'Frontmatter' },
   { type: 'math_block', label: '公式' },
   { type: 'html_block', label: 'HTML' },
   { type: 'table', label: '表格' },
+  { type: 'horizontal_rule', label: '分割线' },
+  { type: 'empty', label: '空块' },
 ];
 
 const BLOCK_AI_COMMAND_IDS: Record<BlockAIAction, string> = {
@@ -609,6 +628,7 @@ function scrollBlockDocumentDuringDrag(clientY: number): void {
 export default function BlockEditor() {
   const { state, dispatch } = useApp();
   const language = useSettingsStore(s => s.general.language);
+  const pasteImageAction = useSettingsStore(s => s.editor.pasteImageAction);
   const t = useCallback((value: string, params?: Record<string, string | number>) => (
     translateText(language, value, params)
   ), [language]);
@@ -1097,6 +1117,197 @@ export default function BlockEditor() {
     syncBlocks(next, targetIndex, { selectedIndices: [targetIndex] });
     window.setTimeout(() => textareasRef.current[block.id]?.focus(), 0);
   }, [blocks, syncBlocks]);
+
+  const insertPastedImagesAt = useCallback((blockIndex: number, pastedImages: PastedMarkdownImage[]) => {
+    if (pastedImages.length === 0) return;
+
+    const imageBlocks = pastedImages.map((image) => {
+      const alt = image.alt || t('图片');
+      return updateBlockAttrs(createBlock('image', alt), { alt, src: image.markdownPath });
+    });
+    const targetIndex = blocks.length > 0
+      ? Math.max(0, Math.min(blockIndex, blocks.length - 1))
+      : 0;
+    const targetBlock = blocks[targetIndex];
+    const shouldReplaceTarget = Boolean(
+      targetBlock
+      && (
+        targetBlock.type === 'empty'
+        || (targetBlock.type === 'paragraph' && !plainTextFromBlock(targetBlock).trim())
+      ),
+    );
+    const insertionIndex = shouldReplaceTarget ? targetIndex : Math.max(0, Math.min(targetIndex + 1, blocks.length));
+    const nextBlocks = shouldReplaceTarget
+      ? [
+          ...blocks.slice(0, targetIndex),
+          ...imageBlocks,
+          ...blocks.slice(targetIndex + 1),
+        ]
+      : [
+          ...blocks.slice(0, insertionIndex),
+          ...imageBlocks,
+          ...blocks.slice(insertionIndex),
+        ];
+    const nextSelection = imageBlocks.map((_, offset) => insertionIndex + offset);
+
+    syncBlocks(nextBlocks, insertionIndex, { selectedIndices: nextSelection });
+    window.setTimeout(() => textareasRef.current[imageBlocks[0]?.id || '']?.focus(), 0);
+  }, [blocks, syncBlocks, t]);
+
+  const pasteImageFilesAsBlocks = useCallback(async (files: File[], blockIndex: number): Promise<boolean> => {
+    if (!activeTab || files.length === 0) return false;
+
+    const pastedImages: PastedMarkdownImage[] = [];
+    let warnedFallback = false;
+
+    for (const file of files) {
+      try {
+        const pastedImage = await writePastedMarkdownImageFile(file, {
+          action: pasteImageAction,
+          activeTab,
+          workspacePath: state.workspacePath,
+        });
+        pastedImages.push(pastedImage);
+        if (pastedImage.fallbackToDataUrl && !warnedFallback) {
+          warnedFallback = true;
+          message.warning(t('当前文档还没有可写入的资源目录，已改为插入 Data URL'));
+        }
+      } catch (error) {
+        console.error('[BlockEditor] Failed to paste image:', error);
+        message.warning(t('粘贴图片失败'));
+      }
+    }
+
+    insertPastedImagesAt(blockIndex, pastedImages);
+    return pastedImages.length > 0;
+  }, [activeTab, insertPastedImagesAt, pasteImageAction, state.workspacePath, t]);
+
+  const pasteImagePathsAsBlocks = useCallback(async (paths: string[], blockIndex: number): Promise<boolean> => {
+    if (!activeTab || paths.length === 0) return false;
+
+    const pastedImages: PastedMarkdownImage[] = [];
+
+    for (const sourcePath of paths) {
+      try {
+        pastedImages.push(await writePastedMarkdownImagePath(sourcePath, {
+          action: pasteImageAction,
+          activeTab,
+          workspacePath: state.workspacePath,
+        }));
+      } catch (error) {
+        console.error('[BlockEditor] Failed to paste image file:', error);
+        message.warning(t('粘贴图片文件失败'));
+      }
+    }
+
+    insertPastedImagesAt(blockIndex, pastedImages);
+    return pastedImages.length > 0;
+  }, [activeTab, insertPastedImagesAt, pasteImageAction, state.workspacePath, t]);
+
+  const pasteClipboardImagesAsBlocks = useCallback(async (): Promise<boolean> => {
+    const blockIndex = selectedIndex ?? blocks.length - 1;
+    if (!activeTab || blockIndex < 0) return false;
+
+    try {
+      const files = await readClipboardImageFiles();
+      if (files.length > 0) return pasteImageFilesAsBlocks(files, blockIndex);
+
+      const text = await navigator.clipboard?.readText?.().catch(() => '') || '';
+      const paths = extractImagePathsFromText(text);
+      if (paths.length > 0) return pasteImagePathsAsBlocks(paths, blockIndex);
+
+      const nativePaths = await readClipboardImagePaths();
+      if (nativePaths.length > 0) return pasteImagePathsAsBlocks(nativePaths, blockIndex);
+
+      return false;
+    } catch (error) {
+      console.warn('[BlockEditor] Failed to read clipboard images:', error);
+      return false;
+    }
+  }, [activeTab, blocks.length, pasteImageFilesAsBlocks, pasteImagePathsAsBlocks, selectedIndex]);
+
+  const handleClipboardImagePaste = useCallback((
+    clipboard: DataTransfer | null,
+    blockIndex: number,
+    preventDefault: () => void,
+    target?: EventTarget | null,
+  ): boolean => {
+    if (!activeTab || !clipboard) return false;
+
+    const files = imageFilesFromClipboardData(clipboard);
+    if (files.length > 0) {
+      preventDefault();
+      void pasteImageFilesAsBlocks(files, blockIndex);
+      return true;
+    }
+
+    const targetElement = target instanceof HTMLElement ? target : null;
+    const shouldReadTextPaths = !targetElement?.closest('.block-image-field input');
+    const paths = shouldReadTextPaths ? imagePathsFromClipboardData(clipboard) : [];
+    if (paths.length > 0) {
+      preventDefault();
+      void pasteImagePathsAsBlocks(paths, blockIndex);
+      return true;
+    }
+
+    if (hasClipboardFileUrlHint(clipboard)) {
+      preventDefault();
+      void readClipboardImagePaths().then(nativePaths => {
+        if (nativePaths.length > 0) void pasteImagePathsAsBlocks(nativePaths, blockIndex);
+      });
+      return true;
+    }
+
+    const dataImageUrls = dataImageUrlsFromClipboardData(clipboard);
+    if (dataImageUrls.length > 0) {
+      preventDefault();
+      void Promise.all(dataImageUrls.map(dataUrlToFile))
+        .then(imageFiles => pasteImageFilesAsBlocks(imageFiles.filter((file): file is File => file !== null), blockIndex));
+      return true;
+    }
+
+    if (hasNativeClipboardImageHint(clipboard)) {
+      preventDefault();
+      void readClipboardImageFiles().then(nativeFiles => {
+        if (nativeFiles.length > 0) void pasteImageFilesAsBlocks(nativeFiles, blockIndex);
+      });
+      return true;
+    }
+
+    return false;
+  }, [activeTab, pasteImageFilesAsBlocks, pasteImagePathsAsBlocks]);
+
+  const handleBlockPasteCapture = useCallback((event: ReactClipboardEvent<HTMLElement>, blockIndex: number) => {
+    handleClipboardImagePaste(event.clipboardData, blockIndex, () => event.preventDefault(), event.target);
+  }, [handleClipboardImagePaste]);
+
+  useEffect(() => {
+    if (state.viewMode !== 'block') return undefined;
+    return registerActiveClipboardImagePasteHandler(pasteClipboardImagesAsBlocks);
+  }, [pasteClipboardImagesAsBlocks, state.viewMode]);
+
+  useEffect(() => {
+    if (state.viewMode !== 'block') return undefined;
+
+    const handleWindowPaste = (event: globalThis.ClipboardEvent) => {
+      if (event.defaultPrevented || isEditingTarget(event.target)) return;
+
+      const targetNode = event.target instanceof Node ? event.target : null;
+      const isInsideBlockEditor = Boolean(targetNode && documentRef.current?.contains(targetNode));
+      const isBodyPaste = event.target === document.body || event.target === document.documentElement;
+      if (!isInsideBlockEditor && !isBodyPaste) return;
+
+      const blockIndex = selectedIndex ?? blocks.length - 1;
+      if (blockIndex < 0) return;
+
+      if (handleClipboardImagePaste(event.clipboardData, blockIndex, () => event.preventDefault(), event.target)) {
+        event.stopPropagation();
+      }
+    };
+
+    window.addEventListener('paste', handleWindowPaste);
+    return () => window.removeEventListener('paste', handleWindowPaste);
+  }, [blocks.length, handleClipboardImagePaste, selectedIndex, state.viewMode]);
 
   const insertParagraphAfter = useCallback((blockIndex: number, textarea: HTMLTextAreaElement) => {
     const block = blocks[blockIndex];
@@ -1973,6 +2184,7 @@ export default function BlockEditor() {
                   ].filter(Boolean).join(' ')}
                   onClick={(event) => selectBlock(index, event)}
                   onContextMenu={(event) => handleBlockContextMenu(event, index)}
+                  onPasteCapture={(event) => handleBlockPasteCapture(event, index)}
                 >
                   <div
                     className="block-handle-rail"

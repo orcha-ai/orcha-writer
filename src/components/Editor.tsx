@@ -11,12 +11,23 @@ import { syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
 import { search } from '@codemirror/search';
 import { autocompletion, closeBrackets } from '@codemirror/autocomplete';
 import { message } from 'antd';
-import type { TabFile } from '../types';
-import { copyFile, ensureDir, readClipboardFileUrls, readClipboardImage, writeBinaryFile } from '../utils/fs';
 import { effectiveViewModeForDocument } from '../utils/documentCapabilities';
-import { basename, dirname, formatMarkdownImageUrl, markdownImagePathForDocument, stripExtension } from '../utils/markdownImages';
+import { formatMarkdownImageUrl } from '../utils/markdownImages';
+import {
+  dataImageUrlsFromClipboardData,
+  dataUrlToFile,
+  extractImagePathsFromText,
+  hasClipboardFileUrlHint,
+  hasNativeClipboardImageHint,
+  imageFilesFromClipboardData,
+  imagePathsFromClipboardData,
+  readClipboardImageFiles,
+  readClipboardImagePaths,
+  writePastedMarkdownImageFile,
+  writePastedMarkdownImagePath,
+} from '../utils/markdownImagePaste';
 import type { EditorSelection } from '../modules/ai-chat/types/editor-bridge';
-import { getDocumentLanguage, translateText } from '../i18n';
+import { translateText } from '../i18n';
 
 export function ScrollSyncProvider({ children }: { children: React.ReactNode }) {
   return children;
@@ -73,154 +84,11 @@ export async function pasteClipboardImagesIntoActiveEditor(): Promise<boolean> {
   return activePasteClipboardImages ? activePasteClipboardImages() : false;
 }
 
-let pastedImageSerial = 0;
-const ORCHA_RESOURCE_DIR = '.orcha-writer/resources';
-
-function isImageLikeType(type: string): boolean {
-  return type.startsWith('image/') || type === 'public.tiff';
-}
-
-function imageExtensionFromType(type: string): string {
-  if (type === 'public.tiff' || type === 'image/tiff') return 'tiff';
-  if (type === 'image/jpeg') return 'jpg';
-  if (type === 'image/svg+xml') return 'svg';
-  const subtype = type.match(/^image\/([a-z0-9.+-]+)$/i)?.[1]?.toLowerCase();
-  return subtype ? subtype.replace(/^x-/, '') : 'png';
-}
-
-function isImageFile(file: File): boolean {
-  return isImageLikeType(file.type) || /\.(png|jpe?g|gif|webp|svg|bmp|tiff?|avif|heic|heif)$/i.test(file.name);
-}
-
-function isImagePath(path: string): boolean {
-  return /\.(png|jpe?g|gif|webp|svg|bmp|tiff?|avif|heic|heif)$/i.test(path.split(/[?#]/)[0]);
-}
-
-function decodeClipboardPath(value: string): string {
-  const trimmed = value.trim();
-  if (/^file:\/\//i.test(trimmed)) {
-    try {
-      return decodeURIComponent(new URL(trimmed).pathname);
-    } catch {
-      return decodeURIComponent(trimmed.replace(/^file:\/\//i, ''));
-    }
-  }
-  return trimmed;
-}
-
-function extractImagePathsFromText(text: string): string[] {
-  return text
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(Boolean)
-    .map(decodeClipboardPath)
-    .filter(path => /^(?:\/|[A-Za-z]:[\\/])/.test(path) && isImagePath(path));
-}
-
-async function readClipboardImagePaths(): Promise<string[]> {
-  const fileUrls = await readClipboardFileUrls().catch(() => []);
-  return extractImagePathsFromText(fileUrls.join('\n'));
-}
-
-function extractDataImageUrlsFromHtml(html: string): string[] {
-  const urls: string[] = [];
-  const pattern = /<img\b[^>]*\bsrc=["'](data:image\/[^"']+)["'][^>]*>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(html))) {
-    urls.push(match[1]);
-  }
-  return urls;
-}
-
-async function dataUrlToFile(dataUrl: string, index: number): Promise<File | null> {
-  const match = dataUrl.match(/^data:(image\/[a-z0-9.+-]+);base64,/i);
-  if (!match) return null;
-  const response = await fetch(dataUrl);
-  const blob = await response.blob();
-  const extension = imageExtensionFromType(match[1]);
-  return new File([blob], `clipboard-image-${index + 1}.${extension}`, { type: match[1] });
-}
-
-function imageExtension(file: File): string {
-  const fromName = file.name.split('.').pop()?.toLowerCase();
-  if (fromName && ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'tif', 'tiff', 'avif', 'heic', 'heif'].includes(fromName)) {
-    return fromName === 'jpeg' ? 'jpg' : fromName;
-  }
-  if (file.type) return imageExtensionFromType(file.type);
-  return 'png';
-}
-
-function makePastedImageFileName(file: File): string {
-  const timestamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
-  pastedImageSerial += 1;
-  return `pasted-${timestamp}-${pastedImageSerial}.${imageExtension(file)}`;
-}
-
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error ?? new Error(translateText(getDocumentLanguage(), '读取图片失败')));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function readClipboardImageFiles(): Promise<File[]> {
-  const nativeImage = await readClipboardImage().catch(() => null);
-  if (nativeImage?.bytes?.length) {
-    return [
-      new File(
-        [new Uint8Array(nativeImage.bytes)],
-        nativeImage.fileName || 'clipboard-image.png',
-        { type: nativeImage.mimeType || 'image/png' },
-      ),
-    ];
-  }
-
-  if (!navigator.clipboard?.read) return [];
-
-  const items = await navigator.clipboard.read();
-  const files: File[] = [];
-
-  for (const item of items) {
-    const type = item.types.find(isImageLikeType);
-    if (!type) continue;
-
-    const blob = await item.getType(type);
-    const mimeType = blob.type && isImageLikeType(blob.type)
-      ? blob.type
-      : type === 'public.tiff'
-        ? 'image/tiff'
-        : blob.type;
-    const extension = imageExtensionFromType(mimeType || type);
-    files.push(new File([blob], `clipboard-image.${extension}`, { type: mimeType }));
-  }
-
-  return files;
-}
-
-function getPastedImageTarget(
-  file: File,
-  action: 'assets' | 'workspace-assets' | 'original',
-  activeTab: TabFile | undefined,
-  workspacePath: string | null
-): { dir: string; filePath: string; markdownPath: string; fileName: string } | null {
-  if (action === 'original') return null;
-
-  const hasSavedDocument = Boolean(activeTab && !activeTab.isDraft && /[/\\]/.test(activeTab.path));
-  const documentDir = hasSavedDocument && activeTab ? dirname(activeTab.path) : '';
-  const assetRoot = action === 'workspace-assets' && workspacePath
-    ? workspacePath
-    : documentDir;
-
-  if (!assetRoot) return null;
-
-  const fileName = makePastedImageFileName(file);
-  const dir = `${assetRoot}/${ORCHA_RESOURCE_DIR}`;
-  const filePath = `${dir}/${fileName}`;
-  const markdownPath = activeTab ? markdownImagePathForDocument(filePath, activeTab.path) : filePath;
-
-  return { dir, filePath, markdownPath, fileName };
+export function registerActiveClipboardImagePasteHandler(handler: () => Promise<boolean>): () => void {
+  activePasteClipboardImages = handler;
+  return () => {
+    if (activePasteClipboardImages === handler) activePasteClipboardImages = null;
+  };
 }
 
 function insertMarkdownImage(view: EditorView, markdownPath: string, alt: string): void {
@@ -448,22 +316,17 @@ export default function Editor() {
     for (const file of files) {
       try {
         const action = pasteImageActionRef.current;
-        const target = getPastedImageTarget(file, action, activeTabRef.current, workspacePathRef.current);
+        const pastedImage = await writePastedMarkdownImageFile(file, {
+          action,
+          activeTab: activeTabRef.current,
+          workspacePath: workspacePathRef.current,
+        });
 
-        if (!target) {
-          const dataUrl = await fileToDataUrl(file);
-          insertMarkdownImage(view, dataUrl, stripExtension(file.name) || t('图片'));
-          if (action !== 'original' && !warnedFallback) {
-            warnedFallback = true;
-            message.warning(t('当前文档还没有可写入的资源目录，已改为插入 Data URL'));
-          }
-          continue;
+        insertMarkdownImage(view, pastedImage.markdownPath, pastedImage.alt || t('图片'));
+        if (pastedImage.fallbackToDataUrl && !warnedFallback) {
+          warnedFallback = true;
+          message.warning(t('当前文档还没有可写入的资源目录，已改为插入 Data URL'));
         }
-
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        await ensureDir(target.dir);
-        await writeBinaryFile(target.filePath, bytes);
-        insertMarkdownImage(view, target.markdownPath, stripExtension(file.name) || stripExtension(target.fileName) || t('图片'));
       } catch (error) {
         console.error('[Editor] Failed to paste image:', error);
         message.warning(t('粘贴图片失败'));
@@ -478,20 +341,12 @@ export default function Editor() {
     for (const sourcePath of paths) {
       try {
         const action = pasteImageActionRef.current;
-        const sourceName = basename(sourcePath);
-        const placeholder = new File([], sourceName || 'clipboard-image.png');
-        const target = getPastedImageTarget(placeholder, action, activeTabRef.current, workspacePathRef.current);
-
-        if (!target) {
-          const markdownPath = markdownImagePathForDocument(sourcePath, activeTabRef.current?.path);
-          insertMarkdownImage(view, markdownPath, stripExtension(sourceName) || t('图片'));
-          inserted = true;
-          continue;
-        }
-
-        await ensureDir(target.dir);
-        await copyFile(sourcePath, target.filePath);
-        insertMarkdownImage(view, target.markdownPath, stripExtension(sourceName) || stripExtension(target.fileName) || t('图片'));
+        const pastedImage = await writePastedMarkdownImagePath(sourcePath, {
+          action,
+          activeTab: activeTabRef.current,
+          workspacePath: workspacePathRef.current,
+        });
+        insertMarkdownImage(view, pastedImage.markdownPath, pastedImage.alt || t('图片'));
         inserted = true;
       } catch (error) {
         console.error('[Editor] Failed to paste image file:', error);
@@ -590,18 +445,7 @@ export default function Editor() {
             paste: (event, view) => {
               const clipboard = event.clipboardData;
               if (!clipboard) return false;
-              const clipboardTypes = Array.from(clipboard.types);
-              const plainText = clipboard.getData('text/plain');
-              const uriText = clipboard.getData('text/uri-list');
-              const htmlText = clipboard.getData('text/html');
-
-              const itemFiles = Array.from(clipboard.items)
-                .filter(item => item.kind === 'file' && isImageLikeType(item.type))
-                .map(item => item.getAsFile())
-                .filter((file): file is File => file !== null && isImageFile(file));
-              const files = itemFiles.length > 0
-                ? itemFiles
-                : Array.from(clipboard.files).filter(isImageFile);
+              const files = imageFilesFromClipboardData(clipboard);
 
               if (files.length > 0) {
                 event.preventDefault();
@@ -609,15 +453,14 @@ export default function Editor() {
                 return true;
               }
 
-              const paths = extractImagePathsFromText(uriText || plainText);
+              const paths = imagePathsFromClipboardData(clipboard);
               if (paths.length > 0) {
                 event.preventDefault();
                 void handlePasteImagePaths(paths, view);
                 return true;
               }
 
-              const hasFileUrlHint = clipboardTypes.some(type => type === 'Files' || /file-url/i.test(type));
-              if (hasFileUrlHint) {
+              if (hasClipboardFileUrlHint(clipboard)) {
                 event.preventDefault();
                 void readClipboardImagePaths().then(nativePaths => {
                   if (nativePaths.length > 0) {
@@ -627,7 +470,7 @@ export default function Editor() {
                 return true;
               }
 
-              const dataImageUrls = extractDataImageUrlsFromHtml(htmlText);
+              const dataImageUrls = dataImageUrlsFromClipboardData(clipboard);
               if (dataImageUrls.length > 0) {
                 event.preventDefault();
                 void Promise.all(dataImageUrls.map(dataUrlToFile))
@@ -635,12 +478,7 @@ export default function Editor() {
                 return true;
               }
 
-              const hasNativeImageHint = clipboardTypes.some(type => (
-                type === 'Files' ||
-                isImageLikeType(type) ||
-                /(?:image|file|public\.tiff)/i.test(type)
-              ));
-              if (hasNativeImageHint || (!plainText && !uriText && !htmlText)) {
+              if (hasNativeClipboardImageHint(clipboard)) {
                 event.preventDefault();
                 void readClipboardImageFiles().then(nativeFiles => {
                   if (nativeFiles.length > 0) {
@@ -676,7 +514,6 @@ export default function Editor() {
 
     viewRef.current = view;
     activeView = view;
-    activePasteClipboardImages = pasteClipboardImages;
     updateEditorStatus(view, true);
     emitEditorSelection(view);
 
@@ -692,10 +529,14 @@ export default function Editor() {
       view.destroy();
       viewRef.current = null;
       if (activeView === view) activeView = null;
-      if (activePasteClipboardImages === pasteClipboardImages) activePasteClipboardImages = null;
       emitEditorSelection(null);
     };
   }, [activeTab?.id, handleUpdate, pasteClipboardImages, updateEditorStatus]);
+
+  useEffect(() => {
+    if (!viewRef.current || effectiveViewMode === 'block') return undefined;
+    return registerActiveClipboardImagePasteHandler(pasteClipboardImages);
+  }, [effectiveViewMode, pasteClipboardImages]);
 
   // Reconfigure settings when they change
   useEffect(() => {

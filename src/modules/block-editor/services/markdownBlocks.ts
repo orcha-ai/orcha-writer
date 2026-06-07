@@ -670,9 +670,11 @@ export function updateBlockAttrs(block: BlockViewModel, attrs: Record<string, un
 
 export function convertBlock(block: BlockViewModel, type: BlockType): BlockViewModel {
   const content = plainTextFromBlock(block);
-  const nextContent = type === 'table' && !parseMarkdownTable(content)
-    ? defaultContentForType('table')
-    : content || defaultContentForType(type);
+  const nextContent = type === 'horizontal_rule' || type === 'empty'
+    ? defaultContentForType(type)
+    : type === 'table' && !parseMarkdownTable(content)
+      ? defaultContentForType('table')
+      : content || defaultContentForType(type);
   const nextBlock: BlockViewModel = {
     ...block,
     type,
