@@ -2,8 +2,16 @@ import { Table, Tag, Switch, Input, Button, Space, Typography } from 'antd';
 import { SearchOutlined, UndoOutlined } from '@ant-design/icons';
 import { useSettingsStore, useShortcutStore } from '../../../store';
 import type { ShortcutConfig } from '../../../types';
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { translateText } from '../../../i18n';
+import {
+  doubleShortcutKey,
+  doubleShortcutValue,
+  isDoubleKeyShortcut,
+  isPlainKeyPress,
+  isShortcutModifier,
+  normalizeShortcutKey,
+} from '../../../utils/keyboardShortcuts';
 
 const { Text } = Typography;
 
@@ -23,31 +31,74 @@ export default function ShortcutsPage() {
   const language = useSettingsStore(s => s.general.language);
   const [search, setSearch] = useState('');
   const [recordingId, setRecordingId] = useState<string | null>(null);
-  const t = (value: string) => translateText(language, value);
+  const [pendingDoubleKey, setPendingDoubleKey] = useState<{ shortcutId: string; key: string; at: number } | null>(null);
+  const t = (value: string, params?: Record<string, string | number>) => translateText(language, value, params);
 
   const filtered = shortcuts.filter((s) =>
     !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.id.toLowerCase().includes(search.toLowerCase())
   );
 
-  const handleKeyDown = (e: React.KeyboardEvent, shortcut: ShortcutConfig) => {
-    e.preventDefault();
-    if (e.key === 'Escape') {
-      setRecordingId(null);
+  const clearRecording = useCallback(() => {
+    setRecordingId(null);
+    setPendingDoubleKey(null);
+  }, []);
+
+  const canRecordDoubleShortcut = useCallback((shortcut: ShortcutConfig) => (
+    shortcut.id === 'app.globalFileSearch'
+    || isDoubleKeyShortcut(shortcut.keys)
+    || Boolean(shortcut.defaultKeys && isDoubleKeyShortcut(shortcut.defaultKeys))
+  ), []);
+
+  const formatShortcutKeys = (keys: string) => {
+    const doubleKey = doubleShortcutKey(keys);
+    if (!doubleKey) return keys || '-';
+    return `${t('双击')} ${doubleKey}`;
+  };
+
+  const handleKeyDown = useCallback((event: KeyboardEvent | React.KeyboardEvent, shortcut: ShortcutConfig) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === 'Escape') {
+      clearRecording();
       return;
     }
+
+    const key = normalizeShortcutKey(event.key);
+    if (canRecordDoubleShortcut(shortcut) && isPlainKeyPress(event)) {
+      const now = Date.now();
+      if (pendingDoubleKey?.shortcutId === shortcut.id && pendingDoubleKey.key === key && now - pendingDoubleKey.at <= 700) {
+        updateShortcut(shortcut.id, doubleShortcutValue(key));
+        clearRecording();
+        return;
+      }
+
+      setPendingDoubleKey({ shortcutId: shortcut.id, key, at: now });
+      return;
+    }
+
     const keys: string[] = [];
-    if (e.ctrlKey) keys.push('Ctrl');
-    if (e.metaKey) keys.push('Meta');
-    if (e.altKey) keys.push('Alt');
-    if (e.shiftKey) keys.push('Shift');
-    if (!['Control', 'Meta', 'Alt', 'Shift'].includes(e.key)) {
-      keys.push(e.key.length === 1 ? e.key.toUpperCase() : e.key);
+    if (event.ctrlKey) keys.push('Ctrl');
+    if (event.metaKey) keys.push('Meta');
+    if (event.altKey) keys.push('Alt');
+    if (event.shiftKey) keys.push('Shift');
+    if (!isShortcutModifier(key)) {
+      keys.push(key);
     }
     const combo = keys.join('+');
     if (!combo || ['Ctrl', 'Meta', 'Alt', 'Shift'].includes(combo)) return;
     updateShortcut(shortcut.id, combo);
-    setRecordingId(null);
-  };
+    clearRecording();
+  }, [canRecordDoubleShortcut, clearRecording, pendingDoubleKey, updateShortcut]);
+
+  useEffect(() => {
+    if (!recordingId) return undefined;
+    const shortcut = shortcuts.find(item => item.id === recordingId);
+    if (!shortcut) return undefined;
+
+    const handler = (event: KeyboardEvent) => handleKeyDown(event, shortcut);
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [handleKeyDown, recordingId, shortcuts]);
 
   const columns = [
     { title: t('名称'), dataIndex: 'name', key: 'name', width: 200, render: (name: string) => t(name) },
@@ -67,18 +118,25 @@ export default function ShortcutsPage() {
         recordingId === record.id ? (
           <kbd
             tabIndex={0}
-            onKeyDown={(e) => handleKeyDown(e, record)}
-            onBlur={() => setRecordingId(null)}
+            onBlur={clearRecording}
             className="shortcut-key recording"
+            autoFocus
           >
-            {t('按下组合键...')}
+            {pendingDoubleKey?.shortcutId === record.id
+              ? t('再次按下 {key}...', { key: pendingDoubleKey.key })
+              : canRecordDoubleShortcut(record)
+                ? t('按下组合键，或连续按两次同一个键...')
+                : t('按下组合键...')}
           </kbd>
         ) : (
           <span
-            onClick={() => setRecordingId(record.id)}
+            onClick={() => {
+              setRecordingId(record.id);
+              setPendingDoubleKey(null);
+            }}
             className="shortcut-key"
           >
-            {keys}
+            {formatShortcutKeys(keys)}
           </span>
         )
       ),
@@ -134,7 +192,7 @@ export default function ShortcutsPage() {
       </Space>
 
       <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-        {t('点击快捷键单元格可重新设置快捷键。点击后按下组合键即可。')}
+        {t('点击快捷键单元格可重新设置快捷键。点击后按下组合键即可。')} {t('双击快捷键请连续按两次同一个键。')}
       </Text>
 
       <Table

@@ -46,36 +46,11 @@ import { useSettingsStore, useShortcutStore, useUpdateStore } from '../store';
 import type { ThemeMode, ViewMode } from '../types';
 import { runUpdateCheckFlow } from '../utils/updateUi';
 import { isEnglishLanguage, translateText } from '../i18n';
+import { matchesShortcut, normalizeShortcutKey } from '../utils/keyboardShortcuts';
 
 function normalizeThemeColor(color: string | undefined): string {
   const value = color?.trim();
   return value && /^#[0-9a-f]{6}$/i.test(value) ? value : '#0A84FF';
-}
-
-const shortcutModifiers = new Set(['Meta', 'Ctrl', 'Alt', 'Shift']);
-
-function normalizeShortcutKey(key: string): string {
-  if (key === ' ') return 'Space';
-  return key.length === 1 ? key.toUpperCase() : key;
-}
-
-function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
-  if (!shortcut) return false;
-  const parts = shortcut.split('+').map(part => part.trim()).filter(Boolean);
-  const key = parts.find(part => !shortcutModifiers.has(part));
-  if (!key) return false;
-
-  const isMac = navigator.platform.toUpperCase().includes('MAC');
-  const wantsMeta = parts.includes('Meta');
-  const wantsCtrl = parts.includes('Ctrl');
-  const expectedMeta = isMac && wantsMeta;
-  const expectedCtrl = wantsCtrl || (!isMac && wantsMeta);
-
-  return event.metaKey === expectedMeta
-    && event.ctrlKey === expectedCtrl
-    && event.altKey === parts.includes('Alt')
-    && event.shiftKey === parts.includes('Shift')
-    && normalizeShortcutKey(event.key) === normalizeShortcutKey(key);
 }
 
 function isEditableElement(element: Element | null): boolean {
@@ -737,6 +712,9 @@ ${htmlBody}
         break;
       case 'app.commandPalette':
         dispatch({ type: 'SET_COMMAND_PALETTE_OPEN', payload: true });
+        break;
+      case 'app.globalFileSearch':
+        dispatch({ type: 'SET_GLOBAL_SEARCH_OPEN', payload: true });
         break;
       case 'file.new':
         handleNewFile();
