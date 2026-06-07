@@ -748,15 +748,23 @@ export default function BlockEditor() {
     const scrollerRect = scroller.getBoundingClientRect();
     const rowRect = row.getBoundingClientRect();
     const contentRect = row.querySelector<HTMLElement>('.block-content-wrap')?.getBoundingClientRect() ?? rowRect;
+    const focusedTableInput = selectedTableCell
+      ? tableInputsRef.current[tableCellInputKey(selectedTableCell)]
+      : null;
+    const tableCellRect = focusedTableInput && row.contains(focusedTableInput)
+      ? focusedTableInput.getBoundingClientRect()
+      : null;
+    const anchorRect = tableCellRect ?? rowRect;
+    const horizontalAnchorRect = tableCellRect ?? contentRect;
     const maxWidth = Math.max(120, Math.min(420, scrollerRect.width - 16));
     const toolbarRect = toolbar.getBoundingClientRect();
     const toolbarWidth = Math.min(toolbarRect.width || maxWidth, maxWidth);
     const toolbarHeight = toolbarRect.height || 36;
     const minLeft = scrollerRect.left + 8;
     const maxLeft = scrollerRect.right - 8 - toolbarWidth;
-    const left = Math.max(minLeft, Math.min(contentRect.left, maxLeft >= minLeft ? maxLeft : minLeft));
-    const aboveTop = rowRect.top - toolbarHeight - 8;
-    const belowTop = rowRect.bottom + 8;
+    const left = Math.max(minLeft, Math.min(horizontalAnchorRect.left, maxLeft >= minLeft ? maxLeft : minLeft));
+    const aboveTop = anchorRect.top - toolbarHeight - 8;
+    const belowTop = anchorRect.bottom + 8;
     const minTop = scrollerRect.top + 8;
     const maxTop = scrollerRect.bottom - toolbarHeight - 8;
     const top = aboveTop >= minTop
@@ -775,7 +783,7 @@ export default function BlockEditor() {
       }
       return next;
     });
-  }, [selectedIndex, state.viewMode]);
+  }, [selectedIndex, selectedTableCell, state.viewMode]);
 
   const setBlockDragTarget = useCallback((target: DragTargetState | null) => {
     dragTargetRef.current = target;
@@ -893,6 +901,13 @@ export default function BlockEditor() {
   useEffect(() => {
     if (state.viewMode !== 'block' || selectedIndex == null) return undefined;
     const scroller = documentRef.current?.closest<HTMLElement>('.block-document-scroll');
+    const row = documentRef.current?.querySelector<HTMLElement>(`.block-row[data-block-index="${selectedIndex}"]`);
+    const focusedTableInput = selectedTableCell
+      ? tableInputsRef.current[tableCellInputKey(selectedTableCell)]
+      : null;
+    const tableScroller = focusedTableInput && row?.contains(focusedTableInput)
+      ? focusedTableInput.closest<HTMLElement>('.block-table-scroll')
+      : null;
     let frame = 0;
     const requestUpdate = () => {
       window.cancelAnimationFrame(frame);
@@ -901,14 +916,16 @@ export default function BlockEditor() {
 
     window.addEventListener('resize', requestUpdate);
     scroller?.addEventListener('scroll', requestUpdate, { passive: true });
+    tableScroller?.addEventListener('scroll', requestUpdate, { passive: true });
     requestUpdate();
 
     return () => {
       window.cancelAnimationFrame(frame);
       window.removeEventListener('resize', requestUpdate);
       scroller?.removeEventListener('scroll', requestUpdate);
+      tableScroller?.removeEventListener('scroll', requestUpdate);
     };
-  }, [selectedIndex, state.viewMode, updateBlockToolbarLayout]);
+  }, [selectedIndex, selectedTableCell, state.viewMode, updateBlockToolbarLayout]);
 
   useEffect(() => {
     if (state.viewMode !== 'block') return undefined;

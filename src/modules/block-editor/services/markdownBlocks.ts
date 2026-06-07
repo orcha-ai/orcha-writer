@@ -192,11 +192,16 @@ function tableSeparatorForAlignment(alignment: MarkdownTableAlignment): string {
 }
 
 function unescapeTableCell(cell: string): string {
-  return cell.replace(/\\\|/g, '|').trim();
+  return cell
+    .replace(/\\\|/g, '|')
+    .trim()
+    .replace(/^(?:(?:&nbsp;|&#160;|\u00a0)+)|(?:(?:&nbsp;|&#160;|\u00a0)+)$/gi, spaces => (
+      spaces.replace(/&nbsp;|&#160;|\u00a0/gi, ' ')
+    ));
 }
 
 function escapeTableCell(cell: string): string {
-  const value = cell.replace(/\r?\n/g, ' ').trim();
+  const value = cell.replace(/\r?\n/g, ' ').replace(/^ +| +$/g, spaces => '&nbsp;'.repeat(spaces.length));
   let escaped = '';
   let previous = '';
   for (const char of value) {
