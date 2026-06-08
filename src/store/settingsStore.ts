@@ -108,9 +108,13 @@ function normalizeEditorSettings(value: unknown): EditorSettingsV2 {
 
 function normalizePreviewSettings(value: unknown): PreviewSettings {
   const raw = value as Partial<PreviewSettings>;
+  const fontSize = Number(raw?.fontSize);
   return {
     ...defaultPreviewSettings,
     ...raw,
+    fontSize: Number.isFinite(fontSize)
+      ? Math.min(Math.max(fontSize, 10), 32)
+      : defaultPreviewSettings.fontSize,
     previewTheme: normalizePreviewThemeId(raw?.previewTheme),
     codeTheme: normalizePreviewCodeThemeId(raw?.codeTheme),
   };
