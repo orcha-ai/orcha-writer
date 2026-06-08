@@ -253,6 +253,7 @@ export interface MarkdownSettings {
 export interface PreviewSettings {
   previewTheme: PreviewThemeId;
   codeTheme: PreviewCodeThemeId;
+  fontSize: number;
   syncScroll: boolean;
   imageMaxWidth: number;
   openExternalLink: boolean;
@@ -397,6 +398,7 @@ export const defaultMarkdownSettings: MarkdownSettings = {
 export const defaultPreviewSettings: PreviewSettings = {
   previewTheme: 'default',
   codeTheme: 'github',
+  fontSize: 16,
   syncScroll: true,
   imageMaxWidth: 800,
   openExternalLink: true,

@@ -307,6 +307,7 @@ export function SettingsApplier() {
       root.removeAttribute('data-theme');
     }
     root.style.setProperty('--editor-font-size', `${editor.fontSize || 14}px`);
+    root.style.setProperty('--preview-font-size', `${preview.fontSize || 16}px`);
     root.style.setProperty('--font-sans', appearance.font || 'system-ui, -apple-system, sans-serif');
     root.style.setProperty('--editor-font-family', editor.fontFamily || 'system-ui, -apple-system, sans-serif');
     root.style.setProperty('--editor-line-height', String(editor.lineHeight || 1.6));
@@ -325,7 +326,7 @@ export function SettingsApplier() {
     } else {
       root.removeAttribute('data-transparency');
     }
-  }, [appearance.themeMode, appearance.themeColor, appearance.density, appearance.font, appearance.transparency, editor.fontSize, editor.fontFamily, editor.lineHeight]);
+  }, [appearance.themeMode, appearance.themeColor, appearance.density, appearance.font, appearance.transparency, editor.fontSize, editor.fontFamily, editor.lineHeight, preview.fontSize]);
 
   return null;
 }

@@ -283,6 +283,7 @@ const enTextByZh: Record<string, string> = {
   '显示标签栏': 'Show Tabs',
   '毛玻璃效果': 'Translucency',
   '字体大小': 'Font Size',
+  '预览字体大小': 'Preview Font Size',
   '行高': 'Line Height',
   'Tab 宽度': 'Tab Width',
   '编辑器': 'Editor',

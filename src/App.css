@@ -1445,6 +1445,7 @@ body.terminal-resizing * {
   max-width: 100%;
   word-wrap: break-word;
   color: var(--md-body);
+  font-size: var(--preview-font-size, 16px);
 }
 
 .md-preview h1,
@@ -1512,7 +1513,7 @@ body.terminal-resizing * {
   background: none;
   padding: 0;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 0.88em;
   line-height: 1.5;
 }
 

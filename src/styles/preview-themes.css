@@ -17,7 +17,7 @@
   --preview-accent: #0969da;
   color: var(--preview-text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
-  font-size: 16px;
+  font-size: var(--preview-font-size, 16px);
   line-height: 1.5;
 }
 
@@ -245,7 +245,7 @@
   --preview-tip-bg: #f3faf7;
   color: var(--preview-text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
-  font-size: 16px;
+  font-size: var(--preview-font-size, 16px);
   line-height: 1.7;
 }
 
@@ -262,18 +262,18 @@
 }
 
 .md-preview.preview-theme-vuepress h1 {
-  font-size: 2.2rem;
+  font-size: 2.2em;
   margin-top: 0;
 }
 
 .md-preview.preview-theme-vuepress h2 {
   border-bottom: 1px solid var(--preview-border);
-  font-size: 1.65rem;
+  font-size: 1.65em;
   padding-bottom: 0.35rem;
 }
 
 .md-preview.preview-theme-vuepress h3 {
-  font-size: 1.35rem;
+  font-size: 1.35em;
 }
 
 .md-preview.preview-theme-vuepress p {
@@ -423,7 +423,7 @@
   --preview-accent: #ff7aa2;
   color: var(--preview-text);
   font-family: "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 16px;
+  font-size: var(--preview-font-size, 16px);
   line-height: 1.85;
 }
 
@@ -611,7 +611,7 @@
   --preview-accent: #0ea5e9;
   color: var(--preview-text);
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
-  font-size: 16px;
+  font-size: var(--preview-font-size, 16px);
   line-height: 1.72;
 }
 

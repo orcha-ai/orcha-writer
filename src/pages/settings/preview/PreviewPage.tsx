@@ -57,6 +57,10 @@ export default function PreviewPage() {
 
         {/* Behavior */}
         <Card title={t('预览行为')} style={{ marginBottom: 16 }}>
+          <Form.Item label={t('预览字体大小')} name="fontSize">
+            <InputNumber min={10} max={32} style={{ width: 120 }} suffix="px" />
+          </Form.Item>
+
           <Form.Item label={t('滚动同步')} name="syncScroll" valuePropName="checked">
             <Switch />
           </Form.Item>
