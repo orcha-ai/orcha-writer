@@ -57,6 +57,10 @@ export default function WorkspaceContent() {
   const effectiveViewMode = effectiveViewModeForDocument(activeTab, state.viewMode);
   const editorBridge = useMemo(() => createCodeMirrorEditorBridge(), []);
 
+  const handleAIChatCollapsedChange = useCallback((collapsed: boolean) => {
+    dispatch({ type: 'SET_AI_CHAT_COLLAPSED', payload: collapsed });
+  }, [dispatch]);
+
   const handleCreateMarkdownFile = useCallback(async (content: string) => {
     const fileName = `${t('AI生成文档')}-${formatAIDocumentTimestamp(new Date())}.md`;
     const activeDir = activeTab && !activeTab.isDraft && /[/\\]/.test(activeTab.path)
@@ -119,6 +123,8 @@ export default function WorkspaceContent() {
           documentPath={activeTab?.isDraft ? undefined : activeTab?.path}
           documentTitle={activeTab?.name || t('未命名.md')}
           editorBridge={editorBridge}
+          collapsed={state.aiChatCollapsed}
+          onCollapsedChange={handleAIChatCollapsedChange}
           onOpenSettings={() => navigate('/settings/ai/models')}
           onOpenAgentManager={() => navigate('/settings/ai/agents')}
           onCreateMarkdownFile={handleCreateMarkdownFile}

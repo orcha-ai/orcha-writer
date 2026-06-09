@@ -45,6 +45,7 @@ export interface AppState {
   theme: ThemeMode;
   sidebarVisible: boolean;
   outlineVisible: boolean;
+  aiChatCollapsed: boolean;
   sidebarActiveTab: 'workspace' | 'outline' | 'recent';
   workspacePath: string | null;
   workspaceTree: FileNode[];
@@ -224,6 +225,7 @@ export interface AppearanceSettings {
   sidebarWidth: number;
   showOutline: boolean;
   outlinePosition: 'right' | 'left';
+  aiChatCollapsed: boolean;
   showTabs: boolean;
   transparency: boolean;
 }
@@ -369,6 +371,7 @@ export const defaultAppearanceSettings: AppearanceSettings = {
   sidebarWidth: 240,
   showOutline: true,
   outlinePosition: 'right',
+  aiChatCollapsed: false,
   showTabs: true,
   transparency: false,
 };

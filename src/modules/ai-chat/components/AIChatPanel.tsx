@@ -37,6 +37,8 @@ export interface AIChatPanelProps {
   documentPath?: string;
   documentTitle?: string;
   editorBridge: EditorBridge;
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
   onOpenSettings?: () => void;
   onOpenAgentManager?: () => void;
   onCreateMarkdownFile?: (content: string) => Promise<void> | void;
@@ -134,6 +136,8 @@ export function AIChatPanel({
   documentPath,
   documentTitle,
   editorBridge,
+  collapsed: controlledCollapsed,
+  onCollapsedChange,
   onOpenSettings,
   onOpenAgentManager,
   onCreateMarkdownFile,
@@ -161,7 +165,7 @@ export function AIChatPanel({
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [selection, setSelection] = useState<EditorSelection | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
+  const [internalCollapsed, setInternalCollapsed] = useState(false);
   const [deepThinkingEnabled, setDeepThinkingEnabled] = useState(false);
   const [draftValue, setDraftValue] = useState('');
   const [contextMode, setContextMode] = useState<AIContextMode>('auto');
@@ -177,6 +181,15 @@ export function AIChatPanel({
     conversationId: string;
     assistantMessageId: string;
   } | null>(null);
+
+  const collapsed = controlledCollapsed ?? internalCollapsed;
+  const setCollapsed = useCallback((nextCollapsed: boolean) => {
+    if (onCollapsedChange) {
+      onCollapsedChange(nextCollapsed);
+      return;
+    }
+    setInternalCollapsed(nextCollapsed);
+  }, [onCollapsedChange]);
 
   useEffect(() => {
     if (!loaded) void load();

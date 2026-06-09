@@ -15,6 +15,7 @@ export type AppAction =
   | { type: 'SET_SIDEBAR_VISIBLE'; payload: boolean }
   | { type: 'TOGGLE_OUTLINE' }
   | { type: 'SET_OUTLINE_VISIBLE'; payload: boolean }
+  | { type: 'SET_AI_CHAT_COLLAPSED'; payload: boolean }
   | { type: 'SET_SIDEBAR_TAB'; payload: 'workspace' | 'outline' | 'recent' }
   | { type: 'OPEN_TAB'; payload: { id: string; name: string; path: string; content: string; isDraft?: boolean; preview?: FilePreview } }
   | { type: 'SAVE_TAB_AS'; payload: { oldId: string; id: string; name: string; path: string; content: string } }
@@ -57,6 +58,7 @@ const initialState: AppState = {
   theme: 'system',
   sidebarVisible: true,
   outlineVisible: true,
+  aiChatCollapsed: false,
   sidebarActiveTab: 'workspace',
   workspacePath: null,
   workspaceTree: [],
@@ -119,6 +121,8 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, outlineVisible: !state.outlineVisible };
     case 'SET_OUTLINE_VISIBLE':
       return { ...state, outlineVisible: action.payload };
+    case 'SET_AI_CHAT_COLLAPSED':
+      return { ...state, aiChatCollapsed: action.payload };
     case 'SET_SIDEBAR_TAB':
       return { ...state, sidebarActiveTab: action.payload };
     case 'OPEN_TAB': {
@@ -380,6 +384,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         type: 'SET_OUTLINE_VISIBLE',
         payload: appearance.showOutline ?? defaultAppearanceSettings.showOutline,
       });
+      dispatch({
+        type: 'SET_AI_CHAT_COLLAPSED',
+        payload: appearance.aiChatCollapsed ?? defaultAppearanceSettings.aiChatCollapsed,
+      });
     })
       .catch((error) => {
         console.warn('[AppContext] Failed to load persisted config:', error);
@@ -426,11 +434,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ...appearance,
         showSidebar: state.sidebarVisible,
         showOutline: state.outlineVisible,
+        aiChatCollapsed: state.aiChatCollapsed,
       });
     })().catch((error) => {
       console.warn('[AppContext] Failed to persist panel visibility:', error);
     });
-  }, [initialized, state.outlineVisible, state.sidebarVisible]);
+  }, [initialized, state.aiChatCollapsed, state.outlineVisible, state.sidebarVisible]);
 
   // Persist recent files whenever they change
   useEffect(() => {
