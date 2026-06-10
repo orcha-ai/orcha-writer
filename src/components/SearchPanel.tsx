@@ -5,6 +5,7 @@ import { setSearchQuery, SearchQuery, getSearchQuery } from '@codemirror/search'
 import { getActiveEditorView } from './Editor';
 import { useSettingsStore } from '../store';
 import { translateText } from '../i18n';
+import { effectiveViewModeForDocument } from '../utils/documentCapabilities';
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -171,6 +172,8 @@ export default function SearchPanel() {
   const [matchCount, setMatchCount] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const blockNavigationStartedRef = useRef(false);
+  const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
+  const effectiveViewMode = effectiveViewModeForDocument(activeTab, state.viewMode);
 
   useEffect(() => {
     if (state.searchOpen && inputRef.current) {
@@ -186,9 +189,8 @@ export default function SearchPanel() {
     blockNavigationStartedRef.current = false;
     clearBlockSearchActive();
 
-    if (state.viewMode === 'block') {
+    if (effectiveViewMode === 'block') {
       const frame = window.requestAnimationFrame(() => {
-        const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
         const blockMatchCount = findBlockSearchMatches(query).length;
         setMatchCount(blockMatchCount || (activeTab ? countMatches(activeTab.content, query) : 0));
       });
@@ -234,12 +236,12 @@ export default function SearchPanel() {
     }, 50);
 
     return () => clearInterval(timer);
-  }, [dispatch, query, state.activeTabId, state.tabs, state.viewMode]);
+  }, [activeTab, dispatch, effectiveViewMode, query, state.activeTabId, state.tabs]);
 
   useEffect(() => {
-    if (state.searchOpen && state.viewMode === 'block') return;
+    if (state.searchOpen && effectiveViewMode === 'block') return;
     clearBlockSearchActive();
-  }, [state.searchOpen, state.viewMode]);
+  }, [effectiveViewMode, state.searchOpen]);
 
   const scrollToMark = useCallback((index: number) => {
     const marks = document.querySelectorAll('mark.search-highlight');
@@ -249,7 +251,7 @@ export default function SearchPanel() {
   }, []);
 
   const handleNext = useCallback(() => {
-    if (state.viewMode === 'block') {
+    if (effectiveViewMode === 'block') {
       const matches = findBlockSearchMatches(query);
       if (matches.length === 0) return;
       const nextIndex = blockNavigationStartedRef.current
@@ -261,7 +263,7 @@ export default function SearchPanel() {
       return;
     }
 
-    if (state.viewMode === 'preview') {
+    if (effectiveViewMode === 'preview') {
       // Preview mode: use DOM marks
       const nextIndex = matchCount > 0 ? (state.searchMatchIndex + 1) % matchCount : state.searchMatchIndex + 1;
       dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: nextIndex });
@@ -299,10 +301,10 @@ export default function SearchPanel() {
         }
       }
     }
-  }, [dispatch, matchCount, query, state.viewMode, state.searchMatchIndex, scrollToMark]);
+  }, [dispatch, effectiveViewMode, matchCount, query, state.searchMatchIndex, scrollToMark]);
 
   const handlePrev = useCallback(() => {
-    if (state.viewMode === 'block') {
+    if (effectiveViewMode === 'block') {
       const matches = findBlockSearchMatches(query);
       if (matches.length === 0) return;
       const nextIndex = blockNavigationStartedRef.current
@@ -314,7 +316,7 @@ export default function SearchPanel() {
       return;
     }
 
-    if (state.viewMode === 'preview') {
+    if (effectiveViewMode === 'preview') {
       // Preview mode: use DOM marks
       const nextIndex = matchCount > 0 ? (state.searchMatchIndex - 1 + matchCount) % matchCount : Math.max(0, state.searchMatchIndex - 1);
       dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: nextIndex });
@@ -354,11 +356,11 @@ export default function SearchPanel() {
         }
       }
     }
-  }, [dispatch, matchCount, query, state.viewMode, state.searchMatchIndex, scrollToMark]);
+  }, [dispatch, effectiveViewMode, matchCount, query, state.searchMatchIndex, scrollToMark]);
 
   const handleReplaceCurrent = useCallback(() => {
     if (!query) return;
-    if (state.viewMode === 'block') {
+    if (effectiveViewMode === 'block') {
       const matches = findBlockSearchMatches(query);
       if (matches.length === 0) return;
       const index = Math.min(state.searchMatchIndex, matches.length - 1);
@@ -409,11 +411,11 @@ export default function SearchPanel() {
       dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: nextContent } });
       setMatchCount(countMatches(nextContent, query));
     }
-  }, [dispatch, query, replaceText, state.activeTabId, state.searchMatchIndex, state.tabs, state.viewMode]);
+  }, [dispatch, effectiveViewMode, query, replaceText, state.activeTabId, state.searchMatchIndex, state.tabs]);
 
   const handleReplaceAll = useCallback(() => {
     if (!query) return;
-    if (state.viewMode === 'block') {
+    if (effectiveViewMode === 'block') {
       const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
       if (!activeTab) return;
       const replacedCount = countMatches(activeTab.content, query);
@@ -450,7 +452,7 @@ export default function SearchPanel() {
     dispatch({ type: 'UPDATE_TAB_CONTENT', payload: { id: activeTab.id, content: nextContent } });
     setMatchCount(0);
     dispatch({ type: 'SET_SEARCH_MATCH_INDEX', payload: 0 });
-  }, [dispatch, query, replaceText, state.activeTabId, state.tabs, state.viewMode]);
+  }, [dispatch, effectiveViewMode, query, replaceText, state.activeTabId, state.tabs]);
 
   // Keyboard shortcuts
   useEffect(() => {

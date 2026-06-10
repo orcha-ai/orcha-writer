@@ -30,6 +30,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { useApp } from '../../../AppContext';
 import { useSettingsStore } from '../../../store';
 import { translateText } from '../../../i18n';
+import { effectiveViewModeForDocument } from '../../../utils/documentCapabilities';
 import { resolveMarkdownImageSource } from '../../../utils/markdownImages';
 import {
   dataImageUrlsFromClipboardData,
@@ -633,8 +634,9 @@ export default function BlockEditor() {
     translateText(language, value, params)
   ), [language]);
   const activeTab = state.tabs.find(tab => tab.id === state.activeTabId);
+  const effectiveViewMode = effectiveViewModeForDocument(activeTab, state.viewMode);
   const [blocks, setBlocks] = useState<BlockViewModel[]>(() => (
-    state.viewMode === 'block' ? parseMarkdownToBlocks(activeTab?.content || '') : []
+    effectiveViewMode === 'block' ? parseMarkdownToBlocks(activeTab?.content || '') : []
   ));
   const [renderedBlockCount, setRenderedBlockCount] = useState(() => initialRenderedBlockCount(blocks.length));
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
@@ -752,7 +754,7 @@ export default function BlockEditor() {
   }, []);
 
   const updateBlockToolbarLayout = useCallback(() => {
-    if (state.viewMode !== 'block' || selectedIndex == null) {
+    if (effectiveViewMode !== 'block' || selectedIndex == null) {
       setBlockToolbarLayout(null);
       return;
     }
@@ -803,7 +805,7 @@ export default function BlockEditor() {
       }
       return next;
     });
-  }, [selectedIndex, selectedTableCell, state.viewMode]);
+  }, [effectiveViewMode, selectedIndex, selectedTableCell]);
 
   const setBlockDragTarget = useCallback((target: DragTargetState | null) => {
     dragTargetRef.current = target;
@@ -848,7 +850,7 @@ export default function BlockEditor() {
     const nextTabId = activeTab?.id ?? null;
     const nextContent = activeTab?.content || '';
 
-    if (!activeTab || state.viewMode !== 'block') {
+    if (!activeTab || effectiveViewMode !== 'block') {
       currentTabIdRef.current = nextTabId;
       syncedContentRef.current = nextContent;
       if (blocks.length > 0) {
@@ -868,7 +870,7 @@ export default function BlockEditor() {
     const nextBlocks = parseMarkdownToBlocks(nextContent);
     setBlocks(nextBlocks);
     setRenderedBlockCount(initialRenderedBlockCount(nextBlocks.length));
-  }, [activeTab, activeTab?.content, activeTab?.id, blocks.length, state.viewMode]);
+  }, [activeTab, activeTab?.content, activeTab?.id, blocks.length, effectiveViewMode]);
 
   useEffect(() => {
     setSelectedIndex(current => clampIndex(current, blocks.length));
@@ -876,7 +878,7 @@ export default function BlockEditor() {
   }, [blocks.length]);
 
   useEffect(() => {
-    if (state.viewMode !== 'block') return undefined;
+    if (effectiveViewMode !== 'block') return undefined;
     if (renderedBlockCount >= blocks.length) return undefined;
 
     let frame = 0;
@@ -890,10 +892,10 @@ export default function BlockEditor() {
 
     frame = window.requestAnimationFrame(renderNextBatch);
     return () => window.cancelAnimationFrame(frame);
-  }, [blocks.length, renderedBlockCount, state.viewMode]);
+  }, [blocks.length, effectiveViewMode, renderedBlockCount]);
 
   useLayoutEffect(() => {
-    if (state.viewMode !== 'block') return;
+    if (effectiveViewMode !== 'block') return;
     resizeBlockTextareas();
   }, [
     activeTab?.id,
@@ -902,7 +904,7 @@ export default function BlockEditor() {
     state.editorSettings.fontFamily,
     state.editorSettings.fontSize,
     state.editorSettings.lineHeight,
-    state.viewMode,
+    effectiveViewMode,
   ]);
 
   useLayoutEffect(() => {
@@ -914,12 +916,12 @@ export default function BlockEditor() {
     renderedBlockCount,
     selectedIndex,
     selectedIndices,
-    state.viewMode,
+    effectiveViewMode,
     updateBlockToolbarLayout,
   ]);
 
   useEffect(() => {
-    if (state.viewMode !== 'block' || selectedIndex == null) return undefined;
+    if (effectiveViewMode !== 'block' || selectedIndex == null) return undefined;
     const scroller = documentRef.current?.closest<HTMLElement>('.block-document-scroll');
     const row = documentRef.current?.querySelector<HTMLElement>(`.block-row[data-block-index="${selectedIndex}"]`);
     const focusedTableInput = selectedTableCell
@@ -945,10 +947,10 @@ export default function BlockEditor() {
       scroller?.removeEventListener('scroll', requestUpdate);
       tableScroller?.removeEventListener('scroll', requestUpdate);
     };
-  }, [selectedIndex, selectedTableCell, state.viewMode, updateBlockToolbarLayout]);
+  }, [effectiveViewMode, selectedIndex, selectedTableCell, updateBlockToolbarLayout]);
 
   useEffect(() => {
-    if (state.viewMode !== 'block') return undefined;
+    if (effectiveViewMode !== 'block') return undefined;
 
     let firstFrame = 0;
     let secondFrame = 0;
@@ -971,11 +973,11 @@ export default function BlockEditor() {
     state.editorSettings.fontFamily,
     state.editorSettings.fontSize,
     state.editorSettings.lineHeight,
-    state.viewMode,
+    effectiveViewMode,
   ]);
 
   useEffect(() => {
-    if (state.viewMode !== 'block') return undefined;
+    if (effectiveViewMode !== 'block') return undefined;
     const target = documentRef.current;
     if (!target) return undefined;
 
@@ -1006,10 +1008,10 @@ export default function BlockEditor() {
       observer.disconnect();
       window.removeEventListener('resize', handleWindowResize);
     };
-  }, [activeTab?.id, resizeBlockTextareas, state.viewMode]);
+  }, [activeTab?.id, effectiveViewMode, resizeBlockTextareas]);
 
   useEffect(() => {
-    if (state.viewMode !== 'block') {
+    if (effectiveViewMode !== 'block') {
       dispatch({ type: 'SET_BLOCK_SELECTION_STATUS', payload: null });
       return;
     }
@@ -1049,7 +1051,7 @@ export default function BlockEditor() {
         summary: summary || t('空块'),
       },
     });
-  }, [dispatch, selectedBlock, selectedBlocks, state.viewMode, t]);
+  }, [dispatch, effectiveViewMode, selectedBlock, selectedBlocks, t]);
 
   const pushHistorySnapshot = useCallback((content: string) => {
     const past = historyPastRef.current;
@@ -1282,12 +1284,12 @@ export default function BlockEditor() {
   }, [handleClipboardImagePaste]);
 
   useEffect(() => {
-    if (state.viewMode !== 'block') return undefined;
+    if (effectiveViewMode !== 'block') return undefined;
     return registerActiveClipboardImagePasteHandler(pasteClipboardImagesAsBlocks);
-  }, [pasteClipboardImagesAsBlocks, state.viewMode]);
+  }, [effectiveViewMode, pasteClipboardImagesAsBlocks]);
 
   useEffect(() => {
-    if (state.viewMode !== 'block') return undefined;
+    if (effectiveViewMode !== 'block') return undefined;
 
     const handleWindowPaste = (event: globalThis.ClipboardEvent) => {
       if (event.defaultPrevented || isEditingTarget(event.target)) return;
@@ -1307,7 +1309,7 @@ export default function BlockEditor() {
 
     window.addEventListener('paste', handleWindowPaste);
     return () => window.removeEventListener('paste', handleWindowPaste);
-  }, [blocks.length, handleClipboardImagePaste, selectedIndex, state.viewMode]);
+  }, [blocks.length, effectiveViewMode, handleClipboardImagePaste, selectedIndex]);
 
   const insertParagraphAfter = useCallback((blockIndex: number, textarea: HTMLTextAreaElement) => {
     const block = blocks[blockIndex];
@@ -1452,7 +1454,7 @@ export default function BlockEditor() {
   }, [setBlockDragTarget]);
 
   useEffect(() => {
-    if (state.viewMode !== 'block') return undefined;
+    if (effectiveViewMode !== 'block') return undefined;
 
     const handlePointerMove = (event: globalThis.PointerEvent) => {
       const drag = pointerDragRef.current;
@@ -1495,7 +1497,7 @@ export default function BlockEditor() {
       document.removeEventListener('keydown', handleKeyDown);
       clearBlockDragState();
     };
-  }, [clearBlockDragState, finishPointerDrag, state.viewMode, updatePointerDragTarget]);
+  }, [clearBlockDragState, effectiveViewMode, finishPointerDrag, updatePointerDragTarget]);
 
   const moveSelectedBlocksBy = useCallback((delta: -1 | 1) => {
     const targets = getSelectionForBlock();
@@ -1998,7 +2000,7 @@ export default function BlockEditor() {
   }, [blockAI]);
 
   useEffect(() => {
-    if (state.viewMode !== 'block') return undefined;
+    if (effectiveViewMode !== 'block') return undefined;
 
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (blockAI && event.key === 'Escape') {
@@ -2071,7 +2073,7 @@ export default function BlockEditor() {
     runAIAction,
     selectedIndex,
     slash,
-    state.viewMode,
+    effectiveViewMode,
     undoBlockHistory,
   ]);
 
@@ -2119,7 +2121,7 @@ export default function BlockEditor() {
       } as CSSProperties)
     : ({ visibility: 'hidden' } as CSSProperties);
 
-  if (state.viewMode !== 'block') return null;
+  if (effectiveViewMode !== 'block') return null;
 
   if (!activeTab) {
     return (

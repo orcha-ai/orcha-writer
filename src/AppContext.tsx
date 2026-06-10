@@ -6,7 +6,6 @@ import type {
 } from './types';
 import { defaultAppearanceSettings, defaultEditorSettings } from './types';
 import { readConfig, writeConfig } from './config';
-import { effectiveViewModeForDocument } from './utils/documentCapabilities';
 
 export type AppAction =
   | { type: 'SET_VIEW_MODE'; payload: ViewMode }
@@ -99,18 +98,10 @@ function rebaseFileTree(nodes: FileNode[], oldPath: string, newPath: string, nam
   });
 }
 
-function activeTabForState(state: AppState, activeTabId = state.activeTabId): TabFile | null {
-  return activeTabId ? state.tabs.find(tab => tab.id === activeTabId) ?? null : null;
-}
-
-function viewModeForActiveTab(state: AppState, requestedMode = state.viewMode, activeTabId = state.activeTabId): ViewMode {
-  return effectiveViewModeForDocument(activeTabForState(state, activeTabId), requestedMode);
-}
-
 function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'SET_VIEW_MODE':
-      return { ...state, viewMode: viewModeForActiveTab(state, action.payload) };
+      return { ...state, viewMode: action.payload };
     case 'SET_THEME':
       return { ...state, theme: action.payload };
     case 'TOGGLE_SIDEBAR':
@@ -131,7 +122,6 @@ function appReducer(state: AppState, action: AppAction): AppState {
         return {
           ...state,
           activeTabId: existing.id,
-          viewMode: effectiveViewModeForDocument(existing, state.viewMode),
         };
       }
       const newTab: TabFile = {
@@ -143,7 +133,6 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         tabs: [...state.tabs, newTab],
         activeTabId: newTab.id,
-        viewMode: effectiveViewModeForDocument(newTab, state.viewMode),
       };
     }
     case 'SAVE_TAB_AS': {
@@ -167,10 +156,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
             )),
           activeTabId: existing.id,
         };
-        return {
-          ...nextState,
-          viewMode: viewModeForActiveTab(nextState),
-        };
+        return nextState;
       }
 
       const nextState = {
@@ -190,10 +176,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
         )),
         activeTabId: action.payload.id,
       };
-      return {
-        ...nextState,
-        viewMode: viewModeForActiveTab(nextState),
-      };
+      return nextState;
     }
     case 'CLOSE_TAB': {
       const idx = state.tabs.findIndex(t => t.id === action.payload);
@@ -204,10 +187,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
         newActive = newTabs.length > 0 ? newTabs[Math.min(idx, newTabs.length - 1)].id : null;
       }
       const nextState = { ...state, tabs: newTabs, activeTabId: newActive };
-      return {
-        ...nextState,
-        viewMode: viewModeForActiveTab(nextState),
-      };
+      return nextState;
     }
     case 'CLOSE_OTHER_TABS': {
       const nextTabs = state.tabs.filter(t => t.id === action.payload);
@@ -216,10 +196,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
         tabs: nextTabs,
         activeTabId: action.payload,
       };
-      return {
-        ...nextState,
-        viewMode: viewModeForActiveTab(nextState),
-      };
+      return nextState;
     }
     case 'CLOSE_ALL_TABS':
       return { ...state, tabs: [], activeTabId: null };
@@ -227,7 +204,6 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         activeTabId: action.payload,
-        viewMode: viewModeForActiveTab(state, state.viewMode, action.payload),
       };
     case 'UPDATE_TAB_CONTENT':
       return {
@@ -264,10 +240,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
           tab.id === action.payload.id ? { ...tab, name: action.payload.name } : tab
         ),
       };
-      return {
-        ...nextState,
-        viewMode: viewModeForActiveTab(nextState),
-      };
+      return nextState;
     }
     case 'RENAME_PATH': {
       const { oldPath, newPath, name } = action.payload;
@@ -292,10 +265,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
         }),
         workspaceTree: rebaseFileTree(state.workspaceTree, oldPath, newPath, name),
       };
-      return {
-        ...nextState,
-        viewMode: viewModeForActiveTab(nextState),
-      };
+      return nextState;
     }
     case 'SET_WORKSPACE':
       return { ...state, workspacePath: action.payload.path, workspaceTree: action.payload.tree };

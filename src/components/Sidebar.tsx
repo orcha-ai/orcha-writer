@@ -75,6 +75,7 @@ interface WorkspaceTreeProps extends TreeHandlers {
 interface TreeNodeProps extends TreeHandlers {
   node: FileNode;
   depth: number;
+  workspacePath: string | null;
   text: ReturnType<typeof getLocaleText>;
 }
 
@@ -978,9 +979,14 @@ export default function Sidebar() {
   }, [creatingFile, creatingFolder, renaming]);
 
   const handleTreeDragOver = useCallback((event: DragEvent<HTMLDivElement>, targetPath: string | null) => {
-    if (!canDropInto(dragNodeRef.current, targetPath)) return;
-    event.preventDefault();
+    const source = dragNodeRef.current;
+    if (!source) return;
     event.stopPropagation();
+    if (!canDropInto(source, targetPath)) {
+      setDropTargetPath(null);
+      return;
+    }
+    event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
     setDropTargetPath(dropTargetKey(targetPath));
   }, [canDropInto]);
@@ -998,12 +1004,13 @@ export default function Sidebar() {
   }, []);
 
   const handleTreeDrop = useCallback(async (event: DragEvent<HTMLDivElement>, targetPath: string | null) => {
-    event.preventDefault();
-    event.stopPropagation();
     const source = dragNodeRef.current;
     const workspacePath = workspacePathRef.current;
+    if (!source) return;
+    event.preventDefault();
+    event.stopPropagation();
     setDropTargetPath(null);
-    if (!source || !workspacePath || !canDropInto(source, targetPath)) {
+    if (!workspacePath || !canDropInto(source, targetPath)) {
       handleTreeDragEnd();
       return;
     }
@@ -1308,6 +1315,7 @@ function WorkspaceTree({
           key={node.path}
           node={node}
           depth={0}
+          workspacePath={workspacePath}
           expandedFolders={expandedFolders}
           loadingFolders={loadingFolders}
           toggleFolder={toggleFolder}
@@ -1346,7 +1354,7 @@ function WorkspaceTree({
 }
 
 function TreeNode({
-  node, depth, expandedFolders, loadingFolders, toggleFolder, openFile, activeTabId, onContextMenu,
+  node, depth, workspacePath, expandedFolders, loadingFolders, toggleFolder, openFile, activeTabId, onContextMenu,
   renaming, renameValue, onRenameChange, onRenameSubmit, onRenameCancel, onRename, creatingFolder,
   onCreateFolderStart, onCreateFolderChange, onCreateFolderSubmit, onCreateFolderCancel,
   creatingFile, onCreateFileStart, onCreateFileChange, onCreateFileSubmit, onCreateFileCancel,
@@ -1359,6 +1367,8 @@ function TreeNode({
   const isDragging = draggingPath === node.path;
   const isDropTarget = dropTargetPath === node.path;
   const isContextTarget = contextTargetPath === node.path;
+  const parentDirectory = parentPathOf(node.path);
+  const fileDropTargetPath = workspacePath && samePath(parentDirectory, workspacePath) ? null : parentDirectory;
   const depthStyle: DepthStyle = { '--depth': depth };
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'F2' || isRenaming) return;
@@ -1443,6 +1453,7 @@ function TreeNode({
             key={child.path}
             node={child}
             depth={depth + 1}
+            workspacePath={workspacePath}
             expandedFolders={expandedFolders}
             loadingFolders={loadingFolders}
             toggleFolder={toggleFolder}
@@ -1488,6 +1499,9 @@ function TreeNode({
       draggable={!isRenaming}
       onClick={() => openFile(node)}
       onDragStart={(event) => onDragStart(event, node)}
+      onDragOver={(event) => onDragOver(event, fileDropTargetPath)}
+      onDragLeave={onDragLeave}
+      onDrop={(event) => { void onDrop(event, fileDropTargetPath); }}
       onDragEnd={onDragEnd}
       onKeyDown={handleKeyDown}
       onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, node); }}

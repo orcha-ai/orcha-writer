@@ -867,6 +867,31 @@ mod tests {
 
         assert_eq!(arg, "/select,\"\\\\server\\share\\folder\\note.md\"");
     }
+
+    #[test]
+    fn collect_openable_text_paths_resolves_relative_paths_against_cwd() {
+        let dir = std::env::temp_dir().join(format!(
+            "orcha-writer-open-path-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("note.md");
+        std::fs::write(&file, "# Note\n").unwrap();
+
+        let paths = collect_openable_text_paths(
+            vec!["orcha-writer".to_string(), "note.md".to_string()],
+            Some(dir.clone()),
+        );
+
+        assert_eq!(paths, vec![file.to_string_lossy().to_string()]);
+
+        let _ = std::fs::remove_file(file);
+        let _ = std::fs::remove_dir(dir);
+    }
 }
 
 fn terminal_working_dir(path: Option<String>) -> Result<PathBuf, String> {
@@ -2973,8 +2998,8 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            let paths = collect_openable_text_paths(args, None);
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            let paths = collect_openable_text_paths(args, Some(PathBuf::from(cwd)));
             push_and_emit_open_files(app, paths);
         }))
         .invoke_handler(tauri::generate_handler![

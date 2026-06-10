@@ -30,7 +30,7 @@ import { pathExists, readTextFile, writeTextFile } from '../utils/fs';
 import { findFirstMdFile, readFirstLevel } from '../utils/workspace';
 import { getActiveEditorView, pasteClipboardImagesIntoActiveEditor } from './Editor';
 import { effectiveViewModeForDocument, isMarkdownDocument, isMarkdownViewMode } from '../utils/documentCapabilities';
-import { basename, formatMarkdownImageUrl, markdownImagePathForDocument, stripExtension } from '../utils/markdownImages';
+import { basename, dirname, formatMarkdownImageUrl, markdownImagePathForDocument, stripExtension } from '../utils/markdownImages';
 import { renderMarkdownForExport } from '../utils/exportMarkdown';
 import { confirmCloseTabs } from '../utils/unsavedTabs';
 import PdfExportDialog, { type PdfTemplateDraft } from './PdfExportDialog';
@@ -82,6 +82,16 @@ function dataTransferFilePaths(dataTransfer: DataTransfer | null): string[] {
   return Array.from(dataTransfer?.files ?? [])
     .map(file => (file as File & { path?: string }).path || file.webkitRelativePath)
     .filter((path): path is string => Boolean(path && /^(?:file:\/\/|\/|[A-Za-z]:[\\/])/.test(path)));
+}
+
+function normalizePathForCompare(path: string): string {
+  return path.replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function isPathWithinDirectory(path: string, directory: string): boolean {
+  const normalizedPath = normalizePathForCompare(path);
+  const normalizedDirectory = normalizePathForCompare(directory);
+  return normalizedPath === normalizedDirectory || normalizedPath.startsWith(`${normalizedDirectory}/`);
 }
 
 function selectedEditorText(): string {
@@ -191,7 +201,7 @@ export default function Toolbar() {
 
   const setDocumentViewMode = useCallback((mode: ViewMode) => {
     if (activeTab && isMarkdownViewMode(mode) && !isMarkdownDocument(activeTab)) {
-      dispatch({ type: 'SET_VIEW_MODE', payload: 'edit' });
+      dispatch({ type: 'SET_VIEW_MODE', payload: mode });
       message.info(markdownOnlyViewTooltip);
       return;
     }
@@ -325,9 +335,28 @@ export default function Toolbar() {
     }
   }, [dispatch, fileSettings.hidePatterns, t]);
 
+  const focusWorkspaceOnFile = useCallback(async (filePath: string) => {
+    if (state.workspacePath && isPathWithinDirectory(filePath, state.workspacePath)) {
+      dispatch({ type: 'SET_SIDEBAR_TAB', payload: 'workspace' });
+      return;
+    }
+
+    const directory = dirname(filePath);
+    if (!directory) return;
+
+    try {
+      const tree = await readFirstLevel(directory, fileSettings.hidePatterns);
+      dispatch({ type: 'SET_WORKSPACE', payload: { path: directory, tree } });
+      dispatch({ type: 'SET_SIDEBAR_TAB', payload: 'workspace' });
+    } catch (error) {
+      console.error('Failed to focus workspace on opened file:', error);
+    }
+  }, [dispatch, fileSettings.hidePatterns, state.workspacePath]);
+
   const openNativeFilePaths = useCallback(async (paths: string[], source: string) => {
     const uniquePaths = [...new Set(paths.map(path => decodeDialogPath(path)).filter(Boolean))];
     const now = Date.now();
+    const openedPaths: string[] = [];
 
     for (const [path, openedAt] of recentOpenedPathRef.current) {
       if (now - openedAt > 1500) recentOpenedPathRef.current.delete(path);
@@ -346,6 +375,7 @@ export default function Toolbar() {
           payload: { id: path, name, path, content: '', preview: { kind: previewKind } },
         });
         dispatch({ type: 'ADD_RECENT_FILE', payload: { path, name, lastOpened: Date.now() } });
+        openedPaths.push(path);
         continue;
       }
 
@@ -359,11 +389,16 @@ export default function Toolbar() {
           type: 'ADD_RECENT_FILE',
           payload: { path: doc.path, name: doc.file_name, lastOpened: Date.now() },
         });
+        openedPaths.push(doc.path);
       } catch (error) {
         console.error(`Failed to open ${source}:`, path, error);
       }
     }
-  }, [dispatch]);
+
+    if (source.startsWith('file') && openedPaths.length === 1) {
+      await focusWorkspaceOnFile(openedPaths[0]);
+    }
+  }, [dispatch, focusWorkspaceOnFile]);
 
   const handleSave = useCallback(async () => {
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
