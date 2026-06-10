@@ -50,6 +50,8 @@ export default function WorkspaceContent() {
   const navigate = useNavigate();
   const language = useSettingsStore(s => s.general.language);
   const outlinePosition = useSettingsStore(s => s.appearance.outlinePosition);
+  const updateAppearance = useSettingsStore(s => s.updateAppearance);
+  const saveSettings = useSettingsStore(s => s.saveAll);
   const t = useCallback((value: string) => translateText(language, value), [language]);
   const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId);
   const activeTabId = activeTab?.id;
@@ -59,7 +61,9 @@ export default function WorkspaceContent() {
 
   const handleAIChatCollapsedChange = useCallback((collapsed: boolean) => {
     dispatch({ type: 'SET_AI_CHAT_COLLAPSED', payload: collapsed });
-  }, [dispatch]);
+    updateAppearance({ aiChatCollapsed: collapsed });
+    void saveSettings();
+  }, [dispatch, saveSettings, updateAppearance]);
 
   const handleCreateMarkdownFile = useCallback(async (content: string) => {
     const fileName = `${t('AI生成文档')}-${formatAIDocumentTimestamp(new Date())}.md`;

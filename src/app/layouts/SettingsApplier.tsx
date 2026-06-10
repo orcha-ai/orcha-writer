@@ -226,12 +226,22 @@ export function SettingsApplier() {
 
   // Apply loaded settings to AppContext
   useEffect(() => {
+    if (!settingsReady) return;
+
     // Sync theme
     const theme = appearance.themeMode === 'light' ? 'light' : appearance.themeMode === 'dark' ? 'dark' : 'system' as const;
     dispatch({ type: 'SET_THEME', payload: theme });
     dispatch({ type: 'SET_SIDEBAR_VISIBLE', payload: appearance.showSidebar });
     dispatch({ type: 'SET_OUTLINE_VISIBLE', payload: appearance.showOutline });
-  }, [appearance.showOutline, appearance.showSidebar, appearance.themeMode, dispatch]);
+    dispatch({ type: 'SET_AI_CHAT_COLLAPSED', payload: appearance.aiChatCollapsed });
+  }, [
+    appearance.aiChatCollapsed,
+    appearance.showOutline,
+    appearance.showSidebar,
+    appearance.themeMode,
+    dispatch,
+    settingsReady,
+  ]);
 
   // Sync general settings to AppContext
   useEffect(() => {
