@@ -13,6 +13,7 @@ dist-ssr/
 coverage/
 .vite/
 .pnpm-store/
+.codegraph/
 
 # Local env / secrets
 .env
