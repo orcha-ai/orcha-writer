@@ -255,6 +255,7 @@ const enTextByZh: Record<string, string> = {
   '下载安装更新失败': 'Failed to download and install update',
   '下载并安装': 'Download and Install',
   '检查更新失败': 'Failed to check for updates',
+  '更新': 'Update',
   '更新到 {version}': 'Update to {version}',
   '隐藏大纲': 'Hide Outline',
   '大纲': 'Outline',

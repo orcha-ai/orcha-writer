@@ -365,19 +365,12 @@
 }
 
 .toolbar-update-btn {
-  position: relative;
-}
-
-.toolbar-update-btn::after {
-  content: '';
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: #ff453a;
-  box-shadow: 0 0 0 1px var(--bg-toolbar);
+  width: auto;
+  min-width: 42px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .toolbar-btn svg {

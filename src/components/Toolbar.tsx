@@ -14,7 +14,6 @@ import {
   Monitor,
   Settings,
   ScrollText,
-  Download,
   SquareTerminal,
 } from 'lucide-react';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -1376,10 +1375,9 @@ ${htmlBody}
               className="toolbar-btn toolbar-update-btn active"
               onClick={handleToolbarUpdate}
               disabled={checkingUpdate || updateFlowRunning}
-              data-tooltip={t('更新到 {version}', { version: availableUpdate.latestVersion })}
               aria-label={t('更新到 {version}', { version: availableUpdate.latestVersion })}
             >
-              <Download size={16} />
+              {t('更新')}
             </button>
           )}
 
