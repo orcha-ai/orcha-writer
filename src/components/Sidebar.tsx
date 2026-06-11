@@ -5,7 +5,7 @@ import { Menu, type MenuOptions } from '@tauri-apps/api/menu';
 import { ask, open } from '@tauri-apps/plugin-dialog';
 import { FolderOpen, Folder, File, ChevronRight, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import type { CSSProperties, DragEvent, KeyboardEvent, MouseEvent } from 'react';
+import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { message } from 'antd';
 import { ensureDir, pathExists, rename, remove, revealInFileManager, writeTextFile } from '../utils/fs';
 import { buildHidePatterns, readFirstLevel } from '../utils/workspace';
@@ -14,6 +14,7 @@ import { getLocaleText, normalizeAppLanguage } from '../i18n';
 import { OutlineContent } from './Outline';
 import { searchWorkspaceFiles, type FileSearchResult } from '../utils/fileSearch';
 import { initialContentForFile, openFileInEditor, openRecentFileInEditor } from '../utils/openFileInEditor';
+import { setWorkspaceTreeDragging } from '../utils/dragState';
 
 const SIDEBAR_MIN_WIDTH = 180;
 const SIDEBAR_MAX_WIDTH = 420;
@@ -31,6 +32,21 @@ interface CreateFolderState {
 interface CreateFileState {
   parentPath: string | null;
   value: string;
+}
+
+interface PointerDragState {
+  node: FileNode;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  active: boolean;
+}
+
+interface WorkspaceDragPreviewState {
+  name: string;
+  type: FileNode['type'];
+  x: number;
+  y: number;
 }
 
 interface TreeHandlers {
@@ -59,11 +75,8 @@ interface TreeHandlers {
   draggingPath: string | null;
   dropTargetPath: string | null;
   contextTargetPath: string | null;
-  onDragStart: (event: DragEvent<HTMLDivElement>, node: FileNode) => void;
-  onDragOver: (event: DragEvent<HTMLDivElement>, targetPath: string | null) => void;
-  onDragLeave: (event: DragEvent<HTMLDivElement>) => void;
-  onDrop: (event: DragEvent<HTMLDivElement>, targetPath: string | null) => void | Promise<void>;
-  onDragEnd: () => void;
+  onPointerDown: (event: ReactPointerEvent<HTMLDivElement>, node: FileNode) => void;
+  onClickCapture: (event: MouseEvent<HTMLDivElement>) => void;
 }
 
 interface WorkspaceTreeProps extends TreeHandlers {
@@ -245,6 +258,7 @@ export default function Sidebar() {
   const [loadingFolders, setLoadingFolders] = useState<Set<string>>(new Set());
   const [draggingPath, setDraggingPath] = useState<string | null>(null);
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
+  const [dragPreview, setDragPreview] = useState<WorkspaceDragPreviewState | null>(null);
   const [contextTargetPath, setContextTargetPath] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => clampSidebarWidth(appearance.sidebarWidth));
   const [isResizing, setIsResizing] = useState(false);
@@ -267,7 +281,9 @@ export default function Sidebar() {
   const createFolderInFlightRef = useRef(false);
   const createFileInFlightRef = useRef(false);
   const refreshInFlightRef = useRef(false);
-  const dragNodeRef = useRef<FileNode | null>(null);
+  const pointerDragRef = useRef<PointerDragState | null>(null);
+  const dropTargetDirectoryRef = useRef<string | null>(null);
+  const suppressNextTreeClickRef = useRef(false);
   const sidebarContentRef = useRef<HTMLDivElement | null>(null);
   const pendingRevealPathRef = useRef<string | null>(null);
   const contextTargetClearTimerRef = useRef<number | null>(null);
@@ -284,6 +300,9 @@ export default function Sidebar() {
   useEffect(() => { workspacePathRef.current = state.workspacePath; }, [state.workspacePath]);
   useEffect(() => { hidePatternsRef.current = hidePatterns; }, [hidePatterns]);
   useEffect(() => { widthRef.current = sidebarWidth; }, [sidebarWidth]);
+  useEffect(() => {
+    return () => setWorkspaceTreeDragging(false);
+  }, []);
 
   const cancelContextTargetClear = useCallback(() => {
     if (contextTargetClearTimerRef.current === null) return;
@@ -964,64 +983,132 @@ export default function Sidebar() {
     text.contextMenu,
   ]);
 
-  const handleTreeDragStart = useCallback((event: DragEvent<HTMLDivElement>, node: FileNode) => {
-    if (renaming || creatingFolder || creatingFile) {
-      event.preventDefault();
-      return;
-    }
-    event.stopPropagation();
-    dragNodeRef.current = node;
-    setDraggingPath(node.path);
+  const clearTreePointerDrag = useCallback(() => {
+    pointerDragRef.current = null;
+    dropTargetDirectoryRef.current = null;
+    setWorkspaceTreeDragging(false);
+    setDraggingPath(null);
     setDropTargetPath(null);
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('application/x-orcha-workspace-path', node.path);
-    event.dataTransfer.setData('text/plain', node.path);
-  }, [creatingFile, creatingFolder, renaming]);
+    setDragPreview(null);
+  }, []);
 
-  const handleTreeDragOver = useCallback((event: DragEvent<HTMLDivElement>, targetPath: string | null) => {
-    const source = dragNodeRef.current;
-    if (!source) return;
-    event.stopPropagation();
-    if (!canDropInto(source, targetPath)) {
+  const updatePointerDropTarget = useCallback((source: FileNode, clientX: number, clientY: number) => {
+    const workspacePath = workspacePathRef.current;
+    if (!workspacePath) return;
+
+    const element = document.elementFromPoint(clientX, clientY);
+    const dropElement = element instanceof Element
+      ? element.closest<HTMLElement>('[data-workspace-drop-path]')
+      : null;
+    const rawTargetPath = dropElement?.dataset.workspaceDropPath;
+    const targetPath = rawTargetPath === ROOT_DROP_TARGET ? null : rawTargetPath || null;
+
+    if (!rawTargetPath || !canDropInto(source, targetPath)) {
+      dropTargetDirectoryRef.current = null;
       setDropTargetPath(null);
       return;
     }
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
+
+    dropTargetDirectoryRef.current = targetPath ?? workspacePath;
     setDropTargetPath(dropTargetKey(targetPath));
   }, [canDropInto]);
 
-  const handleTreeDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
-    const relatedTarget = event.relatedTarget instanceof Node ? event.relatedTarget : null;
-    if (relatedTarget && event.currentTarget.contains(relatedTarget)) return;
-    setDropTargetPath(null);
-  }, []);
+  const finishTreePointerDrag = useCallback((cancelled = false) => {
+    const drag = pointerDragRef.current;
+    if (!drag) return;
 
-  const handleTreeDragEnd = useCallback(() => {
-    dragNodeRef.current = null;
-    setDraggingPath(null);
-    setDropTargetPath(null);
-  }, []);
+    const targetDirectory = dropTargetDirectoryRef.current;
+    const shouldMove = drag.active && !cancelled && Boolean(targetDirectory);
+    if (drag.active) {
+      suppressNextTreeClickRef.current = true;
+      window.setTimeout(() => {
+        suppressNextTreeClickRef.current = false;
+      }, 0);
+    }
 
-  const handleTreeDrop = useCallback(async (event: DragEvent<HTMLDivElement>, targetPath: string | null) => {
-    const source = dragNodeRef.current;
-    const workspacePath = workspacePathRef.current;
-    if (!source) return;
+    clearTreePointerDrag();
+
+    if (shouldMove && targetDirectory) {
+      void moveWorkspaceItem(drag.node, targetDirectory);
+    }
+  }, [clearTreePointerDrag, moveWorkspaceItem]);
+
+  const handleTreePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>, node: FileNode) => {
+    if (event.button !== 0 || renaming || creatingFolder || creatingFile) return;
+    pointerDragRef.current = {
+      node,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
+  }, [creatingFile, creatingFolder, renaming]);
+
+  const handleTreeClickCapture = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    if (!suppressNextTreeClickRef.current) return;
+    suppressNextTreeClickRef.current = false;
     event.preventDefault();
     event.stopPropagation();
-    setDropTargetPath(null);
-    if (!workspacePath || !canDropInto(source, targetPath)) {
-      handleTreeDragEnd();
-      return;
-    }
+  }, []);
 
-    const targetDirectory = targetPath ?? workspacePath;
-    try {
-      await moveWorkspaceItem(source, targetDirectory);
-    } finally {
-      handleTreeDragEnd();
-    }
-  }, [canDropInto, handleTreeDragEnd, moveWorkspaceItem]);
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const drag = pointerDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+
+      if (event.buttons !== 1) {
+        finishTreePointerDrag(true);
+        return;
+      }
+
+      if (!drag.active) {
+        const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+        if (distance < 4) return;
+        drag.active = true;
+        setWorkspaceTreeDragging(true);
+        setDraggingPath(drag.node.path);
+        setDropTargetPath(null);
+        setDragPreview({
+          name: drag.node.name,
+          type: drag.node.type,
+          x: event.clientX,
+          y: event.clientY,
+        });
+      }
+
+      event.preventDefault();
+      setDragPreview(current => current ? { ...current, x: event.clientX, y: event.clientY } : current);
+      updatePointerDropTarget(drag.node, event.clientX, event.clientY);
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      const drag = pointerDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      finishTreePointerDrag(false);
+    };
+
+    const handlePointerCancel = (event: PointerEvent) => {
+      const drag = pointerDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      finishTreePointerDrag(true);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerCancel);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerCancel);
+    };
+  }, [finishTreePointerDrag, updatePointerDropTarget]);
+
+  useEffect(() => {
+    return () => {
+      clearTreePointerDrag();
+      suppressNextTreeClickRef.current = false;
+    };
+  }, [clearTreePointerDrag]);
 
   useEffect(() => {
     if (!activeWorkspaceFilePath) {
@@ -1192,11 +1279,8 @@ export default function Sidebar() {
                   draggingPath={draggingPath}
                   dropTargetPath={dropTargetPath}
                   contextTargetPath={contextTargetPath}
-                  onDragStart={handleTreeDragStart}
-                  onDragOver={handleTreeDragOver}
-                  onDragLeave={handleTreeDragLeave}
-                  onDrop={handleTreeDrop}
-                  onDragEnd={handleTreeDragEnd}
+                  onPointerDown={handleTreePointerDown}
+                  onClickCapture={handleTreeClickCapture}
                   text={text}
                 />
               )}
@@ -1227,6 +1311,19 @@ export default function Sidebar() {
         />
       </div>
 
+      {dragPreview && (
+        <div
+          className="workspace-drag-preview"
+          style={{ left: dragPreview.x, top: dragPreview.y }}
+        >
+          {dragPreview.type === 'folder' ? (
+            <Folder size={14} className="icon" />
+          ) : (
+            <File size={14} className="icon" />
+          )}
+          <span>{dragPreview.name}</span>
+        </div>
+      )}
     </>
   );
 }
@@ -1236,7 +1333,7 @@ function WorkspaceTree({
   onContextMenu, renaming, renameValue, onRenameChange, onRenameSubmit, onRenameCancel, onRename,
   creatingFolder, onCreateFolderStart, onCreateFolderChange, onCreateFolderSubmit, onCreateFolderCancel,
   creatingFile, onCreateFileStart, onCreateFileChange, onCreateFileSubmit, onCreateFileCancel,
-  draggingPath, dropTargetPath, contextTargetPath, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd, text
+  draggingPath, dropTargetPath, contextTargetPath, onPointerDown, onClickCapture, text
 }: WorkspaceTreeProps) {
   const hasWorkspace = Boolean(workspacePath);
   const isRootDropTarget = dropTargetPath === ROOT_DROP_TARGET;
@@ -1245,9 +1342,8 @@ function WorkspaceTree({
     return (
       <div
         className={`workspace-tree ${isRootDropTarget ? 'drop-target' : ''}`}
-        onDragOver={(event) => onDragOver(event, null)}
-        onDragLeave={onDragLeave}
-        onDrop={(event) => { void onDrop(event, null); }}
+        data-workspace-drop-path={ROOT_DROP_TARGET}
+        onClickCapture={onClickCapture}
         onContextMenu={(event) => onContextMenu(event, null)}
       >
         {creatingFolder?.parentPath === null && (
@@ -1285,9 +1381,8 @@ function WorkspaceTree({
   return (
     <div
       className={`workspace-tree ${isRootDropTarget ? 'drop-target' : ''}`}
-      onDragOver={(event) => onDragOver(event, null)}
-      onDragLeave={onDragLeave}
-      onDrop={(event) => { void onDrop(event, null); }}
+      data-workspace-drop-path={ROOT_DROP_TARGET}
+      onClickCapture={onClickCapture}
       onContextMenu={(event) => onContextMenu(event, null)}
     >
       {creatingFolder?.parentPath === null && (
@@ -1341,11 +1436,8 @@ function WorkspaceTree({
           draggingPath={draggingPath}
           dropTargetPath={dropTargetPath}
           contextTargetPath={contextTargetPath}
-          onDragStart={onDragStart}
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          onDrop={onDrop}
-          onDragEnd={onDragEnd}
+          onPointerDown={onPointerDown}
+          onClickCapture={onClickCapture}
           text={text}
         />
       ))}
@@ -1358,7 +1450,7 @@ function TreeNode({
   renaming, renameValue, onRenameChange, onRenameSubmit, onRenameCancel, onRename, creatingFolder,
   onCreateFolderStart, onCreateFolderChange, onCreateFolderSubmit, onCreateFolderCancel,
   creatingFile, onCreateFileStart, onCreateFileChange, onCreateFileSubmit, onCreateFileCancel,
-  draggingPath, dropTargetPath, contextTargetPath, onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd, text,
+  draggingPath, dropTargetPath, contextTargetPath, onPointerDown, onClickCapture, text,
 }: TreeNodeProps) {
   const isExpanded = expandedFolders.has(node.path);
   const isLoading = loadingFolders?.has(node.path);
@@ -1408,14 +1500,11 @@ function TreeNode({
         <div
           className={`file-tree-item ${isActive ? 'active' : ''} ${isDragging ? 'dragging' : ''} ${isDropTarget ? 'drop-target' : ''} ${isContextTarget ? 'context-target' : ''}`}
           style={depthStyle}
+          data-workspace-drop-path={node.path}
           tabIndex={0}
-          draggable={!isRenaming}
+          draggable={false}
           onClick={() => toggleFolder(node.path)}
-          onDragStart={(event) => onDragStart(event, node)}
-          onDragOver={(event) => onDragOver(event, node.path)}
-          onDragLeave={onDragLeave}
-          onDrop={(event) => { void onDrop(event, node.path); }}
-          onDragEnd={onDragEnd}
+          onPointerDown={(event) => onPointerDown(event, node)}
           onKeyDown={handleKeyDown}
           onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, node); }}
           title={`${node.path}`}
@@ -1479,11 +1568,8 @@ function TreeNode({
             draggingPath={draggingPath}
             dropTargetPath={dropTargetPath}
             contextTargetPath={contextTargetPath}
-            onDragStart={onDragStart}
-            onDragOver={onDragOver}
-            onDragLeave={onDragLeave}
-            onDrop={onDrop}
-            onDragEnd={onDragEnd}
+            onPointerDown={onPointerDown}
+            onClickCapture={onClickCapture}
             text={text}
           />
         ))}
@@ -1495,14 +1581,11 @@ function TreeNode({
     <div
       className={`file-tree-item ${isActive ? 'active' : ''} ${isDragging ? 'dragging' : ''} ${isContextTarget ? 'context-target' : ''}`}
       style={depthStyle}
+      data-workspace-drop-path={fileDropTargetPath ?? ROOT_DROP_TARGET}
       tabIndex={0}
-      draggable={!isRenaming}
+      draggable={false}
       onClick={() => openFile(node)}
-      onDragStart={(event) => onDragStart(event, node)}
-      onDragOver={(event) => onDragOver(event, fileDropTargetPath)}
-      onDragLeave={onDragLeave}
-      onDrop={(event) => { void onDrop(event, fileDropTargetPath); }}
-      onDragEnd={onDragEnd}
+      onPointerDown={(event) => onPointerDown(event, node)}
       onKeyDown={handleKeyDown}
       onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, node); }}
     >

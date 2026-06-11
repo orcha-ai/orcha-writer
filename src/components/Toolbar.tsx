@@ -48,6 +48,7 @@ import type { ThemeMode, ViewMode } from '../types';
 import { runUpdateCheckFlow } from '../utils/updateUi';
 import { isEnglishLanguage, translateText } from '../i18n';
 import { matchesShortcut, normalizeShortcutKey } from '../utils/keyboardShortcuts';
+import { isWorkspaceTreeDragging } from '../utils/dragState';
 
 function normalizeThemeColor(color: string | undefined): string {
   const value = color?.trim();
@@ -1088,22 +1089,40 @@ ${htmlBody}
 
     let cancelled = false;
     let unlisten: (() => void) | undefined;
+    let nativeFileDragActive = false;
 
     void getCurrentWebview().onDragDropEvent((event) => {
       const payload = event.payload;
-      if (payload.type === 'enter' || payload.type === 'over') {
-        setIsDragging(true);
+      if (isWorkspaceTreeDragging()) {
+        nativeFileDragActive = false;
+        setIsDragging(false);
+        return;
+      }
+
+      if (payload.type === 'enter') {
+        nativeFileDragActive = payload.paths.length > 0;
+        setIsDragging(nativeFileDragActive);
+        return;
+      }
+
+      if (payload.type === 'over') {
+        if (nativeFileDragActive) setIsDragging(true);
         return;
       }
 
       if (payload.type === 'leave') {
+        nativeFileDragActive = false;
         setIsDragging(false);
         return;
       }
 
       if (payload.type === 'drop') {
+        const shouldOpen = nativeFileDragActive || payload.paths.length > 0;
+        nativeFileDragActive = false;
         setIsDragging(false);
-        void openNativeFilePaths(payload.paths, 'dropped file');
+        if (shouldOpen && payload.paths.length > 0) {
+          void openNativeFilePaths(payload.paths, 'dropped file');
+        }
       }
     }).then(fn => {
       if (cancelled) {
@@ -1124,23 +1143,27 @@ ${htmlBody}
   // Prevent the webview from navigating away when files are dropped over editable surfaces.
   useEffect(() => {
     const onDragEnter = (event: DragEvent) => {
+      if (isWorkspaceTreeDragging()) return;
       if (!hasFileDragData(event.dataTransfer)) return;
       event.preventDefault();
       setIsDragging(true);
     };
 
     const onDragOver = (event: DragEvent) => {
+      if (isWorkspaceTreeDragging()) return;
       if (!hasFileDragData(event.dataTransfer)) return;
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
     };
 
     const onDragLeave = (event: DragEvent) => {
+      if (isWorkspaceTreeDragging()) return;
       if (!hasFileDragData(event.dataTransfer)) return;
       if (!event.relatedTarget) setIsDragging(false);
     };
 
     const onDrop = (event: DragEvent) => {
+      if (isWorkspaceTreeDragging()) return;
       if (!hasFileDragData(event.dataTransfer)) return;
       event.preventDefault();
       setIsDragging(false);
