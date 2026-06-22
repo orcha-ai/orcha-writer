@@ -2,10 +2,11 @@
 import { createContext, useContext, useReducer, useEffect, useState, useCallback } from 'react';
 import type {
   AppState, TabFile, FileNode, ViewMode, ThemeMode,
-  RecentFile, EditorSettings, AppearanceSettings, BlockSelectionStatus, FilePreview
+  RecentFile, RecentWorkspace, EditorSettings, AppearanceSettings, BlockSelectionStatus, FilePreview
 } from './types';
 import { defaultAppearanceSettings, defaultEditorSettings } from './types';
 import { readConfig, writeConfig } from './config';
+import { mergeRecentWorkspaces, syncRecentWorkspaceMenu, trimRecentWorkspaces } from './utils/openWorkspace';
 
 export type AppAction =
   | { type: 'SET_VIEW_MODE'; payload: ViewMode }
@@ -29,6 +30,9 @@ export type AppAction =
   | { type: 'RENAME_TAB_TITLE'; payload: { id: string; name: string } }
   | { type: 'RENAME_PATH'; payload: { oldPath: string; newPath: string; name: string } }
   | { type: 'SET_WORKSPACE'; payload: { path: string; tree: FileNode[] } }
+  | { type: 'SET_RECENT_WORKSPACES'; payload: RecentWorkspace[] }
+  | { type: 'ADD_RECENT_WORKSPACE'; payload: RecentWorkspace }
+  | { type: 'REMOVE_RECENT_WORKSPACE'; payload: string }
   | { type: 'SET_RECENT_FILES'; payload: RecentFile[] }
   | { type: 'ADD_RECENT_FILE'; payload: RecentFile }
   | { type: 'SET_CURSOR'; payload: { line: number; ch: number } }
@@ -61,6 +65,7 @@ const initialState: AppState = {
   sidebarActiveTab: 'workspace',
   workspacePath: null,
   workspaceTree: [],
+  recentWorkspaces: [],
   recentFiles: [],
   cursorPosition: { line: 1, ch: 1 },
   wordCount: 0,
@@ -263,12 +268,33 @@ function appReducer(state: AppState, action: AppAction): AppState {
             ? file
             : { ...file, path: nextPath, name: file.path === oldPath ? name : file.name };
         }),
+        recentWorkspaces: state.recentWorkspaces.map(workspace => {
+          const nextPath = rebasePath(workspace.path, oldPath, newPath);
+          return nextPath === workspace.path
+            ? workspace
+            : { ...workspace, path: nextPath, name: workspace.path === oldPath ? name : workspace.name };
+        }),
         workspaceTree: rebaseFileTree(state.workspaceTree, oldPath, newPath, name),
       };
       return nextState;
     }
     case 'SET_WORKSPACE':
       return { ...state, workspacePath: action.payload.path, workspaceTree: action.payload.tree };
+    case 'SET_RECENT_WORKSPACES':
+      return { ...state, recentWorkspaces: mergeRecentWorkspaces([...state.recentWorkspaces, ...action.payload]) };
+    case 'ADD_RECENT_WORKSPACE':
+      return {
+        ...state,
+        recentWorkspaces: trimRecentWorkspaces([
+          action.payload,
+          ...state.recentWorkspaces.filter(workspace => workspace.path !== action.payload.path),
+        ]),
+      };
+    case 'REMOVE_RECENT_WORKSPACE':
+      return {
+        ...state,
+        recentWorkspaces: state.recentWorkspaces.filter(workspace => workspace.path !== action.payload),
+      };
     case 'SET_RECENT_FILES':
       return { ...state, recentFiles: action.payload };
     case 'ADD_RECENT_FILE':
@@ -338,12 +364,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let mounted = true;
     Promise.all([
       readConfig<RecentFile[]>('recent-files', []),
+      readConfig<RecentWorkspace[]>('recent-workspaces', []),
       readConfig<ViewMode>('view-mode', 'split' as ViewMode),
       readConfig<ThemeMode>('theme', 'system' as ThemeMode),
       readConfig<AppearanceSettings>('appearance', defaultAppearanceSettings),
-    ]).then(([recentFiles, viewMode, theme, appearance]) => {
+    ]).then(([recentFiles, recentWorkspaces, viewMode, theme, appearance]) => {
       if (!mounted) return;
       dispatch({ type: 'SET_RECENT_FILES', payload: recentFiles });
+      dispatch({ type: 'SET_RECENT_WORKSPACES', payload: trimRecentWorkspaces(recentWorkspaces) });
       dispatch({ type: 'SET_VIEW_MODE', payload: viewMode });
       dispatch({ type: 'SET_THEME', payload: theme });
       dispatch({
@@ -416,6 +444,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!initialized) return;
     writeConfig('recent-files', state.recentFiles);
   }, [state.recentFiles, initialized]);
+
+  // Persist recent workspaces whenever they change
+  useEffect(() => {
+    if (!initialized) return;
+    writeConfig('recent-workspaces', state.recentWorkspaces);
+    void syncRecentWorkspaceMenu(state.recentWorkspaces).catch((error) => {
+      console.warn('[AppContext] Failed to sync recent workspace menu:', error);
+    });
+  }, [state.recentWorkspaces, initialized]);
 
   // Persist last opened workspace path.
   useEffect(() => {

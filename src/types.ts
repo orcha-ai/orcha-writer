@@ -49,6 +49,7 @@ export interface AppState {
   sidebarActiveTab: 'workspace' | 'outline' | 'recent';
   workspacePath: string | null;
   workspaceTree: FileNode[];
+  recentWorkspaces: RecentWorkspace[];
   recentFiles: RecentFile[];
   cursorPosition: { line: number; ch: number };
   wordCount: number;
@@ -65,6 +66,12 @@ export interface AppState {
 }
 
 export interface RecentFile {
+  path: string;
+  name: string;
+  lastOpened: number;
+}
+
+export interface RecentWorkspace {
   path: string;
   name: string;
   lastOpened: number;

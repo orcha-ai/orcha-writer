@@ -8,7 +8,7 @@ import { useApp } from '../../AppContext';
 import { getActiveEditorView } from '../../components/Editor';
 import { readConfig, writeConfig } from '../../config';
 import { readTextFile } from '../../utils/fs';
-import { findFirstMdFile, readFirstLevel } from '../../utils/workspace';
+import { getInitialWorkspacePathForWindow, loadWorkspaceInCurrentWindow } from '../../utils/openWorkspace';
 import type { FileSettings, GeneralSettings, TabFile } from '../../types';
 import { normalizeAppLanguage, translateText } from '../../i18n';
 
@@ -45,12 +45,12 @@ function getUnsavedTabs(tabs: TabFile[]): TabFile[] {
 function formatUnsavedTabsMessage(tabs: TabFile[], language: unknown): string {
   const t = (value: string, params?: Record<string, string | number>) => translateText(language, value, params);
   if (tabs.length === 1) {
-    return t('「{name}」尚未保存。退出后未保存的修改会丢失。', { name: tabs[0].name });
+    return t('「{name}」尚未保存。关闭窗口后未保存的修改会丢失。', { name: tabs[0].name });
   }
 
   const visibleNames = tabs.slice(0, 3).map(tab => `「${tab.name}」`).join('、');
   const moreText = tabs.length > 3 ? t(' 等') : '';
-  return t('有 {count} 个文档尚未保存：{names}{moreText}。退出后未保存的修改会丢失。', {
+  return t('有 {count} 个文档尚未保存：{names}{moreText}。关闭窗口后未保存的修改会丢失。', {
     count: tabs.length,
     names: visibleNames,
     moreText,
@@ -63,13 +63,13 @@ function confirmUnsavedExit(tabs: TabFile[], language: unknown): Promise<boolean
   return confirmDialog(content, {
     title: t('有未保存的文档'),
     kind: 'warning',
-    okLabel: t('仍然退出'),
+    okLabel: t('仍然关闭'),
     cancelLabel: t('取消'),
   }).catch(() => new Promise((resolve) => {
     Modal.confirm({
       title: t('有未保存的文档'),
       content,
-      okText: t('仍然退出'),
+      okText: t('仍然关闭'),
       okButtonProps: { danger: true },
       cancelText: t('取消'),
       onOk: () => resolve(true),
@@ -161,6 +161,19 @@ export function SettingsApplier() {
     let cancelled = false;
 
     const restoreStartupWorkspace = async (generalSettings: GeneralSettings, fileSettings: FileSettings) => {
+      const initialWorkspace = await getInitialWorkspacePathForWindow().catch(() => null);
+      if (initialWorkspace) {
+        try {
+          await loadWorkspaceInCurrentWindow(dispatch, initialWorkspace, {
+            hidePatterns: fileSettings.hidePatterns,
+            untitledLabel: translateText(generalSettings.language, '未命名'),
+          });
+        } catch (error) {
+          console.warn('[SettingsApplier] Failed to open initial workspace:', error);
+        }
+        return;
+      }
+
       const lastWorkspace = await readConfig<string>('workspace-path', '');
       let startupOpen = generalSettings.startupOpen;
       const migrationMarked = await readConfig<boolean>('startup-open-migrated', false);
@@ -187,23 +200,12 @@ export function SettingsApplier() {
       if (!workspacePath) return;
 
       try {
-        const tree = await readFirstLevel(workspacePath, fileSettings.hidePatterns);
-        if (cancelled) return;
-        dispatch({ type: 'SET_WORKSPACE', payload: { path: workspacePath, tree } });
-
-        const firstMd = findFirstMdFile(tree);
-        if (!firstMd) return;
-        try {
-          const content = await readTextFile(firstMd.path);
-          if (cancelled) return;
-          dispatch({ type: 'OPEN_TAB', payload: { id: firstMd.path, name: firstMd.name, path: firstMd.path, content } });
-          dispatch({ type: 'ADD_RECENT_FILE', payload: { path: firstMd.path, name: firstMd.name, lastOpened: Date.now() } });
-        } catch {
-          if (!cancelled) {
-            dispatch({ type: 'OPEN_TAB', payload: { id: firstMd.path, name: firstMd.name, path: firstMd.path, content: `# ${firstMd.name.replace(/\.\w+$/, '')}\n\n` } });
-          }
-        }
+        await loadWorkspaceInCurrentWindow(dispatch, workspacePath, {
+          hidePatterns: fileSettings.hidePatterns,
+          untitledLabel: translateText(generalSettings.language, '未命名'),
+        });
       } catch (error) {
+        if (cancelled) return;
         console.warn('[SettingsApplier] Failed to restore workspace:', error);
       }
     };
@@ -269,17 +271,23 @@ export function SettingsApplier() {
     }
   }, [dispatch, general.recentFileCount, settingsReady, state.recentFiles]);
 
-  // Always quit the app when the main window is closed, after warning about unsaved documents.
+  // Close only the current window, after warning about unsaved documents.
   useEffect(() => {
     if (!isTauri()) return undefined;
 
     let unlisten: (() => void) | undefined;
+    const currentWindow = getCurrentWindow();
+    const closeCurrentWindow = () => {
+      void invoke('close_current_window').catch(error => {
+        console.warn('[SettingsApplier] Failed to close current window:', error);
+      });
+    };
 
-    void getCurrentWindow().onCloseRequested(event => {
+    void currentWindow.onCloseRequested(event => {
       event.preventDefault();
       const unsavedTabs = getUnsavedTabs(tabsRef.current);
       if (unsavedTabs.length === 0) {
-        void invoke('exit_app');
+        closeCurrentWindow();
         return;
       }
 
@@ -288,7 +296,7 @@ export function SettingsApplier() {
 
       void confirmUnsavedExit(unsavedTabs, useSettingsStore.getState().general.language).then(shouldExit => {
         exitPromptOpenRef.current = false;
-        if (shouldExit) void invoke('exit_app');
+        if (shouldExit) closeCurrentWindow();
       });
     }).then(fn => {
       unlisten = fn;

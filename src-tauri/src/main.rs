@@ -6,6 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 #[cfg(target_os = "windows")]
@@ -17,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use base64::{engine::general_purpose, Engine as _};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
-use tauri::{AppHandle, Emitter, Manager, WebviewEvent, DragDropEvent};
+use tauri::{AppHandle, DragDropEvent, Emitter, Manager, State, WebviewEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri::menu::{MenuBuilder, SubmenuBuilder, MenuItemBuilder};
 use tauri::command;
 use serde::{Serialize, Deserialize};
@@ -29,6 +30,59 @@ struct PendingOpenFiles(Mutex<Vec<String>>);
 
 #[derive(Default)]
 struct CancelledAiStreams(Mutex<HashSet<String>>);
+
+#[derive(Default)]
+struct WorkspaceWindowRegistry(Mutex<WorkspaceWindowRegistryState>);
+
+#[derive(Default)]
+struct WorkspaceWindowRegistryState {
+    by_path: HashMap<String, String>,
+    by_label: HashMap<String, String>,
+}
+
+#[derive(Default)]
+struct FocusedWindow(Mutex<Option<String>>);
+
+#[derive(Default)]
+struct NativeMenuState(Mutex<NativeMenuStateData>);
+
+#[derive(Clone)]
+struct RecentWorkspaceMenuEntry {
+    name: String,
+    path: String,
+}
+
+#[derive(Clone)]
+struct NativeMenuStateData {
+    language: String,
+    app_menu_title: String,
+    recent_workspaces: Vec<RecentWorkspaceMenuEntry>,
+}
+
+impl Default for NativeMenuStateData {
+    fn default() -> Self {
+        Self {
+            language: "zh-CN".to_string(),
+            app_menu_title: "Orcha Writer".to_string(),
+            recent_workspaces: Vec::new(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecentWorkspaceMenuPayload {
+    name: String,
+    path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenWorkspaceWindowResult {
+    label: String,
+    path: String,
+    reused: bool,
+}
 
 static TERMINAL_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -69,6 +123,231 @@ fn user_home_dir() -> Result<PathBuf, String> {
     }
 
     Err("无法获取用户主目录（HOME / USERPROFILE 均不可用）".to_string())
+}
+
+fn config_dir_path() -> Result<PathBuf, String> {
+    Ok(user_home_dir()?.join(".orcha-writer").join("config"))
+}
+
+fn read_config_json(config_dir: &Path, filename: &str) -> Option<Value> {
+    let path = config_dir.join(format!("{}.json", filename));
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+}
+
+fn read_config_string(config_dir: &Path, filename: &str) -> Option<String> {
+    read_config_json(config_dir, filename)
+        .and_then(|value| value.as_str().map(|text| text.trim().to_string()))
+        .filter(|value| !value.is_empty())
+}
+
+fn startup_workspace_path_from_config() -> Option<PathBuf> {
+    let config_dir = config_dir_path().ok()?;
+    let last_workspace = read_config_string(&config_dir, "workspace-path");
+    let app_config = read_config_json(&config_dir, "app");
+    let startup_open = app_config
+        .as_ref()
+        .and_then(|value| value.get("startupOpen"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("last-workspace");
+    let migration_marked = read_config_json(&config_dir, "startup-open-migrated")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+
+    if startup_open == "blank" && (migration_marked || last_workspace.is_none()) {
+        return None;
+    }
+
+    let workspace_path = if startup_open == "specific-workspace" {
+        let configured_workspace = read_config_json(&config_dir, "files")
+            .and_then(|value| {
+                value
+                    .get("defaultWorkspace")
+                    .and_then(|workspace| workspace.as_str())
+                    .map(|workspace| workspace.trim().to_string())
+            })
+            .filter(|value| !value.is_empty());
+        configured_workspace.or(last_workspace)
+    } else {
+        last_workspace
+    }?;
+
+    let path = PathBuf::from(workspace_path);
+    if path.exists() && path.is_dir() {
+        path.canonicalize().ok()
+    } else {
+        None
+    }
+}
+
+fn canonical_workspace_path(path: &str) -> Result<PathBuf, String> {
+    let path_buf = PathBuf::from(path);
+    if !path_buf.exists() {
+        return Err("工作区不存在".to_string());
+    }
+    if !path_buf.is_dir() {
+        return Err("目标路径不是文件夹".to_string());
+    }
+    path_buf.canonicalize().map_err(|e| e.to_string())
+}
+
+fn workspace_path_key(path: &Path) -> String {
+    let key = path.to_string_lossy().replace('\\', "/");
+    #[cfg(target_os = "windows")]
+    {
+        key.to_lowercase()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        key
+    }
+}
+
+fn workspace_name_from_path(path: &Path) -> String {
+    if let Some(name) = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+    {
+        name.to_string()
+    } else {
+        path.to_string_lossy().to_string()
+    }
+}
+
+fn workspace_window_label(path: &Path) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    workspace_path_key(path).hash(&mut hasher);
+    format!("workspace-{:016x}", hasher.finish())
+}
+
+fn focus_webview_window(window: &WebviewWindow) {
+    window.unminimize().ok();
+    window.show().ok();
+    window.set_focus().ok();
+}
+
+fn register_workspace_label(
+    registry: &WorkspaceWindowRegistry,
+    path: &Path,
+    label: &str,
+) -> Result<String, String> {
+    let path_value = path.to_string_lossy().to_string();
+    let path_key = workspace_path_key(path);
+    let mut state = registry
+        .0
+        .lock()
+        .map_err(|_| "工作区窗口状态不可用".to_string())?;
+
+    state.by_path.retain(|_, existing_label| existing_label != label);
+    state.by_label.remove(label);
+    state.by_path.insert(path_key, label.to_string());
+    state.by_label.insert(label.to_string(), path_value.clone());
+    Ok(path_value)
+}
+
+fn unregister_workspace_label(registry: &WorkspaceWindowRegistry, label: &str) {
+    if let Ok(mut state) = registry.0.lock() {
+        state.by_path.retain(|_, existing_label| existing_label != label);
+        state.by_label.remove(label);
+    }
+}
+
+fn attach_window_handlers(window: &WebviewWindow) {
+    let drop_window = window.clone();
+    window.on_webview_event(move |event| {
+        if let WebviewEvent::DragDrop(DragDropEvent::Drop { paths, position: _ }) = event {
+            let text_paths: Vec<String> = paths
+                .iter()
+                .filter(|p| is_openable_text_file(p))
+                .map(|p| p.to_string_lossy().to_string())
+                .collect();
+            if !text_paths.is_empty() {
+                drop_window.emit("files-dropped", text_paths).ok();
+            }
+        }
+    });
+
+    let app_handle = window.app_handle().clone();
+    let label = window.label().to_string();
+    window.on_window_event(move |event| match event {
+        WindowEvent::Focused(true) => {
+            let focused = app_handle.state::<FocusedWindow>();
+            if let Ok(mut value) = focused.0.lock() {
+                *value = Some(label.clone());
+            }
+            update_app_menu_title_for_window(&app_handle, &label);
+        }
+        WindowEvent::Destroyed => {
+            let registry = app_handle.state::<WorkspaceWindowRegistry>();
+            unregister_workspace_label(&registry, &label);
+            let focused = app_handle.state::<FocusedWindow>();
+            if let Ok(mut value) = focused.0.lock() {
+                if value.as_deref() == Some(label.as_str()) {
+                    *value = None;
+                }
+            }
+        }
+        _ => {}
+    });
+}
+
+fn menu_target_window(app: &AppHandle) -> Option<WebviewWindow> {
+    let focused_label = app
+        .state::<FocusedWindow>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|value| value.clone());
+
+    focused_label
+        .and_then(|label| app.get_webview_window(&label))
+        .or_else(|| app.get_webview_window("main"))
+}
+
+fn native_menu_snapshot(handle: &AppHandle) -> NativeMenuStateData {
+    handle
+        .state::<NativeMenuState>()
+        .0
+        .lock()
+        .map(|state| state.clone())
+        .unwrap_or_default()
+}
+
+fn rebuild_native_menu(handle: &AppHandle) -> Result<(), String> {
+    let state = native_menu_snapshot(handle);
+    set_native_menu(handle, &state).map_err(|e| e.to_string())
+}
+
+fn recent_workspace_path_for_menu_id(app: &AppHandle, id: &str) -> Option<String> {
+    let index = id
+        .strip_prefix("recent_workspace_app_")
+        .or_else(|| id.strip_prefix("recent_workspace_file_"))?
+        .parse::<usize>()
+        .ok()?;
+
+    app.state::<NativeMenuState>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|state| state.recent_workspaces.get(index).map(|workspace| workspace.path.clone()))
+}
+
+fn update_app_menu_title_for_window(app: &AppHandle, label: &str) {
+    let next_title = app
+        .state::<WorkspaceWindowRegistry>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|state| state.by_label.get(label).cloned())
+        .map(|path| workspace_name_from_path(Path::new(&path)))
+        .unwrap_or_else(|| "Orcha Writer".to_string());
+
+    if let Ok(mut state) = app.state::<NativeMenuState>().0.lock() {
+        state.app_menu_title = next_title;
+    }
+    let _ = rebuild_native_menu(app);
 }
 
 // ── OpenedDocument: returned by open_markdown_file command ──
@@ -380,6 +659,12 @@ fn take_pending_open_files(app: AppHandle) -> Vec<String> {
 #[command]
 fn exit_app(app: AppHandle) {
     app.exit(0);
+}
+
+// ── Command: close only the requesting window ──
+#[command]
+fn close_current_window(window: WebviewWindow) -> Result<(), String> {
+    window.destroy().map_err(|e| e.to_string())
 }
 
 // ── Command: Rust securely reads a supported text/code file ──
@@ -2166,7 +2451,7 @@ fn ai_cancel_chat_stream(app: AppHandle, stream_id: String) -> Result<(), String
 // ── Command: ensure config directory exists ──
 #[command]
 fn ensure_config_dir() -> Result<String, String> {
-    let config_dir = user_home_dir()?.join(".orcha-writer").join("config");
+    let config_dir = config_dir_path()?;
     std::fs::create_dir_all(&config_dir)
         .map_err(|e| format!("创建配置目录失败: {}", e))?;
     Ok(config_dir.to_string_lossy().to_string())
@@ -2871,9 +3156,66 @@ fn export_pdf_system_print(app: tauri::AppHandle) {
     }
 }
 
-fn set_native_menu(handle: &AppHandle, language: &str) -> tauri::Result<()> {
-    let english = language == "en-US";
+fn build_recent_workspace_submenu(
+    handle: &AppHandle,
+    state: &NativeMenuStateData,
+    id_prefix: &str,
+    title: &str,
+    empty_title: &str,
+) -> tauri::Result<tauri::menu::Submenu<tauri::Wry>> {
+    let mut builder = SubmenuBuilder::new(handle, title);
+
+    if state.recent_workspaces.is_empty() {
+        builder = builder.item(
+            &MenuItemBuilder::new(empty_title)
+                .id(format!("{}_empty", id_prefix))
+                .enabled(false)
+                .build(handle)?,
+        );
+    } else {
+        for (index, workspace) in state.recent_workspaces.iter().enumerate() {
+            builder = builder.item(
+                &MenuItemBuilder::new(&workspace.name)
+                    .id(format!("{}_{}", id_prefix, index))
+                    .build(handle)?,
+            );
+        }
+    }
+
+    builder.build()
+}
+
+fn set_native_menu(handle: &AppHandle, state: &NativeMenuStateData) -> tauri::Result<()> {
+    let english = state.language == "en-US";
     let t = |zh: &'static str, en: &'static str| if english { en } else { zh };
+    let app_menu_title = if state.app_menu_title.trim().is_empty() {
+        "Orcha Writer"
+    } else {
+        state.app_menu_title.trim()
+    };
+
+    let app_recent_workspace_menu = build_recent_workspace_submenu(
+        handle,
+        state,
+        "recent_workspace_app",
+        t("最近工作区", "Recent Workspaces"),
+        t("暂无最近工作区", "No Recent Workspaces"),
+    )?;
+    let file_recent_workspace_menu = build_recent_workspace_submenu(
+        handle,
+        state,
+        "recent_workspace_file",
+        t("最近工作区", "Recent Workspaces"),
+        t("暂无最近工作区", "No Recent Workspaces"),
+    )?;
+
+    let app_menu = SubmenuBuilder::new(handle, app_menu_title)
+        .item(&MenuItemBuilder::new(t("关于 Orcha Writer", "About Orcha Writer")).id("about").build(handle)?)
+        .separator()
+        .item(&app_recent_workspace_menu)
+        .separator()
+        .item(&MenuItemBuilder::new(t("退出", "Quit")).id("quit").accelerator("CmdOrCtrl+Q").build(handle)?)
+        .build()?;
 
     let file_menu = SubmenuBuilder::new(handle, t("文件", "File"))
         .item(&MenuItemBuilder::new(t("新建文件", "New File")).id("new_file").build(handle)?)
@@ -2881,6 +3223,7 @@ fn set_native_menu(handle: &AppHandle, language: &str) -> tauri::Result<()> {
         .separator()
         .item(&MenuItemBuilder::new(t("打开文件", "Open File")).id("open_file").build(handle)?)
         .item(&MenuItemBuilder::new(t("打开文件夹", "Open Folder")).id("open_folder").build(handle)?)
+        .item(&file_recent_workspace_menu)
         .separator()
         .item(&MenuItemBuilder::new(t("保存", "Save")).id("save").build(handle)?)
         .item(&MenuItemBuilder::new(t("另存为", "Save As")).id("save_as").build(handle)?)
@@ -2964,6 +3307,7 @@ fn set_native_menu(handle: &AppHandle, language: &str) -> tauri::Result<()> {
         .build()?;
 
     let menu = MenuBuilder::new(handle)
+        .item(&app_menu)
         .item(&file_menu)
         .item(&edit_menu)
         .item(&view_menu)
@@ -2979,7 +3323,144 @@ fn set_native_menu(handle: &AppHandle, language: &str) -> tauri::Result<()> {
 
 #[command]
 fn set_app_menu_language(app: AppHandle, language: String) -> Result<(), String> {
-    set_native_menu(&app, &language).map_err(|e| e.to_string())
+    {
+        let state = app.state::<NativeMenuState>();
+        let mut data = state
+            .0
+            .lock()
+            .map_err(|_| "原生菜单状态不可用".to_string())?;
+        data.language = language;
+    }
+    rebuild_native_menu(&app)
+}
+
+#[command]
+fn set_app_menu_workspace_title(app: AppHandle, title: String) -> Result<(), String> {
+    {
+        let state = app.state::<NativeMenuState>();
+        let mut data = state
+            .0
+            .lock()
+            .map_err(|_| "原生菜单状态不可用".to_string())?;
+        let value = title.trim();
+        data.app_menu_title = if value.is_empty() {
+            "Orcha Writer".to_string()
+        } else {
+            value.to_string()
+        };
+    }
+    rebuild_native_menu(&app)
+}
+
+#[command]
+fn set_recent_workspace_menu(
+    app: AppHandle,
+    workspaces: Vec<RecentWorkspaceMenuPayload>,
+) -> Result<(), String> {
+    {
+        let state = app.state::<NativeMenuState>();
+        let mut data = state
+            .0
+            .lock()
+            .map_err(|_| "原生菜单状态不可用".to_string())?;
+        data.recent_workspaces = workspaces
+            .into_iter()
+            .filter(|workspace| !workspace.path.trim().is_empty())
+            .take(20)
+            .map(|workspace| RecentWorkspaceMenuEntry {
+                name: if workspace.name.trim().is_empty() {
+                    workspace_name_from_path(Path::new(&workspace.path))
+                } else {
+                    workspace.name
+                },
+                path: workspace.path,
+            })
+            .collect();
+    }
+    rebuild_native_menu(&app)
+}
+
+#[command]
+fn register_workspace_window(
+    window: WebviewWindow,
+    registry: State<'_, WorkspaceWindowRegistry>,
+    path: String,
+) -> Result<String, String> {
+    let canonical = canonical_workspace_path(&path)?;
+    register_workspace_label(&registry, &canonical, window.label())
+}
+
+#[command]
+fn initial_workspace_path_for_window(
+    window: WebviewWindow,
+    registry: State<'_, WorkspaceWindowRegistry>,
+) -> Result<Option<String>, String> {
+    let state = registry
+        .0
+        .lock()
+        .map_err(|_| "工作区窗口状态不可用".to_string())?;
+    Ok(state.by_label.get(window.label()).cloned())
+}
+
+#[command]
+fn open_workspace_window(
+    app: AppHandle,
+    registry: State<'_, WorkspaceWindowRegistry>,
+    path: String,
+) -> Result<OpenWorkspaceWindowResult, String> {
+    let canonical = canonical_workspace_path(&path)?;
+    let path_value = canonical.to_string_lossy().to_string();
+    let path_key = workspace_path_key(&canonical);
+
+    let existing_label = registry
+        .0
+        .lock()
+        .map_err(|_| "工作区窗口状态不可用".to_string())?
+        .by_path
+        .get(&path_key)
+        .cloned();
+
+    if let Some(label) = existing_label {
+        if let Some(window) = app.get_webview_window(&label) {
+            focus_webview_window(&window);
+            return Ok(OpenWorkspaceWindowResult {
+                label,
+                path: path_value,
+                reused: true,
+            });
+        }
+        unregister_workspace_label(&registry, &label);
+    }
+
+    let label = workspace_window_label(&canonical);
+    if let Some(window) = app.get_webview_window(&label) {
+        register_workspace_label(&registry, &canonical, &label)?;
+        focus_webview_window(&window);
+        return Ok(OpenWorkspaceWindowResult {
+            label,
+            path: path_value,
+            reused: true,
+        });
+    }
+
+    let title = workspace_name_from_path(&canonical);
+    let window = WebviewWindowBuilder::new(&app, label.clone(), WebviewUrl::default())
+        .title(title)
+        .inner_size(1200.0, 800.0)
+        .min_inner_size(800.0, 600.0)
+        .resizable(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    attach_window_handlers(&window);
+    register_workspace_label(&registry, &canonical, &label)?;
+    focus_webview_window(&window);
+
+    Ok(OpenWorkspaceWindowResult {
+        label,
+        path: path_value,
+        reused: false,
+    })
 }
 
 fn main() {
@@ -2993,6 +3474,9 @@ fn main() {
         .manage(PendingOpenFiles(Mutex::new(initial_paths)))
         .manage(CancelledAiStreams::default())
         .manage(TerminalManager::default())
+        .manage(WorkspaceWindowRegistry::default())
+        .manage(FocusedWindow::default())
+        .manage(NativeMenuState::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -3005,6 +3489,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             take_pending_open_files,
             exit_app,
+            close_current_window,
             open_markdown_file,
             import_pdf_text_as_markdown,
             read_directory_entries,
@@ -3033,33 +3518,55 @@ fn main() {
             export_pdf_chrome,
             export_pdf_system_print,
             set_app_menu_language,
+            set_app_menu_workspace_title,
+            set_recent_workspace_menu,
+            register_workspace_window,
+            initial_workspace_path_for_window,
+            open_workspace_window,
         ])
         .setup(|app| {
             let handle = app.handle();
+            let startup_workspace = startup_workspace_path_from_config();
+            let startup_title = startup_workspace
+                .as_ref()
+                .map(|path| workspace_name_from_path(path));
 
-            set_native_menu(handle, "zh-CN")?;
-
-            // Window-level file drop handler
-            let window = app.get_webview_window("main").unwrap();
-            let window_clone = window.clone();
-            window.on_webview_event(move |event| {
-                if let WebviewEvent::DragDrop(DragDropEvent::Drop { paths, position: _ }) = event {
-                    let text_paths: Vec<String> = paths
-                        .iter()
-                        .filter(|p| is_openable_text_file(p))
-                        .map(|p| p.to_string_lossy().to_string())
-                        .collect();
-                    if !text_paths.is_empty() {
-                        window_clone.emit("files-dropped", text_paths).ok();
-                    }
+            if let Some(title) = &startup_title {
+                if let Ok(mut state) = handle.state::<NativeMenuState>().0.lock() {
+                    state.app_menu_title = title.clone();
                 }
-            });
+            }
+
+            set_native_menu(handle, &native_menu_snapshot(handle))?;
+
+            let window = app.get_webview_window("main").unwrap();
+            if let Some(title) = &startup_title {
+                window.set_title(title).ok();
+            }
+            if let Some(path) = &startup_workspace {
+                let registry = app.state::<WorkspaceWindowRegistry>();
+                let _ = register_workspace_label(&registry, path, window.label());
+            }
+            if let Ok(mut focused) = app.state::<FocusedWindow>().0.lock() {
+                *focused = Some("main".to_string());
+            }
+            attach_window_handlers(&window);
 
             Ok(())
         })
         .on_menu_event(|app, event| {
-            let window = app.get_webview_window("main").unwrap();
             let id = event.id().0.as_str();
+            if id.starts_with("recent_workspace_app_") || id.starts_with("recent_workspace_file_") {
+                if let Some(path) = recent_workspace_path_for_menu_id(app, id) {
+                    let registry = app.state::<WorkspaceWindowRegistry>();
+                    let _ = open_workspace_window(app.clone(), registry, path);
+                }
+                return;
+            }
+
+            let Some(window) = menu_target_window(app) else {
+                return;
+            };
 
             match id {
                 "new_file" => { window.emit("menu-action", "new_file").ok(); }

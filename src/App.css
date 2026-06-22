@@ -846,6 +846,17 @@ body.sidebar-resizing * {
 }
 
 /* Recent Files */
+.recent-list {
+  padding: 4px 0;
+}
+
+.recent-section-title {
+  padding: 10px 12px 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+
 .recent-file-item {
   display: flex;
   align-items: center;

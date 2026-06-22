@@ -26,7 +26,8 @@ import { message } from 'antd';
 import { redo, undo } from '@codemirror/commands';
 import { EditorSelection } from '@codemirror/state';
 import { pathExists, readTextFile, writeTextFile } from '../utils/fs';
-import { findFirstMdFile, readFirstLevel } from '../utils/workspace';
+import { readFirstLevel } from '../utils/workspace';
+import { openWorkspace } from '../utils/openWorkspace';
 import { getActiveEditorView, pasteClipboardImagesIntoActiveEditor } from './Editor';
 import { effectiveViewModeForDocument, isMarkdownDocument, isMarkdownViewMode } from '../utils/documentCapabilities';
 import { basename, dirname, formatMarkdownImageUrl, markdownImagePathForDocument, stripExtension } from '../utils/markdownImages';
@@ -295,46 +296,16 @@ export default function Toolbar() {
 
       const path = Array.isArray(selected) ? selected[0] : selected;
 
-      // Read first level only, children loaded lazily on expand
-      const tree = await readFirstLevel(path, fileSettings.hidePatterns);
-
-      dispatch({ type: 'SET_WORKSPACE', payload: { path, tree } });
-
-      // Auto-open first .md file
-      const firstMd = findFirstMdFile(tree);
-      if (firstMd) {
-        try {
-          const content = await readTextFile(firstMd.path);
-          dispatch({
-            type: 'OPEN_TAB',
-            payload: {
-              id: firstMd.path,
-              name: firstMd.name,
-              path: firstMd.path,
-              content,
-            },
-          });
-          dispatch({
-            type: 'ADD_RECENT_FILE',
-            payload: { path: firstMd.path, name: firstMd.name, lastOpened: Date.now() },
-          });
-        } catch {
-          // File might not exist or not readable
-          dispatch({
-            type: 'OPEN_TAB',
-            payload: {
-              id: firstMd.path,
-              name: firstMd.name,
-              path: firstMd.path,
-              content: `# ${firstMd.name.replace('.md', '') || t('未命名')}\n\n`,
-            },
-          });
-        }
-      }
+      await openWorkspace(dispatch, path, {
+        currentWorkspacePath: state.workspacePath,
+        hidePatterns: fileSettings.hidePatterns,
+        untitledLabel: t('未命名'),
+      });
     } catch (e) {
       console.error('Failed to open folder:', e);
+      message.error(t('打开工作区失败'));
     }
-  }, [dispatch, fileSettings.hidePatterns, t]);
+  }, [dispatch, fileSettings.hidePatterns, state.workspacePath, t]);
 
   const focusWorkspaceOnFile = useCallback(async (filePath: string) => {
     if (state.workspacePath && isPathWithinDirectory(filePath, state.workspacePath)) {

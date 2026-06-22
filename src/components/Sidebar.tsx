@@ -9,7 +9,8 @@ import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent as ReactPoi
 import { message } from 'antd';
 import { ensureDir, pathExists, rename, remove, revealInFileManager, writeTextFile } from '../utils/fs';
 import { buildHidePatterns, readFirstLevel } from '../utils/workspace';
-import type { FileNode, RecentFile } from '../types';
+import { openWorkspace } from '../utils/openWorkspace';
+import type { FileNode, RecentFile, RecentWorkspace } from '../types';
 import { getLocaleText, normalizeAppLanguage } from '../i18n';
 import { OutlineContent } from './Outline';
 import { searchWorkspaceFiles, type FileSearchResult } from '../utils/fileSearch';
@@ -521,6 +522,20 @@ export default function Sidebar() {
       unsupportedFileContent: (extension) => `# ${node.name}\n\n${text.sidebar.unsupportedFile(extension)}\n`,
     });
   }, [dispatch, text.sidebar]);
+
+  const handleOpenRecentWorkspace = useCallback(async (workspace: RecentWorkspace) => {
+    try {
+      await openWorkspace(dispatch, workspace.path, {
+        currentWorkspacePath: state.workspacePath,
+        hidePatterns: files.hidePatterns,
+        untitledLabel: text.sidebar.newFileDefaultName.replace(/\.\w+$/, ''),
+      });
+    } catch (error) {
+      console.error('Failed to open recent workspace:', error);
+      dispatch({ type: 'REMOVE_RECENT_WORKSPACE', payload: workspace.path });
+      message.error(text.sidebar.openWorkspaceFailed);
+    }
+  }, [dispatch, files.hidePatterns, state.workspacePath, text.sidebar]);
 
   const nextAvailableFolderName = useCallback(async (parentPath: string) => {
     const baseName = text.sidebar.newFolderDefaultName;
@@ -1208,7 +1223,7 @@ export default function Sidebar() {
             className={`sidebar-tab ${state.sidebarActiveTab === 'recent' ? 'active' : ''}`}
             onClick={() => dispatch({ type: 'SET_SIDEBAR_TAB', payload: 'recent' })}
           >
-            {text.sidebar.recentFiles}
+            {text.sidebar.recentItems}
           </button>
           {showOutlineTab && (
             <button
@@ -1322,11 +1337,18 @@ export default function Sidebar() {
           )}
 
           {state.sidebarActiveTab === 'recent' && (
-            <RecentFiles recentFiles={state.recentFiles} language={appLanguage} text={text} openFile={(rf) => (
-              openRecentFileInEditor(dispatch, rf, {
-                unsupportedFileContent: (extension) => `# ${rf.name}\n\n${text.sidebar.unsupportedFile(extension)}\n`,
-              })
-            )} />
+            <RecentItems
+              recentWorkspaces={state.recentWorkspaces}
+              recentFiles={state.recentFiles}
+              language={appLanguage}
+              text={text}
+              openWorkspace={handleOpenRecentWorkspace}
+              openFile={(rf) => (
+                openRecentFileInEditor(dispatch, rf, {
+                  unsupportedFileContent: (extension) => `# ${rf.name}\n\n${text.sidebar.unsupportedFile(extension)}\n`,
+                })
+              )}
+            />
           )}
         </div>
 
@@ -1781,40 +1803,65 @@ function FileSearchResults({
   );
 }
 
-function RecentFiles({
+function RecentItems({
+  recentWorkspaces,
   recentFiles,
   language,
   text,
+  openWorkspace,
   openFile,
 }: {
+  recentWorkspaces: RecentWorkspace[];
   recentFiles: RecentFile[];
   language: string;
   text: ReturnType<typeof getLocaleText>;
+  openWorkspace: (workspace: RecentWorkspace) => void | Promise<void>;
   openFile: (rf: RecentFile) => void | Promise<void>;
 }) {
-  if (recentFiles.length === 0) {
+  if (recentWorkspaces.length === 0 && recentFiles.length === 0) {
     return (
       <div style={{ padding: '20px 16px', textAlign: 'center' }}>
-        <File size={32} style={{ opacity: 0.3, margin: '0 auto 12px' }} />
+        <FolderOpen size={32} style={{ opacity: 0.3, margin: '0 auto 12px' }} />
         <p style={{ color: 'var(--text-tertiary)', fontSize: '12px' }}>
-          {text.sidebar.noRecentFiles}
+          {text.sidebar.noRecentItems}
         </p>
       </div>
     );
   }
 
   return (
-    <div>
-      {recentFiles.map(rf => (
-        <div key={rf.path} className="recent-file-item" onClick={() => openFile(rf)}>
-          <File size={14} style={{ opacity: 0.5, flexShrink: 0 }} />
-          <div className="recent-file-info">
-            <div className="recent-file-name">{rf.name}</div>
-            <div className="recent-file-path">{rf.path}</div>
-          </div>
-          <span className="recent-file-time">{formatTime(rf.lastOpened, language, text)}</span>
-        </div>
-      ))}
+    <div className="recent-list">
+      {recentWorkspaces.length > 0 && (
+        <>
+          <div className="recent-section-title">{text.sidebar.recentWorkspaces}</div>
+          {recentWorkspaces.map(workspace => (
+            <div key={workspace.path} className="recent-file-item" onClick={() => openWorkspace(workspace)}>
+              <FolderOpen size={14} style={{ opacity: 0.5, flexShrink: 0 }} />
+              <div className="recent-file-info">
+                <div className="recent-file-name">{workspace.name}</div>
+                <div className="recent-file-path">{workspace.path}</div>
+              </div>
+              <span className="recent-file-time">{formatTime(workspace.lastOpened, language, text)}</span>
+            </div>
+          ))}
+        </>
+      )}
+
+      {recentFiles.length > 0 && (
+        <>
+          <div className="recent-section-title">{text.sidebar.recentFiles}</div>
+          {recentFiles.map(rf => (
+            <div key={rf.path} className="recent-file-item" onClick={() => openFile(rf)}>
+              <File size={14} style={{ opacity: 0.5, flexShrink: 0 }} />
+              <div className="recent-file-info">
+                <div className="recent-file-name">{rf.name}</div>
+                <div className="recent-file-path">{rf.path}</div>
+              </div>
+              <span className="recent-file-time">{formatTime(rf.lastOpened, language, text)}</span>
+            </div>
+          ))}
+        </>
+      )}
     </div>
   );
 }
