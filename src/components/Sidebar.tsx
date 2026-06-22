@@ -3,7 +3,7 @@ import { useSettingsStore } from '../store';
 import { LogicalPosition } from '@tauri-apps/api/dpi';
 import { Menu, type MenuOptions } from '@tauri-apps/api/menu';
 import { ask, open } from '@tauri-apps/plugin-dialog';
-import { FolderOpen, Folder, File, ChevronRight, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react';
+import { FolderOpen, Folder, File, ChevronRight, LocateFixed, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { message } from 'antd';
@@ -15,6 +15,7 @@ import { OutlineContent } from './Outline';
 import { searchWorkspaceFiles, type FileSearchResult } from '../utils/fileSearch';
 import { initialContentForFile, openFileInEditor, openRecentFileInEditor } from '../utils/openFileInEditor';
 import { setWorkspaceTreeDragging } from '../utils/dragState';
+import IconTooltip from './IconTooltip';
 
 const SIDEBAR_MIN_WIDTH = 180;
 const SIDEBAR_MAX_WIDTH = 420;
@@ -913,17 +914,21 @@ export default function Sidebar() {
     };
 
     if (item) {
+      const itemCreateParentPath = item.type === 'folder'
+        ? item.path
+        : workspacePath && samePath(parentPathOf(item.path), workspacePath)
+          ? null
+          : parentPathOf(item.path);
+
       items.push(
         { text: text.contextMenu.open, action: runContextAction(() => handleOpenContextItem(item)) },
         { text: text.contextMenu.rename, action: runContextAction(() => handleRename(item)) },
       );
 
-      if (item.type === 'folder') {
-        items.push(
-          { text: text.contextMenu.newFolder, action: runContextAction(() => handleCreateFolderStart(item.path)) },
-          { text: text.contextMenu.newFile, action: runContextAction(() => handleCreateFileStart(item.path)) },
-        );
-      }
+      items.push(
+        { text: text.contextMenu.newFolder, action: runContextAction(() => handleCreateFolderStart(itemCreateParentPath)) },
+        { text: text.contextMenu.newFile, action: runContextAction(() => handleCreateFileStart(itemCreateParentPath)) },
+      );
 
       items.push({ text: text.contextMenu.moveToFolder, action: runContextAction(() => handleMoveToDirectory(item)) });
 
@@ -1110,6 +1115,39 @@ export default function Sidebar() {
     };
   }, [clearTreePointerDrag]);
 
+  const revealWorkspaceFileInTree = useCallback(async (filePath: string, cancelled?: () => boolean) => {
+    const workspacePath = workspacePathRef.current;
+    if (!workspacePath || !isPathWithinWorkspace(filePath, workspacePath)) return;
+
+    const nextExpanded = new Set(expandedRef.current);
+    let expandedChanged = false;
+    for (const folderPath of ancestorFoldersForFile(filePath, workspacePath)) {
+      if (!nextExpanded.has(folderPath)) {
+        nextExpanded.add(folderPath);
+        expandedChanged = true;
+      }
+    }
+
+    pendingRevealPathRef.current = filePath;
+
+    if (expandedChanged || !findNode(treeRef.current, filePath)) {
+      setExpandedFolders(nextExpanded);
+      await refreshWorkspaceTree(nextExpanded);
+      return;
+    }
+
+    if (!cancelled?.() && state.sidebarActiveTab === 'workspace') {
+      pendingRevealPathRef.current = null;
+      scrollActiveTreeItemIntoView();
+    }
+  }, [refreshWorkspaceTree, scrollActiveTreeItemIntoView, state.sidebarActiveTab]);
+
+  const handleRevealActiveFile = useCallback(() => {
+    if (!activeWorkspaceFilePath) return;
+    dispatch({ type: 'SET_SIDEBAR_TAB', payload: 'workspace' });
+    void revealWorkspaceFileInTree(activeWorkspaceFilePath);
+  }, [activeWorkspaceFilePath, dispatch, revealWorkspaceFileInTree]);
+
   useEffect(() => {
     if (!activeWorkspaceFilePath) {
       pendingRevealPathRef.current = null;
@@ -1119,30 +1157,8 @@ export default function Sidebar() {
     let cancelled = false;
 
     const revealActiveFile = async () => {
-      const workspacePath = workspacePathRef.current;
-      if (!workspacePath || !isPathWithinWorkspace(activeWorkspaceFilePath, workspacePath)) return;
       if (state.sidebarActiveTab !== 'workspace') return;
-
-      const nextExpanded = new Set(expandedRef.current);
-      let expandedChanged = false;
-      for (const folderPath of ancestorFoldersForFile(activeWorkspaceFilePath, workspacePath)) {
-        if (!nextExpanded.has(folderPath)) {
-          nextExpanded.add(folderPath);
-          expandedChanged = true;
-        }
-      }
-
-      pendingRevealPathRef.current = activeWorkspaceFilePath;
-
-      if (expandedChanged || !findNode(treeRef.current, activeWorkspaceFilePath)) {
-        setExpandedFolders(nextExpanded);
-        await refreshWorkspaceTree(nextExpanded);
-        return;
-      }
-
-      if (!cancelled) {
-        scrollActiveTreeItemIntoView();
-      }
+      await revealWorkspaceFileInTree(activeWorkspaceFilePath, () => cancelled);
     };
 
     void revealActiveFile();
@@ -1150,7 +1166,7 @@ export default function Sidebar() {
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceFilePath, refreshWorkspaceTree, scrollActiveTreeItemIntoView, state.sidebarActiveTab]);
+  }, [activeWorkspaceFilePath, revealWorkspaceFileInTree, state.sidebarActiveTab]);
 
   useEffect(() => {
     const pendingPath = pendingRevealPathRef.current;
@@ -1163,14 +1179,15 @@ export default function Sidebar() {
 
   if (!state.sidebarVisible) {
     return (
-      <button
-        className="side-panel-toggle workspace-panel-toggle"
-        onClick={() => setSidebarVisible(true)}
-        title={text.sidebar.showWorkspace}
-        aria-label={text.sidebar.showWorkspace}
-      >
-        <PanelLeftOpen size={14} />
-      </button>
+      <IconTooltip title={text.sidebar.showWorkspace} placement="right" className="side-panel-tooltip-trigger">
+        <button
+          className="side-panel-toggle workspace-panel-toggle"
+          onClick={() => setSidebarVisible(true)}
+          aria-label={text.sidebar.showWorkspace}
+        >
+          <PanelLeftOpen size={14} />
+        </button>
+      </IconTooltip>
     );
   }
 
@@ -1202,14 +1219,25 @@ export default function Sidebar() {
             </button>
           )}
           <div className="sidebar-tab-spacer" />
-          <button
-            className="panel-collapse-btn"
-            onClick={() => setSidebarVisible(false)}
-            title={text.sidebar.hideWorkspace}
-            aria-label={text.sidebar.hideWorkspace}
-          >
-            <PanelLeftClose size={14} />
-          </button>
+          <IconTooltip title={text.sidebar.revealActiveFile} placement="bottomRight">
+            <button
+              className="panel-collapse-btn"
+              onClick={handleRevealActiveFile}
+              disabled={!activeWorkspaceFilePath}
+              aria-label={text.sidebar.revealActiveFile}
+            >
+              <LocateFixed size={14} />
+            </button>
+          </IconTooltip>
+          <IconTooltip title={text.sidebar.hideWorkspace} placement="bottomRight">
+            <button
+              className="panel-collapse-btn"
+              onClick={() => setSidebarVisible(false)}
+              aria-label={text.sidebar.hideWorkspace}
+            >
+              <PanelLeftClose size={14} />
+            </button>
+          </IconTooltip>
         </div>
 
         <div ref={sidebarContentRef} className="sidebar-content">

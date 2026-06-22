@@ -33,6 +33,7 @@ import { basename, dirname, formatMarkdownImageUrl, markdownImagePathForDocument
 import { renderMarkdownForExport } from '../utils/exportMarkdown';
 import { confirmCloseTabs } from '../utils/unsavedTabs';
 import PdfExportDialog, { type PdfTemplateDraft } from './PdfExportDialog';
+import IconTooltip from './IconTooltip';
 import {
   availableTextFilePath,
   decodeDialogPath,
@@ -1264,26 +1265,35 @@ ${htmlBody}
       <div className="toolbar">
         {/* Left section */}
         <div className="toolbar-section left">
-          <button className="toolbar-btn" onClick={handleNewFile} data-tooltip={t('新建文件')} aria-label={t('新建文件')}>
-            <FilePlus size={16} />
-          </button>
-          <button className="toolbar-btn" onClick={handleOpenFile} data-tooltip={t('打开文件')} aria-label={t('打开文件')}>
-            <FileText size={16} />
-          </button>
-          <button className="toolbar-btn" onClick={handleOpenFolder} data-tooltip={t('打开文件夹')} aria-label={t('打开文件夹')}>
-            <FolderOpen size={16} />
-          </button>
-          <button className="toolbar-btn" onClick={handleSave} data-tooltip={t('保存')} aria-label={t('保存')}>
-            <Save size={16} />
-          </button>
-          <button
-            className={`toolbar-btn ${state.searchOpen ? 'active' : ''}`}
-            onClick={() => dispatch({ type: 'OPEN_SEARCH' })}
-            data-tooltip={t('搜索')}
-            aria-label={t('搜索')}
-          >
-            <Search size={16} />
-          </button>
+          <IconTooltip title={t('新建文件')} placement="bottomLeft">
+            <button className="toolbar-btn" onClick={handleNewFile} aria-label={t('新建文件')}>
+              <FilePlus size={16} />
+            </button>
+          </IconTooltip>
+          <IconTooltip title={t('打开文件')} placement="bottomLeft">
+            <button className="toolbar-btn" onClick={handleOpenFile} aria-label={t('打开文件')}>
+              <FileText size={16} />
+            </button>
+          </IconTooltip>
+          <IconTooltip title={t('打开文件夹')} placement="bottomLeft">
+            <button className="toolbar-btn" onClick={handleOpenFolder} aria-label={t('打开文件夹')}>
+              <FolderOpen size={16} />
+            </button>
+          </IconTooltip>
+          <IconTooltip title={t('保存')} placement="bottomLeft">
+            <button className="toolbar-btn" onClick={handleSave} aria-label={t('保存')}>
+              <Save size={16} />
+            </button>
+          </IconTooltip>
+          <IconTooltip title={t('搜索')} placement="bottomLeft">
+            <button
+              className={`toolbar-btn ${state.searchOpen ? 'active' : ''}`}
+              onClick={() => dispatch({ type: 'OPEN_SEARCH' })}
+              aria-label={t('搜索')}
+            >
+              <Search size={16} />
+            </button>
+          </IconTooltip>
         </div>
 
         <div className="toolbar-divider" />
@@ -1291,45 +1301,49 @@ ${htmlBody}
         {/* Center section - View mode */}
         <div className="toolbar-section center">
           <div className="view-toggle">
-            <button
-              className={`view-toggle-btn ${effectiveViewMode === 'block' ? 'active' : ''}`}
-              onClick={() => setDocumentViewMode('block')}
-              disabled={!markdownViewModesAvailable}
-              data-tooltip={markdownViewModesAvailable ? t('块编辑模式') : markdownOnlyViewTooltip}
-              aria-label={t('块编辑模式')}
-            >
-              <ScrollText size={14} />
-              <span>{t('块编辑')}</span>
-            </button>
-            <button
-              className={`view-toggle-btn ${effectiveViewMode === 'edit' ? 'active' : ''}`}
-              onClick={() => setDocumentViewMode('edit')}
-              data-tooltip={sourceModeTooltip}
-              aria-label={sourceModeTooltip}
-            >
-              <Edit3 size={14} />
-              <span>{sourceModeLabel}</span>
-            </button>
-            <button
-              className={`view-toggle-btn ${effectiveViewMode === 'preview' ? 'active' : ''}`}
-              onClick={() => setDocumentViewMode('preview')}
-              disabled={!markdownViewModesAvailable}
-              data-tooltip={markdownViewModesAvailable ? t('预览模式') : markdownOnlyViewTooltip}
-              aria-label={t('预览模式')}
-            >
-              <Eye size={14} />
-              <span>{t('预览')}</span>
-            </button>
-            <button
-              className={`view-toggle-btn ${effectiveViewMode === 'split' ? 'active' : ''}`}
-              onClick={() => setDocumentViewMode('split')}
-              disabled={!markdownViewModesAvailable}
-              data-tooltip={markdownViewModesAvailable ? t('双栏模式') : markdownOnlyViewTooltip}
-              aria-label={t('双栏模式')}
-            >
-              <Columns size={14} />
-              <span>{t('双栏')}</span>
-            </button>
+            <IconTooltip title={markdownViewModesAvailable ? t('块编辑模式') : markdownOnlyViewTooltip}>
+              <button
+                className={`view-toggle-btn ${effectiveViewMode === 'block' ? 'active' : ''}`}
+                onClick={() => setDocumentViewMode('block')}
+                disabled={!markdownViewModesAvailable}
+                aria-label={t('块编辑模式')}
+              >
+                <ScrollText size={14} />
+                <span>{t('块编辑')}</span>
+              </button>
+            </IconTooltip>
+            <IconTooltip title={sourceModeTooltip}>
+              <button
+                className={`view-toggle-btn ${effectiveViewMode === 'edit' ? 'active' : ''}`}
+                onClick={() => setDocumentViewMode('edit')}
+                aria-label={sourceModeTooltip}
+              >
+                <Edit3 size={14} />
+                <span>{sourceModeLabel}</span>
+              </button>
+            </IconTooltip>
+            <IconTooltip title={markdownViewModesAvailable ? t('预览模式') : markdownOnlyViewTooltip}>
+              <button
+                className={`view-toggle-btn ${effectiveViewMode === 'preview' ? 'active' : ''}`}
+                onClick={() => setDocumentViewMode('preview')}
+                disabled={!markdownViewModesAvailable}
+                aria-label={t('预览模式')}
+              >
+                <Eye size={14} />
+                <span>{t('预览')}</span>
+              </button>
+            </IconTooltip>
+            <IconTooltip title={markdownViewModesAvailable ? t('双栏模式') : markdownOnlyViewTooltip}>
+              <button
+                className={`view-toggle-btn ${effectiveViewMode === 'split' ? 'active' : ''}`}
+                onClick={() => setDocumentViewMode('split')}
+                disabled={!markdownViewModesAvailable}
+                aria-label={t('双栏模式')}
+              >
+                <Columns size={14} />
+                <span>{t('双栏')}</span>
+              </button>
+            </IconTooltip>
           </div>
         </div>
 
@@ -1338,60 +1352,66 @@ ${htmlBody}
         {/* Right section */}
         <div className="toolbar-section right">
           <div className="theme-toggle">
-            <button
-              className={`theme-toggle-btn ${state.theme === 'light' ? 'active' : ''}`}
-              onClick={() => setThemeMode('light')}
-              data-tooltip={t('浅色主题')}
-              aria-label={t('浅色主题')}
-            >
-              <Sun size={13} />
-            </button>
-            <button
-              className={`theme-toggle-btn ${state.theme === 'dark' ? 'active' : ''}`}
-              onClick={() => setThemeMode('dark')}
-              data-tooltip={t('深色主题')}
-              aria-label={t('深色主题')}
-            >
-              <Moon size={13} />
-            </button>
-            <button
-              className={`theme-toggle-btn ${state.theme === 'system' ? 'active' : ''}`}
-              onClick={() => setThemeMode('system')}
-              data-tooltip={t('跟随系统')}
-              aria-label={t('跟随系统')}
-            >
-              <Monitor size={13} />
-            </button>
+            <IconTooltip title={t('浅色主题')} placement="bottomRight">
+              <button
+                className={`theme-toggle-btn ${state.theme === 'light' ? 'active' : ''}`}
+                onClick={() => setThemeMode('light')}
+                aria-label={t('浅色主题')}
+              >
+                <Sun size={13} />
+              </button>
+            </IconTooltip>
+            <IconTooltip title={t('深色主题')} placement="bottomRight">
+              <button
+                className={`theme-toggle-btn ${state.theme === 'dark' ? 'active' : ''}`}
+                onClick={() => setThemeMode('dark')}
+                aria-label={t('深色主题')}
+              >
+                <Moon size={13} />
+              </button>
+            </IconTooltip>
+            <IconTooltip title={t('跟随系统')} placement="bottomRight">
+              <button
+                className={`theme-toggle-btn ${state.theme === 'system' ? 'active' : ''}`}
+                onClick={() => setThemeMode('system')}
+                aria-label={t('跟随系统')}
+              >
+                <Monitor size={13} />
+              </button>
+            </IconTooltip>
           </div>
 
           <div style={{ width: 4 }} />
 
-          <button
-            className={`toolbar-btn ${state.editorSettings.syncScroll ? 'active' : ''}`}
-            onClick={toggleSyncScroll}
-            data-tooltip={t('同屏滚动')}
-            aria-label={t('同屏滚动')}
-          >
-            <ScrollText size={16} />
-          </button>
+          <IconTooltip title={t('同屏滚动')} placement="bottomRight">
+            <button
+              className={`toolbar-btn ${state.editorSettings.syncScroll ? 'active' : ''}`}
+              onClick={toggleSyncScroll}
+              aria-label={t('同屏滚动')}
+            >
+              <ScrollText size={16} />
+            </button>
+          </IconTooltip>
 
-          <button
-            className={`toolbar-btn ${state.terminalOpen ? 'active' : ''}`}
-            onClick={handleOpenTerminal}
-            data-tooltip={t('打开终端')}
-            aria-label={t('打开终端')}
-          >
-            <SquareTerminal size={16} />
-          </button>
+          <IconTooltip title={t('打开终端')} placement="bottomRight">
+            <button
+              className={`toolbar-btn ${state.terminalOpen ? 'active' : ''}`}
+              onClick={handleOpenTerminal}
+              aria-label={t('打开终端')}
+            >
+              <SquareTerminal size={16} />
+            </button>
+          </IconTooltip>
 
-          <button
-            className="toolbar-btn"
-            onClick={() => navigate('/settings/general')}
-            data-tooltip={t('设置')}
-            aria-label={t('设置')}
-          >
-            <Settings size={16} />
-          </button>
+          <IconTooltip title={t('设置')} placement="bottomRight">
+            <button
+              className="toolbar-btn"
+              onClick={() => navigate('/settings/general')}
+              aria-label={t('设置')}
+            >
+              <Settings size={16} />
+            </button>
+          </IconTooltip>
 
           {availableUpdate && (
             <button

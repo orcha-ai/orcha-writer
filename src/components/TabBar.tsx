@@ -1,23 +1,78 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LogicalPosition } from '@tauri-apps/api/dpi';
 import { Menu, type MenuOptions } from '@tauri-apps/api/menu';
 import { useApp } from '../AppContext';
 import { useSettingsStore } from '../store';
 import { X } from 'lucide-react';
-import { rename } from '../utils/fs';
-import { translateText } from '../i18n';
+import { message } from 'antd';
+import { rename, revealInFileManager } from '../utils/fs';
+import { getLocaleText, normalizeAppLanguage, translateText } from '../i18n';
 import { confirmCloseTabs } from '../utils/unsavedTabs';
+import type { TabFile } from '../types';
 
 function renamedPath(path: string, nextName: string): string {
   const separatorIndex = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
   return separatorIndex >= 0 ? `${path.slice(0, separatorIndex + 1)}${nextName}` : nextName;
 }
 
+function normalizePathForCompare(path: string): string {
+  return path.replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function relativeWorkspacePath(path: string, workspacePath: string): string {
+  const normalizedPath = normalizePathForCompare(path);
+  const normalizedWorkspace = normalizePathForCompare(workspacePath);
+  if (normalizedPath === normalizedWorkspace) return '';
+  if (normalizedPath.startsWith(`${normalizedWorkspace}/`)) {
+    return normalizedPath.slice(normalizedWorkspace.length + 1);
+  }
+  return normalizedPath;
+}
+
+function isPathWithinWorkspace(path: string, workspacePath: string): boolean {
+  const normalizedPath = normalizePathForCompare(path);
+  const normalizedWorkspace = normalizePathForCompare(workspacePath);
+  return normalizedPath === normalizedWorkspace || normalizedPath.startsWith(`${normalizedWorkspace}/`);
+}
+
+function systemFileManagerName(language: string): string {
+  const platform = `${navigator.platform || ''} ${navigator.userAgent || ''}`.toLowerCase();
+  const isChinese = language.toLowerCase().startsWith('zh');
+  if (platform.includes('mac')) return isChinese ? '访达' : 'Finder';
+  if (platform.includes('win')) return isChinese ? '文件资源管理器' : 'File Explorer';
+  return isChinese ? '文件管理器' : 'File Manager';
+}
+
+async function writeClipboardText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('copy failed');
+}
+
+function hasUsableFilePath(tab: TabFile): boolean {
+  return !tab.isDraft && /[/\\]/.test(tab.path);
+}
+
 export default function TabBar() {
   const { state, dispatch } = useApp();
   const appearance = useSettingsStore(s => s.appearance);
   const language = useSettingsStore(s => s.general.language);
+  const text = getLocaleText(language);
+  const appLanguage = normalizeAppLanguage(language);
   const t = useCallback((value: string) => translateText(language, value), [language]);
+  const fileManagerName = useMemo(() => systemFileManagerName(appLanguage), [appLanguage]);
   const tabBarRef = useRef<HTMLDivElement | null>(null);
   const activeTabRef = useRef<HTMLDivElement | null>(null);
   const renameInFlightRef = useRef(false);
@@ -114,13 +169,58 @@ export default function TabBar() {
     dispatch({ type: 'CLOSE_ALL_TABS' });
   }, [dispatch, language, state.tabs]);
 
+  const copyTabPath = useCallback(async (path: string, relative: boolean) => {
+    const value = relative && state.workspacePath ? relativeWorkspacePath(path, state.workspacePath) : path;
+    try {
+      await writeClipboardText(value);
+      message.success(relative ? text.sidebar.relativePathCopied : text.sidebar.pathCopied);
+    } catch (error) {
+      console.error('Failed to copy tab path:', error);
+      message.error(text.sidebar.copyPathFailed);
+    }
+  }, [state.workspacePath, text.sidebar]);
+
+  const revealTabInFileManager = useCallback(async (path: string) => {
+    try {
+      await revealInFileManager(path);
+    } catch (error) {
+      console.error('Failed to reveal tab path in file manager:', error);
+      message.error(text.sidebar.revealInFileManagerFailed(fileManagerName));
+    }
+  }, [fileManagerName, text.sidebar]);
+
   const handleTabContextMenu = useCallback((event: React.MouseEvent<HTMLDivElement>, tabId: string) => {
     event.preventDefault();
     event.stopPropagation();
     setRenamingTabId(null);
     setRenameValue('');
 
+    const tab = state.tabs.find(item => item.id === tabId);
+    if (!tab) return;
+
+    const canUsePath = hasUsableFilePath(tab);
+    const canCopyRelativePath = canUsePath
+      && Boolean(state.workspacePath && isPathWithinWorkspace(tab.path, state.workspacePath));
+
     const items: NonNullable<MenuOptions['items']> = [
+      { text: text.contextMenu.rename, action: () => beginRename(tab.id, tab.name) },
+      { item: 'Separator' },
+      {
+        text: text.contextMenu.copyPath,
+        enabled: canUsePath,
+        action: () => { void copyTabPath(tab.path, false); },
+      },
+      {
+        text: text.contextMenu.copyRelativePath,
+        enabled: canCopyRelativePath,
+        action: () => { void copyTabPath(tab.path, true); },
+      },
+      {
+        text: text.contextMenu.showInFileManager(fileManagerName),
+        enabled: canUsePath,
+        action: () => { void revealTabInFileManager(tab.path); },
+      },
+      { item: 'Separator' },
       { text: t('关闭'), action: () => { void closeTab(tabId); } },
       {
         text: t('关闭其他标签'),
@@ -136,7 +236,19 @@ export default function TabBar() {
       .catch(error => {
         console.error('Failed to open tab context menu:', error);
       });
-  }, [closeAllTabs, closeOtherTabs, closeTab, state.tabs.length, t]);
+  }, [
+    beginRename,
+    closeAllTabs,
+    closeOtherTabs,
+    closeTab,
+    copyTabPath,
+    fileManagerName,
+    revealTabInFileManager,
+    state.tabs,
+    state.workspacePath,
+    t,
+    text.contextMenu,
+  ]);
 
   const handleCloseTab = useCallback((tabId: string) => {
     void closeTab(tabId);
