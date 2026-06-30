@@ -30,14 +30,11 @@ export const DEFAULT_HIDDEN_PATTERNS = [
   '.cache',
 ];
 
-const VISIBLE_DOTFILES = ['.gitkeep', '.gitignore', '.env', '.env.local', '.editorconfig'];
-
 export function buildHidePatterns(patterns: string[] = []): string[] {
   return [...new Set([...DEFAULT_HIDDEN_PATTERNS, ...patterns.filter(Boolean)])];
 }
 
 export function isHidden(name: string, patterns: string[] = DEFAULT_HIDDEN_PATTERNS): boolean {
-  if (name.startsWith('.') && !VISIBLE_DOTFILES.includes(name)) return true;
   return patterns.includes(name);
 }
 
