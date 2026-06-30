@@ -1391,7 +1391,7 @@ ${htmlBody}
               disabled={checkingUpdate || updateFlowRunning}
               aria-label={t('更新到 {version}', { version: availableUpdate.latestVersion })}
             >
-              {t('更新')}
+              更新
             </button>
           )}
 
