@@ -7,6 +7,15 @@ export type PdfTemplateVariable =
   | 'time'
   | 'pageNumber'
   | 'totalPages';
+export type PdfTemplateAlignment = 'left' | 'center' | 'right';
+export type PdfTemplatePlacement = 'header' | 'footer';
+
+export interface PdfTemplateStyle {
+  fontSize: number;
+  color: string;
+  align: PdfTemplateAlignment;
+  divider: boolean;
+}
 
 export interface PdfTemplateValues {
   title: string;
@@ -24,9 +33,40 @@ export interface BuildPdfDocumentHtmlOptions {
   themeColor: string;
 }
 
+export function defaultPdfTemplateStyle(): PdfTemplateStyle {
+  return {
+    fontSize: 10,
+    color: '#666666',
+    align: 'left',
+    divider: false,
+  };
+}
+
 function normalizeThemeColor(color: string | undefined): string {
   const value = color?.trim();
   return value && /^#[0-9a-f]{6}$/i.test(value) ? value : '#0A84FF';
+}
+
+function normalizePdfTemplateColor(color: string | undefined): string {
+  const value = color?.trim();
+  return value && /^#[0-9a-f]{6}$/i.test(value) ? value : '#666666';
+}
+
+function normalizePdfTemplateStyle(style?: Partial<PdfTemplateStyle>): PdfTemplateStyle {
+  const defaults = defaultPdfTemplateStyle();
+  const parsedFontSize = Number(style?.fontSize);
+  const fontSize = Number.isFinite(parsedFontSize)
+    ? Math.min(18, Math.max(8, parsedFontSize))
+    : defaults.fontSize;
+  const align: PdfTemplateAlignment =
+    style?.align === 'center' || style?.align === 'right' ? style.align : defaults.align;
+
+  return {
+    fontSize,
+    color: normalizePdfTemplateColor(style?.color),
+    align,
+    divider: Boolean(style?.divider),
+  };
 }
 
 function stripFileExtension(fileName: string): string {
@@ -160,15 +200,23 @@ export function buildChromePdfTemplate(
   template: string,
   documentName: string,
   locale: string,
+  style?: Partial<PdfTemplateStyle>,
+  placement: PdfTemplatePlacement = 'header',
 ): string {
   if (!template.trim()) return '';
 
   const values = createPdfTemplateValues(documentName, locale, '', '');
+  const normalizedStyle = normalizePdfTemplateStyle(style);
+  const dividerStyle = normalizedStyle.divider
+    ? placement === 'footer'
+      ? 'border-top:0.5px solid rgba(0,0,0,0.18);padding-top:2mm;'
+      : 'border-bottom:0.5px solid rgba(0,0,0,0.18);padding-bottom:2mm;'
+    : '';
   const trustedHtmlValues: Partial<Record<PdfTemplateVariable, string>> = {
     pageNumber: '<span class="pageNumber"></span>',
     totalPages: '<span class="totalPages"></span>',
   };
   const content = renderPdfTemplateHtml(template, values, trustedHtmlValues);
 
-  return `<div style="box-sizing:border-box;width:100%;padding:0 8mm;font-family:'PingFang SC','Hiragino Sans GB','Microsoft YaHei','Noto Sans CJK SC','Noto Sans SC',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;font-size:10px;line-height:1.35;color:#666;white-space:pre-wrap;">${content}</div>`;
+  return `<div style="box-sizing:border-box;width:100%;padding:0 8mm;font-family:'PingFang SC','Hiragino Sans GB','Microsoft YaHei','Noto Sans CJK SC','Noto Sans SC',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;font-size:${normalizedStyle.fontSize}px;line-height:1.35;color:${normalizedStyle.color};white-space:pre-wrap;text-align:${normalizedStyle.align};${dividerStyle}">${content}</div>`;
 }

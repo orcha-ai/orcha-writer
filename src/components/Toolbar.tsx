@@ -494,7 +494,7 @@ ${htmlBody}
     setPdfExportDialogOpen(true);
   }, [activeTab, t]);
 
-  const handleConfirmExportPDF = useCallback(async ({ headerTemplate, footerTemplate }: PdfTemplateDraft) => {
+  const handleConfirmExportPDF = useCallback(async ({ headerTemplate, footerTemplate, headerStyle, footerStyle }: PdfTemplateDraft) => {
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
     if (!activeTab) return;
     setPdfExporting(true);
@@ -514,8 +514,8 @@ ${htmlBody}
       });
       const pdfOptions = {
         page: exportSettings.page,
-        headerTemplate: buildChromePdfTemplate(headerTemplate, activeTab.name, locale),
-        footerTemplate: buildChromePdfTemplate(footerTemplate, activeTab.name, locale),
+        headerTemplate: buildChromePdfTemplate(headerTemplate, activeTab.name, locale, headerStyle, 'header'),
+        footerTemplate: buildChromePdfTemplate(footerTemplate, activeTab.name, locale, footerStyle, 'footer'),
       };
       // Detect available engines
       const engines: Array<{ engine: string; available: boolean; path?: string }> = await invoke('detect_pdf_engines');

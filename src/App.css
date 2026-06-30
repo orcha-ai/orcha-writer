@@ -169,9 +169,9 @@
 /* ===== PDF Export Dialog ===== */
 .pdf-export-dialog-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 220px;
+  grid-template-columns: minmax(0, 1fr) 210px;
   gap: 16px;
-  min-height: 360px;
+  min-height: 430px;
 }
 
 .pdf-template-editor {
@@ -189,14 +189,6 @@
   white-space: nowrap;
 }
 
-.pdf-template-field {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.pdf-template-label,
 .pdf-template-preview-title,
 .pdf-template-variables-title {
   color: var(--text-primary);
@@ -204,10 +196,98 @@
   font-weight: 600;
 }
 
-.pdf-template-field textarea {
+.pdf-template-section {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  padding: 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.pdf-template-section.active {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border-secondary));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.pdf-template-section-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pdf-template-section-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.pdf-template-section-hint {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.pdf-template-section textarea {
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.pdf-template-style-toolbar {
+  display: grid;
+  grid-template-columns: 96px 118px 112px 72px;
+  gap: 8px;
+  align-items: end;
+  border-top: 1px solid var(--border-secondary);
+  padding-top: 10px;
+}
+
+.pdf-template-style-control,
+.pdf-template-style-switch {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.pdf-template-style-control > span,
+.pdf-template-style-switch > span {
+  line-height: 1;
+}
+
+.pdf-template-style-control .ant-input-number,
+.pdf-template-style-control .ant-color-picker-trigger,
+.pdf-template-style-control .ant-segmented {
+  width: 100%;
+}
+
+.pdf-template-style-control-align .ant-segmented-item-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pdf-template-style-control-align svg {
+  display: block;
+}
+
+.pdf-template-style-switch {
+  align-items: flex-start;
+  justify-content: flex-end;
+}
+
+.pdf-template-style-switch-control {
+  display: inline-flex;
+  width: 100%;
+  height: 24px;
+  align-items: center;
 }
 
 .pdf-template-preview {
@@ -217,24 +297,52 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
-  padding: 12px;
+  padding: 12px 14px 14px;
 }
 
-.pdf-template-preview-row {
+.pdf-template-paper-preview {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  color: var(--text-secondary);
-  font-size: 12.5px;
+  grid-template-rows: minmax(24px, auto) 1fr minmax(24px, auto);
+  min-height: 190px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.06);
+  padding: 14px 16px;
 }
 
-.pdf-template-preview-row strong {
+.pdf-template-paper-header,
+.pdf-template-paper-footer {
   min-width: 0;
+  display: block;
+  padding: 4px 0;
   color: var(--text-primary);
   font-weight: 500;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.pdf-template-paper-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  justify-content: center;
+  padding: 18px 8%;
+}
+
+.pdf-template-paper-body span {
+  display: block;
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-tertiary) 18%, transparent);
+}
+
+.pdf-template-paper-body span:nth-child(2) {
+  width: 72%;
+}
+
+.pdf-template-paper-body span:nth-child(3) {
+  width: 54%;
 }
 
 .pdf-template-variables {
@@ -289,6 +397,14 @@
     border-top: 1px solid var(--border-secondary);
     padding-top: 14px;
     padding-left: 0;
+  }
+
+  .pdf-template-style-toolbar {
+    grid-template-columns: minmax(80px, 1fr) 118px minmax(92px, 1fr) 72px;
+  }
+
+  .pdf-template-paper-preview {
+    min-height: 160px;
   }
 }
 

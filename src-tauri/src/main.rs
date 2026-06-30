@@ -3070,9 +3070,17 @@ fn print_pdf_with_chrome_cdp(
         wait_for_document_ready(&mut client)?;
 
         let (paper_width, paper_height) = paper_size_inches(&options.page.format);
-        let header_template = options.header_template.unwrap_or_default();
-        let footer_template = options.footer_template.unwrap_or_default();
+        let mut header_template = options.header_template.unwrap_or_default();
+        let mut footer_template = options.footer_template.unwrap_or_default();
         let display_header_footer = !header_template.trim().is_empty() || !footer_template.trim().is_empty();
+        if display_header_footer {
+            if header_template.trim().is_empty() {
+                header_template = "<div></div>".to_string();
+            }
+            if footer_template.trim().is_empty() {
+                footer_template = "<div></div>".to_string();
+            }
+        }
         let print_result = client.call("Page.printToPDF", json!({
             "landscape": options.page.orientation == "landscape",
             "displayHeaderFooter": display_header_footer,
