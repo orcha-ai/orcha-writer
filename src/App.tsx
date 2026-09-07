@@ -37,8 +37,9 @@ function formatAIDocumentTimestamp(date: Date): string {
 }
 
 function scrollDocumentSurfacesToTop(): void {
+  // Preview owns its scroll reset after the new document's HTML is mounted.
   document
-    .querySelectorAll<HTMLElement>('.cm-scroller, .preview-panel, .block-document-scroll')
+    .querySelectorAll<HTMLElement>('.cm-scroller, .block-document-scroll')
     .forEach((element) => {
       element.scrollTop = 0;
       element.scrollLeft = 0;

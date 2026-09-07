@@ -6,6 +6,7 @@ import { getPreviewFileKind, isMarkdownFileName, isOpenableTextFileName } from '
 
 interface OpenFileOptions {
   unsupportedFileContent?: (extension: string) => string;
+  throwOnReadError?: boolean;
 }
 
 type OpenableFile = Pick<FileNode, 'name' | 'path'>;
@@ -52,7 +53,8 @@ export async function openFileInEditor(
     const content = await readTextFile(file.path);
     dispatch({ type: 'OPEN_TAB', payload: { id, name: file.name, path: file.path, content } });
     dispatch({ type: 'ADD_RECENT_FILE', payload: { path: file.path, name: file.name, lastOpened: Date.now() } });
-  } catch {
+  } catch (error) {
+    if (options.throwOnReadError) throw error;
     dispatch({ type: 'OPEN_TAB', payload: { id, name: file.name, path: file.path, content: initialContentForFile(file.name) } });
   }
 }

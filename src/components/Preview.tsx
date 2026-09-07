@@ -3,6 +3,7 @@ import { useApp } from '../AppContext';
 import { useSettingsStore } from '../store';
 import MarkdownIt from 'markdown-it';
 import hljs from 'highlight.js/lib/common';
+import { message } from 'antd';
 import { open as openPath } from '@tauri-apps/plugin-shell';
 import type Token from 'markdown-it/lib/token.mjs';
 import type { MarkdownSettings, PreviewSettings, SecuritySettings } from '../types';
@@ -11,6 +12,9 @@ import { getPreviewCodeThemeClassName } from '../codeThemes';
 import { pathExists } from '../utils/fs';
 import { effectiveViewModeForDocument, isMarkdownDocument } from '../utils/documentCapabilities';
 import { normalizeMarkdownImageSyntax, resolveMarkdownImageSource } from '../utils/markdownImages';
+import { resolveMarkdownLink, scrollToMarkdownAnchor } from '../utils/markdownLinks';
+import { openFileInEditor } from '../utils/openFileInEditor';
+import { fileNameFromPath, getPreviewFileKind, isMarkdownFileName, isOpenableTextFileName } from '../utils/savePaths';
 import { getLocaleText, normalizeAppLanguage } from '../i18n';
 import { isMermaidLanguage, nextMermaidRenderId, renderMermaidSvg, resolveMermaidTheme } from '../utils/mermaid';
 
@@ -549,7 +553,10 @@ export default function Preview() {
   const themeMode = useSettingsStore(s => s.appearance.themeMode);
   const activeTab = state.tabs.find(t => t.id === state.activeTabId);
   const previewRef = useRef<HTMLDivElement>(null);
-  const [html, setHtml] = useState('');
+  const [rendered, setRendered] = useState<{ tabId: string | null; html: string }>({ tabId: null, html: '' });
+  const { html } = rendered;
+  const [pendingAnchor, setPendingAnchor] = useState<{ path: string; fragment: string } | null>(null);
+  const scrolledTabId = useRef<string | null>(null);
   const appLanguage = normalizeAppLanguage(general.language);
   const text = getLocaleText(appLanguage);
   const effectiveViewMode = effectiveViewModeForDocument(activeTab, state.viewMode);
@@ -560,7 +567,7 @@ export default function Preview() {
     let cancelled = false;
 
     if (!activeTab || !canPreviewMarkdown || isHidden) {
-      setHtml('');
+      setRendered({ tabId: null, html: '' });
       return () => {
         cancelled = true;
       };
@@ -568,11 +575,11 @@ export default function Preview() {
 
     const raw = renderMarkdown(activeTab.content, markdown, preview, security, appLanguage, activeTab.path);
     const secured = applySecurity(raw, security, appLanguage);
-    setHtml(highlightSearch(secured, state.searchQuery));
+    setRendered({ tabId: activeTab.id, html: highlightSearch(secured, state.searchQuery) });
 
     void renderMermaidDiagramsInHtml(secured, themeMode, text.preview)
       .then(rendered => {
-        if (!cancelled) setHtml(highlightSearch(rendered, state.searchQuery));
+        if (!cancelled) setRendered({ tabId: activeTab.id, html: highlightSearch(rendered, state.searchQuery) });
       })
       .catch(error => {
         if (!cancelled) {
@@ -584,6 +591,22 @@ export default function Preview() {
       cancelled = true;
     };
   }, [activeTab, appLanguage, canPreviewMarkdown, isHidden, markdown, preview, security, state.searchQuery, text.preview, themeMode]);
+
+  // Scroll only once the active document's HTML is mounted, including after a file-link navigation.
+  useEffect(() => {
+    const root = previewRef.current;
+    if (scrolledTabId.current !== activeTab?.id) scrolledTabId.current = null;
+    if (isHidden || !root || !activeTab || rendered.tabId !== activeTab.id) return;
+    if (scrolledTabId.current !== activeTab.id) {
+      root.parentElement?.scrollTo({ top: 0, left: 0 });
+      scrolledTabId.current = activeTab.id;
+    }
+    if (pendingAnchor?.path !== activeTab.path) return;
+    if (!scrollToMarkdownAnchor(root, pendingAnchor.fragment)) {
+      message.warning(text.preview.linkAnchorMissing(pendingAnchor.fragment));
+    }
+    setPendingAnchor(null);
+  }, [activeTab, isHidden, pendingAnchor, rendered, text.preview]);
 
   // Highlight active match when searchMatchIndex changes
   useEffect(() => {
@@ -707,8 +730,50 @@ export default function Preview() {
 
       const link = (event.target as HTMLElement | null)?.closest('a');
       if (!link) return;
-      const href = link.getAttribute('href') || '';
-      if (!/^https?:\/\//i.test(href)) return;
+      const href = link.getAttribute('href');
+      if (href === null) return;
+      const target = resolveMarkdownLink(href, activeTab?.isDraft ? undefined : activeTab?.path);
+
+      if (target.kind !== 'external') {
+        event.preventDefault();
+        if (target.kind === 'invalid') {
+          message.warning(target.reason === 'missing-document-path'
+            ? text.preview.linkNeedsSavedDocument
+            : text.preview.linkOpenFailed(href));
+          return;
+        }
+        if (target.kind === 'anchor') {
+          if (!scrollToMarkdownAnchor(root, target.fragment)) {
+            message.warning(text.preview.linkAnchorMissing(target.fragment));
+          }
+          return;
+        }
+
+        const openLinkedFile = async () => {
+          const existing = state.tabs.find(tab => tab.path.replace(/\\/g, '/') === target.path);
+          const name = fileNameFromPath(target.path);
+          if (existing) {
+            dispatch({ type: 'SET_ACTIVE_TAB', payload: existing.id });
+          } else {
+            if (!await pathExists(target.path)) {
+              message.warning(text.preview.linkFileMissing(target.path));
+              return;
+            }
+            if (!isOpenableTextFileName(name) && !getPreviewFileKind(name)) {
+              await openPath(target.path);
+              return;
+            }
+            await openFileInEditor(dispatch, { name, path: target.path }, { throwOnReadError: true });
+          }
+          setPendingAnchor(target.fragment && isMarkdownFileName(name)
+            ? { path: existing?.path ?? target.path, fragment: target.fragment }
+            : null);
+        };
+        void openLinkedFile().catch(() => message.error(text.preview.linkOpenFailed(href)));
+        return;
+      }
+
+      if (!/^https?:\/\//i.test(target.href)) return;
 
       event.preventDefault();
       if (security.confirmExternalLinks && !window.confirm(text.preview.externalLinkConfirm(href))) {
@@ -752,7 +817,7 @@ export default function Preview() {
       root.removeEventListener('change', handleChange);
       images.forEach(image => image.removeEventListener('error', handleImageError));
     };
-  }, [activeTab, dispatch, editor.tabSize, html, isHidden, markdown.codeHighlight, preview.openExternalLink, security.confirmExternalLinks, text]);
+  }, [activeTab, dispatch, editor.tabSize, html, isHidden, markdown.codeHighlight, preview.openExternalLink, security.confirmExternalLinks, state.tabs, text]);
 
   const previewThemeClassName = getPreviewThemeClassName(preview.previewTheme);
   const codeThemeClassName = getPreviewCodeThemeClassName(preview.codeTheme);
