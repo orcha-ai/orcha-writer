@@ -14,13 +14,11 @@ import {
 } from '../utils/fileSearch';
 import { openFileInEditor, openRecentFileInEditor } from '../utils/openFileInEditor';
 import {
+  createDoubleKeyShortcutMatcher,
   isDoubleKeyShortcut,
-  matchesDoubleShortcutKey,
   matchesShortcut,
-  normalizeShortcutKey,
 } from '../utils/keyboardShortcuts';
 
-const DOUBLE_KEY_INTERVAL_MS = 520;
 const SEARCH_DEBOUNCE_MS = 180;
 const WORKSPACE_RESULT_LIMIT = 120;
 const RECENT_RESULT_LIMIT = 20;
@@ -56,7 +54,6 @@ export default function GlobalFileSearch() {
   const [isSearching, setIsSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const lastDoubleKeyRef = useRef<{ key: string; at: number } | null>(null);
   const globalSearchOpenRef = useRef(false);
   const hidePatterns = useMemo(() => buildHidePatterns(files.hidePatterns || []), [files.hidePatterns]);
   const t = useCallback((value: string) => translateText(language, value), [language]);
@@ -66,38 +63,38 @@ export default function GlobalFileSearch() {
   }, [state.globalSearchOpen]);
 
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const activeElement = document.activeElement instanceof Element ? document.activeElement : null;
-      if (activeElement?.closest('.shortcut-key.recording') || document.querySelector('.shortcut-key.recording')) return;
-
-      const shortcutKeys = globalSearchShortcut?.keys || 'Double Shift';
-      if (globalSearchShortcut?.enabled === false || !shortcutKeys) return;
-      if (globalSearchOpenRef.current) return;
+    const shortcutKeys = globalSearchShortcut?.keys || 'Double Shift';
+    const doubleKeyMatcher = createDoubleKeyShortcutMatcher(shortcutKeys);
+    const handleKey = (event: KeyboardEvent) => {
+      if (document.querySelector('.shortcut-key.recording')
+        || globalSearchShortcut?.enabled === false || globalSearchOpenRef.current) {
+        doubleKeyMatcher.reset();
+        return;
+      }
 
       if (!isDoubleKeyShortcut(shortcutKeys)) {
+        if (event.type !== 'keydown' || event.isComposing || event.keyCode === 229) return;
         if (!matchesShortcut(event, shortcutKeys)) return;
-        event.preventDefault();
-        event.stopPropagation();
-        dispatch({ type: 'SET_GLOBAL_SEARCH_OPEN', payload: true });
+      } else if (!doubleKeyMatcher.handleEvent(event)) {
         return;
       }
 
-      if (!matchesDoubleShortcutKey(event, shortcutKeys)) return;
-      const key = normalizeShortcutKey(event.key);
-      const now = Date.now();
-      const lastPress = lastDoubleKeyRef.current;
-      if (lastPress?.key === key && now - lastPress.at <= DOUBLE_KEY_INTERVAL_MS) {
-        event.preventDefault();
-        event.stopPropagation();
-        dispatch({ type: 'SET_GLOBAL_SEARCH_OPEN', payload: true });
-        lastDoubleKeyRef.current = null;
-        return;
-      }
-      lastDoubleKeyRef.current = { key, at: now };
+      event.preventDefault();
+      event.stopPropagation();
+      globalSearchOpenRef.current = true;
+      dispatch({ type: 'SET_GLOBAL_SEARCH_OPEN', payload: true });
     };
 
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
+    const cancelEvents = ['compositionstart', 'compositionend', 'input', 'pointerdown', 'focusin', 'blur', 'visibilitychange'];
+    const handleInterruption = (event: Event) => { doubleKeyMatcher.handleEvent(event); };
+    window.addEventListener('keydown', handleKey, true);
+    window.addEventListener('keyup', handleKey, true);
+    for (const type of cancelEvents) window.addEventListener(type, handleInterruption, true);
+    return () => {
+      window.removeEventListener('keydown', handleKey, true);
+      window.removeEventListener('keyup', handleKey, true);
+      for (const type of cancelEvents) window.removeEventListener(type, handleInterruption, true);
+    };
   }, [dispatch, globalSearchShortcut?.enabled, globalSearchShortcut?.keys]);
 
   useEffect(() => {

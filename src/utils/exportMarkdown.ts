@@ -68,7 +68,7 @@ function escapeRegExp(value: string): string {
 export async function renderMarkdownForExport(content: string, documentPath?: string): Promise<string> {
   const pendingImages: PendingImage[] = [];
   const pendingMermaidDiagrams: PendingMermaidDiagram[] = [];
-  const md = new MarkdownIt({ html: true, linkify: true, typographer: true, breaks: true });
+  const md = new MarkdownIt({ html: true, linkify: true, typographer: false, breaks: true });
   const renderImage = md.renderer.rules.image ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
   const renderFence = md.renderer.rules.fence ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
 

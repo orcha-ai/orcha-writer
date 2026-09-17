@@ -36,6 +36,72 @@ export function matchesDoubleShortcutKey(event: KeyboardEvent, shortcut: string)
   return normalizeShortcutKey(event.key) === normalizeShortcutKey(key);
 }
 
+export function createDoubleKeyShortcutMatcher(shortcut: string) {
+  const intervalMs = 300;
+  const maxHoldMs = 200;
+  let pressed: { code: string; at: number } | null = null;
+  let lastTap: { code: string; at: number } | null = null;
+  let composing = false;
+  let compositionEndedAt = -Infinity;
+
+  const reset = () => {
+    pressed = null;
+    lastTap = null;
+  };
+
+  const handleEvent = (event: Event): boolean => {
+    if (event.type === 'compositionstart') {
+      composing = true;
+      reset();
+      return false;
+    }
+    if (event.type === 'compositionend') {
+      composing = false;
+      compositionEndedAt = event.timeStamp;
+      reset();
+      return false;
+    }
+    if (event.type !== 'keydown' && event.type !== 'keyup') {
+      if (event.type === 'blur' || event.type === 'visibilitychange') composing = false;
+      reset();
+      return false;
+    }
+
+    const keyEvent = event as KeyboardEvent;
+    // IMEs may commit on Shift without marking the final keyup as composing.
+    if (composing || keyEvent.isComposing || keyEvent.keyCode === 229
+      || event.timeStamp - compositionEndedAt <= intervalMs
+      || !matchesDoubleShortcutKey(keyEvent, shortcut)) {
+      reset();
+      return false;
+    }
+
+    const code = keyEvent.code || normalizeShortcutKey(keyEvent.key);
+    if (event.type === 'keydown') {
+      if (pressed) {
+        reset();
+        return false;
+      }
+      pressed = { code, at: event.timeStamp };
+      return false;
+    }
+
+    if (!pressed || pressed.code !== code || event.timeStamp - pressed.at > maxHoldMs) {
+      reset();
+      return false;
+    }
+    pressed = null;
+    if (lastTap?.code === code && event.timeStamp - lastTap.at <= intervalMs) {
+      reset();
+      return true;
+    }
+    lastTap = { code, at: event.timeStamp };
+    return false;
+  };
+
+  return { handleEvent, reset };
+}
+
 export function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
   if (!shortcut || isDoubleKeyShortcut(shortcut)) return false;
   const parts = shortcut.split('+').map(part => part.trim()).filter(Boolean);

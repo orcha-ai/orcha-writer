@@ -354,7 +354,7 @@ function createMd(markdown: MarkdownSettings, preview: PreviewSettings, security
   const md = new MarkdownIt(markdown.dialect === 'commonmark' ? 'commonmark' : 'default', {
     html: preview.htmlRender !== 'disable',
     linkify: true,
-    typographer: true,
+    typographer: false,
     breaks: markdown.dialect === 'gfm',
     langPrefix: 'language-',
     highlight: markdown.codeHighlight

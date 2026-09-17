@@ -168,7 +168,7 @@ export default function MenuBar() {
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
     if (!activeTab) return;
     try {
-      const md = new MarkdownIt({ html: true, linkify: true, typographer: true, breaks: true });
+      const md = new MarkdownIt({ html: true, linkify: true, typographer: false, breaks: true });
       const htmlBody = md.render(activeTab.content);
       const defaultFileName = activeTab.name.replace(/\.md$/, '') + '.html';
       const fullHTML = `<!DOCTYPE html>
@@ -212,7 +212,7 @@ ${htmlBody}
     const activeTab = state.tabs.find(t => t.id === state.activeTabId);
     if (!activeTab) return;
     try {
-      const md = new MarkdownIt({ html: true, linkify: true, typographer: true, breaks: true });
+      const md = new MarkdownIt({ html: true, linkify: true, typographer: false, breaks: true });
       const htmlBody = md.render(activeTab.content);
       const defaultFileName = activeTab.name.replace(/\.md$/, '') + '.pdf';
       const fullHTML = `<!DOCTYPE html><html><head><title>${activeTab.name}</title><style>
